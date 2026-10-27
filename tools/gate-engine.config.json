@@ -14,12 +14,12 @@
       "blocking": false
     },
     "L2": {
-      "enabled": false,
+      "enabled": true,
       "budgetSeconds": 90.0,
       "blocking": true
     },
     "L3": {
-      "enabled": false,
+      "enabled": true,
       "budgetSeconds": null,
       "blocking": true
     }
