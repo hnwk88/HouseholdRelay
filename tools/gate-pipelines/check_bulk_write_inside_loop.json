@@ -1,0 +1,81 @@
+﻿{
+  "rule": "check_bulk_write_inside_loop",
+  "pipeline": [
+    {
+      "step": "解法",
+      "解法": "按语法树看",
+      "rule": "check_bulk_write_inside_loop",
+      "诊断标识": "bulk-write-inside-loop",
+      "在哪": [
+        {
+          "路径": "src"
+        }
+      ],
+      "看哪种节点": "调用",
+      "名字是": [
+        "SaveRangeAsync",
+        "SaveCharacterAsync",
+        "SavePronunciationAsync",
+        "SaveTrackedChangesAsync",
+        "SaveChanges",
+        "SaveChangesAsync",
+        "AddCharactersAsync",
+        "AddPronunciationsAsync",
+        "AddBrailleMappingsAsync",
+        "SetReviewStatusAsync",
+        "SetCharacterReviewStatusAsync",
+        "SetPronunciationReviewStatusAsync",
+        "SetBrailleMappingReviewStatusAsync",
+        "SetCharacterReviewStatusByQueryAsync",
+        "SetPronunciationReviewStatusByQueryAsync",
+        "SoftDeleteCharactersAsync",
+        "SoftDeletePronunciationsAsync"
+      ],
+      "严重度": "error",
+      "不许有": [
+        {
+          "找": "外层循环",
+          "有了说": "发现循环内部直接保存数据库；当前循环从第 {找到的行} 行开始。",
+          "建议": "批量后台任务必须先批量读取、在内存中完成计算，再调用批量保存或一次 SaveChanges；不要在 foreach/for/while 中逐条保存。"
+        }
+      ]
+    },
+    {
+      "step": "解法",
+      "解法": "按语法树看",
+      "rule": "check_bulk_write_inside_loop",
+      "诊断标识": "bulk-write-inside-loop",
+      "在哪": [
+        {
+          "路径": "src"
+        }
+      ],
+      "看哪种节点": "调用",
+      "名字是": [
+        "SaveAsync"
+      ],
+      "严重度": "error",
+      "不许有": [
+        {
+          "找": "外层循环",
+          "有了说": "发现循环内部直接保存数据库；当前循环从第 {找到的行} 行开始。",
+          "建议": "批量后台任务必须先批量读取、在内存中完成计算，再调用批量保存或一次 SaveChanges；不要在 foreach/for/while 中逐条保存。"
+        }
+      ],
+      "只看": [
+        {
+          "找": "接收者",
+          "含正则": "(?i)(db|context|repositor|unitofwork|store|storage|dao)"
+        }
+      ]
+    }
+  ],
+  "说明": {
+    "为什么是这个解法": "这条判据在缺口表里挂了好几轮，卡的是**诊断正文里要念另一个片段的行号**——报的是调用那一行，正文里念的是循环起始那一行。文本那几档的 `emit` 只代得了自己命中片段的捕获组，代不了另一处的行号。按语法树看这一格天然有：循环是调用的祖先节点，它的起始行直接取得到，占位符 `{找到的行}` 念的就是它。",
+    "为什么只看 src": "测试和工具脚本里在循环里保存是正常写法（造夹具、跑一次性迁移），这条规则管的是产品代码里的批量流程。",
+    "为什么不写「跳过生成代码」": "与注释覆盖那条正相反：生成代码里的循环内逐条保存同样是真的性能问题，而且改得动——改的是生成它的那个模板。",
+    "循环归属由父链给出": "lambda 里的循环、注释里的 `for`、插值洞里的花括号，在树上都不构成「这次调用在循环体内」，不必再靠花括号深度去猜。嵌套循环报的是最内层那个的起始行，因为祖先链是由内往外走的。",
+    "比老实现多认一种写法": "老实现只认 `仓库.SaveAsync(...)` 这种带接收者的调用；同一个类里直接写 `SaveChangesAsync()` 的裸调用它一律看不见。「名字是」筛的是被调用的成员名，两种写法都认——它们本来就是同一件事。",
+    "通用的方法名只看数据访问对象": "语法树分不出调用的是哪个类型，只看得见接收者写成什么。SaveChanges 这类名字只有数据库那一侧会起，裸调用也照抓；「SaveAsync」这种通用名，配置文件、设置服务也在用（A0ci 那条误报就是 service.SaveAsync 写门禁配置），所以只看接收者名字像数据访问对象的（含 db、context、repository、unitofwork、store、storage、dao）。代价：数据库保存写成裸调用 SaveAsync()、或接收者起了别的名字时看不见（A0cl）。"
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe hook --level L0 --host codex",
+            "timeout": 600,
+            "statusMessage": "检查编辑结果",
+            "commandWindows": ".\\.gate-engine\\runtime\\gate_engine\\native\\GateAnalysisHost.exe hook --level L0 --host codex"
+          }
+        ],
+        "matcher": "^(functions\\.)?(apply_patch|exec|exec_command|write_stdin)$"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe hook --level L1 --host codex",
+            "timeout": 600,
+            "statusMessage": "检查本轮结果",
+            "commandWindows": ".\\.gate-engine\\runtime\\gate_engine\\native\\GateAnalysisHost.exe hook --level L1 --host codex"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe briefing --host codex",
+            "timeout": 30,
+            "statusMessage": "载入门禁说明",
+            "commandWindows": ".\\.gate-engine\\runtime\\gate_engine\\native\\GateAnalysisHost.exe briefing --host codex"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe guard --host codex",
+            "timeout": 30,
+            "statusMessage": "核对门禁文件",
+            "commandWindows": ".\\.gate-engine\\runtime\\gate_engine\\native\\GateAnalysisHost.exe guard --host codex"
+          }
+        ],
+        "matcher": "^(functions\\.)?apply_patch$"
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe navigator --host codex",
+            "timeout": 30,
+            "statusMessage": "压缩前清空本会话认领",
+            "commandWindows": ".\\.gate-engine\\runtime\\gate_engine\\native\\GateAnalysisHost.exe navigator --host codex"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe presence --host codex",
+            "timeout": 30,
+            "statusMessage": "投送新到的在场资料",
+            "commandWindows": ".\\.gate-engine\\runtime\\gate_engine\\native\\GateAnalysisHost.exe presence --host codex"
+          }
+        ]
+      }
+    ]
+  }
+}

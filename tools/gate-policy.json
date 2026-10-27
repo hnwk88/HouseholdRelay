@@ -1,0 +1,539 @@
+﻿{
+  "schemaVersion": "gate.policy.v1",
+  "template": {
+    "id": "dotnet-wpf",
+    "version": "1.0.0",
+    "hash": ""
+  },
+  "packages": [],
+  "levels": {
+    "L0": {
+      "rules": {
+        "legacy.householdrelay.check_csharp_summary_coverage": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_comment_audit": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_source_encoding_and_syntax": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_bulk_write_inside_loop": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_blocking_patterns": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_xaml_accessibility": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_option_model_display_string": {
+          "enabled": false,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_row_model_accessible_text": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_no_python_verdicts": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_no_new_python": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_source_file_size": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_temporary_markers": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        }
+      },
+      "budgetSeconds": 1.0,
+      "execution": "synchronous",
+      "source": "worktree",
+      "budgetAction": "incomplete",
+      "memoryBudgetMb": 1024,
+      "hookTrigger": "allTools",
+      "ledgerMode": "pending",
+      "samples": 10,
+      "allowedDrift": 1.0,
+      "historyRetentionDays": 3,
+      "delivery": {
+        "enabled": false,
+        "filter": "warning-error",
+        "includeIncomplete": true,
+        "speak": false,
+        "feedbackToAgent": true,
+        "feedbackMode": "remind",
+        "maxAttempts": 2,
+        "showNotChecked": false
+      }
+    },
+    "L1": {
+      "rules": {
+        "legacy.householdrelay.check_csharp_summary_coverage": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_comment_audit": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_source_encoding_and_syntax": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_bulk_write_inside_loop": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_blocking_patterns": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_xaml_accessibility": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_option_model_display_string": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_row_model_accessible_text": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_no_python_verdicts": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_no_new_python": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_source_file_size": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_temporary_markers": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        }
+      },
+      "budgetSeconds": 60.0,
+      "execution": "synchronous",
+      "source": "worktree",
+      "budgetAction": "incomplete",
+      "memoryBudgetMb": 1024,
+      "hookTrigger": "allTools",
+      "ledgerMode": "pending",
+      "samples": 10,
+      "allowedDrift": 1.0,
+      "historyRetentionDays": 3,
+      "delivery": {
+        "enabled": true,
+        "filter": "warning-error",
+        "includeIncomplete": true,
+        "speak": false,
+        "feedbackToAgent": true,
+        "feedbackMode": "remind",
+        "maxAttempts": 2,
+        "showNotChecked": false
+      }
+    },
+    "L2": {
+      "rules": {
+        "legacy.householdrelay.check_csharp_summary_coverage": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_comment_audit": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_source_encoding_and_syntax": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_bulk_write_inside_loop": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_blocking_patterns": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_xaml_accessibility": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_option_model_display_string": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_row_model_accessible_text": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_no_python_verdicts": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_no_new_python": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_source_file_size": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_temporary_markers": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        }
+      },
+      "budgetSeconds": 90.0,
+      "execution": "synchronous",
+      "source": "index",
+      "budgetAction": "incomplete",
+      "memoryBudgetMb": 1024,
+      "hookTrigger": "allTools",
+      "ledgerMode": "pending",
+      "samples": 10,
+      "allowedDrift": 1.0,
+      "historyRetentionDays": 3,
+      "delivery": {
+        "enabled": true,
+        "filter": "warning-error",
+        "includeIncomplete": true,
+        "speak": false,
+        "feedbackToAgent": false,
+        "feedbackMode": "remind",
+        "maxAttempts": 2,
+        "showNotChecked": false
+      }
+    },
+    "L3": {
+      "rules": {
+        "legacy.householdrelay.check_csharp_summary_coverage": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_comment_audit": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_source_encoding_and_syntax": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_bulk_write_inside_loop": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_blocking_patterns": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_xaml_accessibility": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_option_model_display_string": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_row_model_accessible_text": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_no_python_verdicts": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_no_new_python": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_source_file_size": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_temporary_markers": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        }
+      },
+      "budgetSeconds": null,
+      "execution": "synchronous",
+      "source": "worktree",
+      "budgetAction": "incomplete",
+      "memoryBudgetMb": 1024,
+      "hookTrigger": "allTools",
+      "ledgerMode": "pending",
+      "samples": 10,
+      "allowedDrift": 1.0,
+      "historyRetentionDays": 3,
+      "delivery": {
+        "enabled": true,
+        "filter": "warning-error",
+        "includeIncomplete": true,
+        "speak": false,
+        "feedbackToAgent": false,
+        "feedbackMode": "remind",
+        "maxAttempts": 2,
+        "showNotChecked": false
+      }
+    }
+  }
+}

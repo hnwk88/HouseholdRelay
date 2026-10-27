@@ -1,0 +1,27 @@
+﻿{
+  "schemaVersion": 1,
+  "projectName": "HouseholdRelay",
+  "cacheDirectory": ".gate-cache",
+  "levels": {
+    "L0": {
+      "enabled": true,
+      "budgetSeconds": 1.0,
+      "blocking": false
+    },
+    "L1": {
+      "enabled": true,
+      "budgetSeconds": 60.0,
+      "blocking": false
+    },
+    "L2": {
+      "enabled": false,
+      "budgetSeconds": 90.0,
+      "blocking": true
+    },
+    "L3": {
+      "enabled": false,
+      "budgetSeconds": null,
+      "blocking": true
+    }
+  }
+}

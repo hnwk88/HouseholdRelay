@@ -1,0 +1,1367 @@
+﻿{
+  "rule": "check_xaml_accessibility",
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "编辑器",
+              "type": "expression",
+              "value": "<avalonedit:TextEditor(?=[\\s>/]).*?(?:/>|>)",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "notContains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "AccessibleAvalonTextEditor"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "avalonedit-textpattern-provider",
+                  "severity": "error",
+                  "message": "发现直接使用 AvalonEdit TextEditor，可能缺少焦点层 TextPattern 支持。",
+                  "suggestion": "改用 `AccessibleAvalonTextEditor` 或等价自定义 AutomationPeer，确保外层编辑器和内部 TextArea 都能返回 `ITextProvider`。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "集合ListView",
+              "type": "expression",
+              "value": "<ListView(?=[\\s>/]).*?(?:/>|>)",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "notContains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "AutomationProperties.Name"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "xaml-automation-name",
+                  "severity": "error",
+                  "message": "`ListView` 集合控件缺少无障碍名称。",
+                  "suggestion": "为控件补充自然中文 `AutomationProperties.Name`，让读屏用户知道当前区域用途。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "集合ListBox",
+              "type": "expression",
+              "value": "<ListBox(?=[\\s>/]).*?(?:/>|>)",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "notContains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "AutomationProperties.Name"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "xaml-automation-name",
+                  "severity": "error",
+                  "message": "`ListBox` 集合控件缺少无障碍名称。",
+                  "suggestion": "为控件补充自然中文 `AutomationProperties.Name`，让读屏用户知道当前区域用途。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "集合TreeView",
+              "type": "expression",
+              "value": "<TreeView(?=[\\s>/]).*?(?:/>|>)",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "notContains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "AutomationProperties.Name"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "xaml-automation-name",
+                  "severity": "error",
+                  "message": "`TreeView` 集合控件缺少无障碍名称。",
+                  "suggestion": "为控件补充自然中文 `AutomationProperties.Name`，让读屏用户知道当前区域用途。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "集合DataGrid",
+              "type": "expression",
+              "value": "<DataGrid(?=[\\s>/]).*?(?:/>|>)",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "notContains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "AutomationProperties.Name"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "xaml-automation-name",
+                  "severity": "error",
+                  "message": "`DataGrid` 集合控件缺少无障碍名称。",
+                  "suggestion": "为控件补充自然中文 `AutomationProperties.Name`，让读屏用户知道当前区域用途。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "角色": "参照并计入",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "as": "全局隐式TextBlock样式",
+          "patterns": [
+            {
+              "id": "隐式样式",
+              "type": "expression",
+              "value": "<Style(?=[^>]*\\bTargetType\\s*=\\s*\"(?:\\{x:Type\\s+)?TextBlock\\}?\")(?![^>]*\\b(?:x:Key|BasedOn)\\s*=)[^>]*>"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "if",
+      "condition": [
+        {
+          "step": "assert",
+          "from": "全局隐式TextBlock样式",
+          "predicate": "not",
+          "clauses": [
+            {
+              "predicate": "countIs",
+              "count": 0
+            }
+          ]
+        }
+      ],
+      "then": [
+        {
+          "combinator": "sequence",
+          "steps": [
+            {
+              "step": "selectFiles",
+              "where": [
+                {
+                  "type": "extension",
+                  "value": [
+                    ".xaml"
+                  ]
+                },
+                {
+                  "type": "root",
+                  "value": [
+                    "src",
+                    "tests",
+                    "tools"
+                  ]
+                },
+                {
+                  "type": "excludeFolder",
+                  "value": [
+                    "{scan.ignoredDirectories}"
+                  ]
+                }
+              ]
+            },
+            {
+              "step": "find",
+              "patterns": [
+                {
+                  "id": "文本块",
+                  "type": "expression",
+                  "value": "<TextBlock(?=[\\s>/]).*?(?:/>|>)",
+                  "dotAll": true
+                }
+              ]
+            },
+            {
+              "combinator": "forEach",
+              "each": "片段",
+              "body": [
+                {
+                  "combinator": "if",
+                  "condition": [
+                    {
+                      "step": "assert",
+                      "predicate": "all",
+                      "clauses": [
+                        {
+                          "predicate": "notContains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "AutomationProperties.Name"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "notContains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "AutomationProperties.LabeledBy"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "contains",
+                          "values": [
+                            {
+                              "type": "expression",
+                              "value": "\\bStyle\\s*=\\s*\""
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "then": [
+                    {
+                      "step": "emit",
+                      "rule": "textblock-automation-name",
+                      "severity": "error",
+                      "message": "`TextBlock` 指定了显式 `Style`，拿不到 App.xaml 里同步无障碍名称的隐式样式。",
+                      "suggestion": "为这个 `TextBlock` 补 `AutomationProperties.Name=\"{Binding RelativeSource={RelativeSource Self}, Path=Text}\"`，或在它自己的 `Style` 里加同样的 `Setter`；文本由代码写时改用 `AccessibilityAnnouncer.SetAccessibleText`。"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "combinator": "sequence",
+          "steps": [
+            {
+              "step": "selectFiles",
+              "where": [
+                {
+                  "type": "extension",
+                  "value": [
+                    ".xaml"
+                  ]
+                },
+                {
+                  "type": "root",
+                  "value": [
+                    "src",
+                    "tests",
+                    "tools"
+                  ]
+                },
+                {
+                  "type": "excludeFolder",
+                  "value": [
+                    "{scan.ignoredDirectories}"
+                  ]
+                }
+              ]
+            },
+            {
+              "step": "find",
+              "patterns": [
+                {
+                  "id": "文本块元素",
+                  "type": "expression",
+                  "value": "<TextBlock(?=[\\s>/]).*?</TextBlock>",
+                  "dotAll": true
+                }
+              ]
+            },
+            {
+              "combinator": "forEach",
+              "each": "片段",
+              "body": [
+                {
+                  "combinator": "if",
+                  "condition": [
+                    {
+                      "step": "assert",
+                      "predicate": "all",
+                      "clauses": [
+                        {
+                          "predicate": "contains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "<TextBlock.Style>"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "notContains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "AutomationProperties.Name"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "notContains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "AutomationProperties.LabeledBy"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "not",
+                          "clauses": [
+                            {
+                              "predicate": "contains",
+                              "values": [
+                                {
+                                  "type": "expression",
+                                  "value": "BasedOn\\s*=\\s*\"\\{StaticResource\\s*\\{x:Type\\s+TextBlock\\}\\}\""
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "then": [
+                    {
+                      "step": "emit",
+                      "rule": "textblock-automation-name",
+                      "severity": "error",
+                      "message": "`TextBlock` 用 `<TextBlock.Style>` 指定了显式样式，拿不到 App.xaml 里同步无障碍名称的隐式样式。",
+                      "suggestion": "在这个 `TextBlock` 自己的 `Style` 里加 `AutomationProperties.Name` 的 `Setter`，值绑定到 `{Binding RelativeSource={RelativeSource Self}, Path=Text}`。"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "状态栏StatusBar",
+              "type": "expression",
+              "value": "<StatusBar(?=[\\s>/]).*?(?:/>|>)",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "notContains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "AutomationProperties.Name"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "status-container-automation-name",
+                  "severity": "error",
+                  "message": "`StatusBar` 缺少无障碍名称。",
+                  "suggestion": "为状态栏外层对象补充 `AutomationProperties.Name`，并在代码中用 `AccessibilityAnnouncer.SetStatusContainerText` 同步当前状态。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "状态栏StatusBarItem",
+              "type": "expression",
+              "value": "<StatusBarItem(?=[\\s>/]).*?(?:/>|>)",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "notContains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "AutomationProperties.Name"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "status-container-automation-name",
+                  "severity": "error",
+                  "message": "`StatusBarItem` 缺少无障碍名称。",
+                  "suggestion": "为状态栏外层对象补充 `AutomationProperties.Name`，并在代码中用 `AccessibilityAnnouncer.SetStatusContainerText` 同步当前状态。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "列表块",
+              "type": "expression",
+              "value": "<ListView(?=[\\s>/]).*?</ListView>",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "all",
+                  "clauses": [
+                    {
+                      "predicate": "notContains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "CollectionAccessibility.ItemNamePath"
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "notContains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "ListViewCheckSelectionCoordinator.SelectionAwareItemNamePath"
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "any",
+                      "clauses": [
+                        {
+                          "predicate": "notContains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "ListView.ItemContainerStyle"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "not",
+                          "clauses": [
+                            {
+                              "predicate": "all",
+                              "clauses": [
+                                {
+                                  "predicate": "contains",
+                                  "values": [
+                                    {
+                                      "type": "text",
+                                      "value": "TargetType=\"ListViewItem\""
+                                    }
+                                  ]
+                                },
+                                {
+                                  "predicate": "contains",
+                                  "values": [
+                                    {
+                                      "type": "text",
+                                      "value": "AutomationProperties.Name"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "listview-row-accessible-text",
+                  "severity": "error",
+                  "message": "`ListView` 缺少行级读屏名称绑定。",
+                  "suggestion": "为 `ListViewItem` 设置 `AutomationProperties.Name=\"{Binding AccessibleText}\"`、`CollectionAccessibility.ItemNamePath` 或 `ListViewCheckSelectionCoordinator.SelectionAwareItemNamePath`，避免读屏读出对象调试格式。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "项块ListBox",
+              "type": "expression",
+              "value": "<ListBox(?=[\\s>/]).*?</ListBox>",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "all",
+                  "clauses": [
+                    {
+                      "predicate": "notContains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "CollectionAccessibility.ItemNamePath"
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "any",
+                      "clauses": [
+                        {
+                          "predicate": "notContains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "ListBox.ItemContainerStyle"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "not",
+                          "clauses": [
+                            {
+                              "predicate": "all",
+                              "clauses": [
+                                {
+                                  "predicate": "contains",
+                                  "values": [
+                                    {
+                                      "type": "text",
+                                      "value": "TargetType=\"ListBoxItem\""
+                                    }
+                                  ]
+                                },
+                                {
+                                  "predicate": "contains",
+                                  "values": [
+                                    {
+                                      "type": "text",
+                                      "value": "AutomationProperties.Name"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "collection-item-accessible-text",
+                  "severity": "error",
+                  "message": "`ListBox` 缺少项级读屏名称绑定。",
+                  "suggestion": "为集合控件设置 `CollectionAccessibility.ItemNamePath`，或为项容器设置 `AutomationProperties.Name` 绑定，避免读屏读出对象调试格式。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "项块TreeView",
+              "type": "expression",
+              "value": "<TreeView(?=[\\s>/]).*?</TreeView>",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "all",
+                  "clauses": [
+                    {
+                      "predicate": "notContains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "CollectionAccessibility.ItemNamePath"
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "any",
+                      "clauses": [
+                        {
+                          "predicate": "notContains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "TreeView.ItemContainerStyle"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "not",
+                          "clauses": [
+                            {
+                              "predicate": "all",
+                              "clauses": [
+                                {
+                                  "predicate": "contains",
+                                  "values": [
+                                    {
+                                      "type": "text",
+                                      "value": "TargetType=\"TreeViewItem\""
+                                    }
+                                  ]
+                                },
+                                {
+                                  "predicate": "contains",
+                                  "values": [
+                                    {
+                                      "type": "text",
+                                      "value": "AutomationProperties.Name"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "collection-item-accessible-text",
+                  "severity": "error",
+                  "message": "`TreeView` 缺少项级读屏名称绑定。",
+                  "suggestion": "为集合控件设置 `CollectionAccessibility.ItemNamePath`，或为项容器设置 `AutomationProperties.Name` 绑定，避免读屏读出对象调试格式。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "下拉块",
+              "type": "expression",
+              "value": "<ComboBox(?=[\\s>/]).*?</ComboBox>",
+              "dotAll": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "all",
+                  "clauses": [
+                    {
+                      "predicate": "any",
+                      "clauses": [
+                        {
+                          "predicate": "contains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "DisplayMemberPath"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "contains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "ItemsSource"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "notContains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "CollectionAccessibility.ItemNamePath"
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "any",
+                      "clauses": [
+                        {
+                          "predicate": "notContains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "ComboBox.ItemContainerStyle"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "not",
+                          "clauses": [
+                            {
+                              "predicate": "all",
+                              "clauses": [
+                                {
+                                  "predicate": "contains",
+                                  "values": [
+                                    {
+                                      "type": "text",
+                                      "value": "TargetType=\"ComboBoxItem\""
+                                    }
+                                  ]
+                                },
+                                {
+                                  "predicate": "contains",
+                                  "values": [
+                                    {
+                                      "type": "text",
+                                      "value": "AutomationProperties.Name"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "combobox-item-accessible-text",
+                  "severity": "error",
+                  "message": "`ComboBox` 对象选项缺少选项级读屏名称绑定。",
+                  "suggestion": "为 `ComboBoxItem` 设置 `AutomationProperties.Name=\"{Binding DisplayName}\"` 或等价绑定；只设置 `DisplayMemberPath` 不能保证读屏不会读取对象调试格式。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".xaml"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "自闭合下拉",
+              "type": "expression",
+              "value": "<ComboBox(?=[\\s>/])[^>]*/>"
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "片段",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "all",
+                  "clauses": [
+                    {
+                      "predicate": "notContains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "CollectionAccessibility.ItemNamePath"
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "any",
+                      "clauses": [
+                        {
+                          "predicate": "contains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "DisplayMemberPath"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "contains",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "ItemsSource"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "combobox-item-accessible-text",
+                  "severity": "error",
+                  "message": "自闭合 `ComboBox` 绑定对象选项时无法设置选项级读屏名称。",
+                  "suggestion": "改成完整 `ComboBox` 标签，并补充 `ComboBox.ItemContainerStyle` 的 `AutomationProperties.Name` 绑定。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "说明": {
+    "显式样式 TextBlock 两段为什么带条件": "这两段的前提是工程里有一份全局隐式 TextBlock 样式把可见文字同步成 UIA 名称（MyCoAI 在 Accessibility/AccessibilityResources.xaml），显式 Style 会让 TextBlock 拿不到它。没有这份隐式样式的工程（2026-10-06 实测 SBT、ZK、ClassGenerator 都没有）前提不成立，这两段不查。A0cf 阶段二做成四个工程共用时加的条件，判据本身一字未改。"
+  }
+}

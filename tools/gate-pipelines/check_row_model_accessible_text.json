@@ -1,0 +1,106 @@
+﻿{
+  "rule": "check_row_model_accessible_text",
+  "说明": {
+    "护住什么": "绑进列表的行模型（名字以 Row／Item／ViewModel 结尾的 record）必须提供中文朗读文本，读屏才念得出这一行是什么（ZK、SBT 同名门禁）。",
+    "从哪来": "A0cf 阶段二：选 SBT 这份做四个工程共用的正文（先遮注释与字面量）；私有嵌套的 record 也查（ZK 原口径：私有的也可能绑进列表，读屏不分公开私有）。",
+    "不进界面的层": "各工程把不进界面的那一层（例如 WebAPI 工程）与生成副本目录写进自己的「例外」，判据正文不写死任何工程的目录。"
+  },
+  "pipeline": [
+    {
+      "step": "selectFiles",
+      "where": [
+        {
+          "type": "root",
+          "value": [
+            "src",
+            "tests",
+            "tools"
+          ]
+        },
+        {
+          "type": "extension",
+          "value": [
+            ".cs"
+          ]
+        },
+        {
+          "type": "excludeFolder",
+          "value": [
+            "{scan.ignoredDirectories}"
+          ]
+        }
+      ]
+    },
+    {
+      "step": "mask",
+      "mode": "csharp"
+    },
+    {
+      "step": "find",
+      "patterns": [
+        {
+          "id": "row",
+          "type": "expression",
+          "value": "(?m)^\\s*(?:(?:public|internal|private|protected|sealed|partial|readonly)\\s+)*record\\s+(?:class\\s+|struct\\s+)?\\w+(?:Row|Item|ViewModel)\\b"
+        }
+      ]
+    },
+    {
+      "combinator": "forEach",
+      "each": "row",
+      "body": [
+        {
+          "step": "scope",
+          "of": "window",
+          "forwardLines": 99
+        },
+        {
+          "combinator": "if",
+          "condition": [
+            {
+              "step": "assert",
+              "predicate": "any",
+              "clauses": [
+                {
+                  "predicate": "notContains",
+                  "values": [
+                    {
+                      "type": "expression",
+                      "value": "AccessibleText"
+                    }
+                  ]
+                },
+                {
+                  "predicate": "notContainsAny",
+                  "values": [
+                    {
+                      "type": "expression",
+                      "value": "override\\s+string\\s+ToString"
+                    },
+                    {
+                      "type": "expression",
+                      "value": "AccessibleTextRecord"
+                    },
+                    {
+                      "type": "expression",
+                      "value": "AccessibleTextObject"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "then": [
+            {
+              "step": "emit",
+              "rule": "row-accessible-text",
+              "severity": "warning",
+              "message": "行模型缺少朗读文本：没有 AccessibleText，或没有用户可读的 ToString 覆盖／通用无障碍基类，列表行会被读屏念成类型名或调试格式。",
+              "suggestion": "继承 AccessibleTextRecord／AccessibleTextObject，或提供 AccessibleText 并覆盖 ToString 返回它。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

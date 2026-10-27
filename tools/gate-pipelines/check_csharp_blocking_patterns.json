@@ -1,0 +1,225 @@
+﻿{
+  "rule": "check_csharp_blocking_patterns",
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "split",
+          "by": "lines"
+        },
+        {
+          "combinator": "forEach",
+          "each": "行",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "contains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "<inheritdoc"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "inheritdoc-summary",
+                  "severity": "error",
+                  "message": "发现 `<inheritdoc />`，本项目要求实现处写中文 `<summary>`。",
+                  "suggestion": "把继承说明改成明确的中文 XML 文档注释，并补充参数和返回值含义。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "split",
+          "by": "lines"
+        },
+        {
+          "combinator": "forEach",
+          "each": "行",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "contains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "throw new NotImplementedException"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "not-implemented",
+                  "severity": "error",
+                  "message": "发现未实现异常残留。",
+                  "suggestion": "实现该分支，或删除不可达代码；不能把未实现路径留到收尾认证之后。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "split",
+          "by": "lines"
+        },
+        {
+          "combinator": "forEach",
+          "each": "行",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "containsAny",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "StatusTextBlock.Text ="
+                    },
+                    {
+                      "type": "text",
+                      "value": "StatusText.Text ="
+                    },
+                    {
+                      "type": "text",
+                      "value": "ProgressTextBlock.Text ="
+                    },
+                    {
+                      "type": "text",
+                      "value": "OperationProgressTextBlock.Text ="
+                    },
+                    {
+                      "type": "text",
+                      "value": "ReplaceProgressTextBlock.Text ="
+                    },
+                    {
+                      "type": "text",
+                      "value": "EditorFileTextBlock.Text ="
+                    },
+                    {
+                      "type": "text",
+                      "value": "EditorEncodingTextBlock.Text ="
+                    },
+                    {
+                      "type": "text",
+                      "value": "EditorCaretTextBlock.Text ="
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "dynamic-text-accessible-name",
+                  "severity": "error",
+                  "message": "发现动态状态文本直接赋值，可能只更新可见文本而漏掉 UIA Name。",
+                  "suggestion": "改用 `AccessibilityAnnouncer.SetAccessibleText`、`SetStatusContainerText` 或 `SetProgressText`，保证鼠标浏览读到当前值。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

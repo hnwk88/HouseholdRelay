@@ -1,0 +1,119 @@
+﻿{
+  "解法": "最简扫描",
+  "rule": "check_temporary_markers",
+  "扫描": [
+    {
+      "扩展名": [
+        ".cs"
+      ],
+      "根": [
+        "src",
+        "tests",
+        "tools"
+      ],
+      "排除目录": [
+        ".claude",
+        ".gate-engine",
+        ".git",
+        ".vs",
+        "__pycache__",
+        "artifacts",
+        "bin",
+        "nvda",
+        "obj",
+        "offline-deployment-kit",
+        "publish",
+        "工具组件备份"
+      ],
+      "遮罩": "csharp"
+    },
+    {
+      "扩展名": [
+        ".xaml",
+        ".ps1"
+      ],
+      "根": [
+        "src",
+        "tests",
+        "tools"
+      ],
+      "排除目录": [
+        ".claude",
+        ".gate-engine",
+        ".git",
+        ".vs",
+        "__pycache__",
+        "artifacts",
+        "bin",
+        "nvda",
+        "obj",
+        "offline-deployment-kit",
+        "publish",
+        "工具组件备份"
+      ],
+      "遮罩": "none"
+    }
+  ],
+  "判据": [
+    {
+      "找": [
+        {
+          "id": "标记0",
+          "type": "text",
+          "value": "TODO"
+        },
+        {
+          "id": "标记1",
+          "type": "text",
+          "value": "FIXME"
+        },
+        {
+          "id": "标记2",
+          "type": "text",
+          "value": "HACK"
+        },
+        {
+          "id": "标记3",
+          "type": "text",
+          "value": "待重构"
+        },
+        {
+          "id": "标记4",
+          "type": "text",
+          "value": "临时代码"
+        },
+        {
+          "id": "标记5",
+          "type": "text",
+          "value": "临时兜底"
+        },
+        {
+          "id": "标记6",
+          "type": "text",
+          "value": "重复兜底"
+        },
+        {
+          "id": "标记7",
+          "type": "text",
+          "value": "后续清理"
+        },
+        {
+          "id": "标记8",
+          "type": "text",
+          "value": "调试日志"
+        },
+        {
+          "id": "标记9",
+          "type": "text",
+          "value": "跟踪日志"
+        }
+      ],
+      "报": {
+        "rule": "temporary-marker",
+        "severity": "error",
+        "message": "发现临时标记或待清理标记。",
+        "suggestion": "确认是否仍有必要保留；如果用户已经确认问题修复，应清理临时跟踪代码和兜底逻辑。"
+      }
+    }
+  ]
+}

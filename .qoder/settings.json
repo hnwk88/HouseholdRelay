@@ -1,0 +1,84 @@
+﻿{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& (Join-Path $env:QODER_PROJECT_DIR '.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe') hook --level L0 --host qoder",
+            "timeout": 600,
+            "statusMessage": "检查编辑结果",
+            "shell": "powershell"
+          }
+        ],
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& (Join-Path $env:QODER_PROJECT_DIR '.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe') hook --level L1 --host qoder",
+            "timeout": 600,
+            "statusMessage": "检查本轮结果",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& (Join-Path $env:QODER_PROJECT_DIR '.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe') briefing --host qoder",
+            "timeout": 30,
+            "statusMessage": "载入门禁说明",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& (Join-Path $env:QODER_PROJECT_DIR '.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe') guard --host qoder",
+            "timeout": 30,
+            "statusMessage": "核对门禁文件",
+            "shell": "powershell"
+          }
+        ],
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit"
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& (Join-Path $env:QODER_PROJECT_DIR '.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe') navigator --host qoder",
+            "timeout": 30,
+            "statusMessage": "压缩前清空本会话认领",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& (Join-Path $env:QODER_PROJECT_DIR '.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe') presence --host qoder",
+            "timeout": 30,
+            "statusMessage": "投送新到的在场资料",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ]
+  }
+}

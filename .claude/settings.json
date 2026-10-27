@@ -1,0 +1,109 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe hook --level L0 --host claude",
+            "timeout": 600,
+            "statusMessage": "检查编辑结果"
+          }
+        ],
+        "matcher": "Edit|Write|NotebookEdit|apply_patch|Bash"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe hook --level L1 --host claude",
+            "timeout": 600,
+            "statusMessage": "检查本轮结果"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe reply-end --host claude",
+            "timeout": 30,
+            "statusMessage": "核对本回合回复"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe briefing --host claude",
+            "timeout": 30,
+            "statusMessage": "载入门禁说明"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe guard --host claude",
+            "timeout": 30,
+            "statusMessage": "核对门禁文件"
+          }
+        ],
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe reply --host claude",
+            "timeout": 30,
+            "statusMessage": "核对回复与汇报"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe manifest --host claude",
+            "timeout": 30,
+            "statusMessage": "附上分部类清单"
+          }
+        ],
+        "matcher": "Read"
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe navigator --host claude",
+            "timeout": 30,
+            "statusMessage": "压缩前清空本会话认领"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}\"/.gate-engine/runtime/gate_engine/native/GateAnalysisHost.exe presence --host claude",
+            "timeout": 30,
+            "statusMessage": "投送新到的在场资料"
+          }
+        ]
+      }
+    ]
+  }
+}

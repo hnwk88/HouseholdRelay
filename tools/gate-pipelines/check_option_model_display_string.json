@@ -1,0 +1,109 @@
+﻿{
+  "rule": "check_option_model_display_string",
+  "说明": {
+    "护住什么": "下拉选项模型（名字以 Option／Choice 结尾的 record）必须让 ComboBox 念出用户可读的文字，而不是 record 的调试格式（ZK、SBT 同名门禁）。",
+    "从哪来": "A0cf 阶段二：ZK（Python）与 SBT（管道）同名，选 SBT 这份做四个工程共用的正文——它先遮注释与字面量，修掉了旧实现把注释里的示例当候选的漏洞；文案改回给改代码的人看的那句。"
+  },
+  "pipeline": [
+    {
+      "step": "selectFiles",
+      "where": [
+        {
+          "type": "root",
+          "value": [
+            "src",
+            "tests",
+            "tools"
+          ]
+        },
+        {
+          "type": "extension",
+          "value": [
+            ".cs"
+          ]
+        },
+        {
+          "type": "excludeFolder",
+          "value": [
+            "{scan.ignoredDirectories}"
+          ]
+        }
+      ]
+    },
+    {
+      "step": "mask",
+      "mode": "csharp"
+    },
+    {
+      "step": "find",
+      "patterns": [
+        {
+          "id": "option",
+          "type": "expression",
+          "value": "\\brecord\\s+\\w+(?:Option|Choice)\\b"
+        }
+      ]
+    },
+    {
+      "combinator": "forEach",
+      "each": "option",
+      "body": [
+        {
+          "step": "scope",
+          "of": "window",
+          "forwardLines": 79
+        },
+        {
+          "combinator": "if",
+          "condition": [
+            {
+              "step": "assert",
+              "predicate": "all",
+              "clauses": [
+                {
+                  "predicate": "contains",
+                  "values": [
+                    {
+                      "type": "expression",
+                      "value": "\\bDisplayName\\b"
+                    }
+                  ]
+                },
+                {
+                  "predicate": "notContainsAny",
+                  "values": [
+                    {
+                      "type": "expression",
+                      "value": "AccessibleTextRecord"
+                    },
+                    {
+                      "type": "expression",
+                      "value": "DisplayNameAccessibleRecord"
+                    },
+                    {
+                      "type": "expression",
+                      "value": "DisplayOption<"
+                    },
+                    {
+                      "type": "expression",
+                      "value": "override\\s+string\\s+ToString"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "then": [
+            {
+              "step": "emit",
+              "rule": "option-display-string",
+              "severity": "error",
+              "message": "下拉选项记录有 DisplayName，却没有用户可读的 ToString 覆盖或通用无障碍基类：读屏会念出 record 的调试格式。",
+              "suggestion": "改用 DisplayOption<T>，或继承 AccessibleTextRecord／DisplayNameAccessibleRecord，或覆盖 ToString 返回 DisplayName。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
