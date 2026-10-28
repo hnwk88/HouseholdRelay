@@ -8,3 +8,8 @@ tools/.gate-settings.lock
 .githooks/*.gate-engine.json
 .githooks/*.gate-engine.lock
 # <<< 门禁引擎
+
+# 本实例数据与可重建验证输出
+.state/
+.relay-instance
+artifacts/usability-foundation/

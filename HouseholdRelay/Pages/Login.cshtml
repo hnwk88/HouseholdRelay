@@ -1,0 +1,14 @@
+﻿@page
+@model LoginModel
+@{ ViewData["Title"] = "管理登录"; }
+<section class="narrow card">
+    <p class="eyebrow">管理员</p><h1>登录管理页面</h1>
+    @if (Model.Setup) { <p class="notice" role="status">首次设置已完成，请使用刚设置的密码登录。</p> }
+    <p>使用者调用中转时，只需自己的个人令牌。</p>
+    <form method="post">
+        <div asp-validation-summary="All" role="alert"></div>
+        <label asp-for="Password">管理密码</label>
+        <input asp-for="Password" type="password" autocomplete="current-password" required maxlength="128" />
+        <button type="submit">登录</button>
+    </form>
+</section>

@@ -1,158 +1,79 @@
-﻿# Household Relay — C# 单账号中转
+﻿# Household Relay — C# 单账户中转
 
-**书房、卧室、公司各用自己的 Claude Code；通过花生壳连接家中同一个中转主机。** 代码和工具执行保留在各自电脑上，账号凭据只保存在中转主机。
+一个部署实例使用一个上游身份，多名使用者持各自的个人令牌。当前协议为 Anthropic Messages，客户端启动器支持 Claude Code；不提供多账户轮询。
 
-纯 C# / .NET 10 / ASP.NET Core，无第三方 NuGet 包，无数据库。提供控制台程序和可直接打开的 Visual Studio 解决方案。运行发布包需要 **ASP.NET Core Runtime 10 x64**（安装 .NET 10 SDK 也可以）。公司电脑无需 VPN。
+当前版本已提供 **本机网页首次设置、管理登录、使用者和令牌管理、项目设置、SQLite 持久化与旧数据迁移**。账户/API 的网页直接配置、可信公网接入、个人用量与 40 天清理尚未提供，页面会显示真实状态。
 
-```text
-书房客户端 ── study 令牌 ────┐
-卧室客户端 ── bedroom 令牌 ──┼─ HTTPS → 花生壳公网 TCP 5433
-公司客户端 ── office 令牌 ───┘                    ↓ TCP 透传
-                                      家中主机 TCP 8787
-                                                ↓
-                                  单一账号 / 设备 ID / 连接池
-                                                ↓
-                                           Claude API
-```
+## 启动管理页
 
-## 第一次使用
-
-### 1. 花生壳配置
-
-使用 **TCP 映射**，公网端口 `5433`，内网目标为中转主机 IP，内网端口 `8787`。如果花生壳客户端就运行在中转主机上，目标可以设为 `127.0.0.1:8787`。这里由中转程序负责 HTTPS，花生壳只转发 TCP 字节，不使用会缓冲流式回复的 HTTP 页面代理。
-
-确认完整访问域名，例如 `your-host.example.com`。下面命令中的域名是占位符，必须换成自己的。只知道端口 `5433` 还不能确定访问地址。
-
-主机需保持开机、联网。程序不自动修改花生壳配置、路由器、防火墙或全局代理。
-
-### 2. 在中转主机初始化
-
-解压发布包到可写目录。在这个目录打开 PowerShell：
+需要 Windows 和 ASP.NET Core Runtime 10 x64（安装 .NET 10 SDK 也可以）。把发布程序放在可写目录后运行：
 
 ```powershell
-.\HouseholdRelay.exe init --host your-host.example.com --public-port 5433 --listen-port 8787
-claude setup-token
-.\HouseholdRelay.exe account
-.\HouseholdRelay.exe serve
+.\HouseholdRelay.exe serve --home D:\RelayData
 ```
 
-- 主机需安装官方 Claude Code；初始化会读取其版本，确定固定的上游 User-Agent。
-- `init` 生成 HTTPS 证书和三个独立客户端包，不读取现有 Claude 登录凭据。
-- `claude setup-token` 使用官方交互登录流程生成上游令牌。
-- `account` 隐藏输入令牌，并用当前 Windows 用户的 DPAPI 加密保存。不要把令牌作为命令行参数。
-- `serve` 启动中转，保持这个窗口运行，Ctrl+C 停止。
+不带参数启动也会运行服务，默认数据目录是程序所在目录。新安装不要求安装 Claude Code，也不要求先填写上游凭据。
 
-默认数据保存在程序旁边的 `.state`。主机命令也可加 `--home D:\RelayData`，指定数据目录；后续命令使用同一个目录。
+1. 在同一台电脑打开 `http://127.0.0.1:8788`。
+2. 把启动窗口显示的本机引导码填入页面，设置至少 12 个字符的管理密码。
+3. 登录后进入“使用者与令牌”，为每个人创建身份并复制其个人令牌。
+4. 在“项目设置”填写对外地址和转发限制。保存地址只记录配置，不代表已建立公网连接；监听端口和转发限制需重启生效。
 
-### 3. 分发客户端包
+引导码仅在本机启动窗口显示，不放进网址。首次设置成功后锁定该入口。管理密码与个人令牌分别用于管理和调用，不能互换。管理页只监听 IPv4 回环地址，不能从远程、花生壳或代理访问；可用 `--admin-port 8788` 改管理端口。
 
-初始化后会生成：
+个人令牌只在创建/轮换成功时显示一次，不回填列表、不存入浏览器存储，不默认导出所有人的客户端包。最多 8 名使用者，每人一个有效令牌。停用和轮换会立即阻止新请求，以及仍在排队或上传的请求；已发往上游的请求可以结束。轮换不会重新启用已停用的使用者。
 
-| 目录 | 使用电脑 |
-| --- | --- |
-| `clients/study` | 书房 |
-| `clients/bedroom` | 卧室 |
-| `clients/office` | 公司 |
+## 数据与迁移
 
-把对应的整个目录复制到对应电脑，例如 `C:\Tools\Relay`。包里有程序、该设备的独立令牌和公开 CA 证书；**没有上游账号令牌或服务器私钥**。不要复制主机的 `.state` 目录。
+业务数据保存在 `--home` 下的 `.state/relay.db`，使用 SQLite、WAL、外键和短事务。数据库保存管理员密码哈希、使用者稳定 ID、令牌哈希/版本、配置及单一上游。上游凭据、证书私钥和管理 Cookie 密钥仍受当前 Windows 用户的 DPAPI 保护，`.state` 只允许该用户和 SYSTEM 访问。
 
-每台电脑需要 .NET 10 ASP.NET Core 运行时，以及官方 Claude Code。打开**自己的项目目录**，启动：
+旧版本升级前停止旧服务，再用新程序指定同一个 `--home`。启动时自动迁移本项目的 `.state/server.json`、`account.dpapi`、`tls.dpapi` 和 `relay-ca.pem`：
+
+- 原始文件先复制到 `.state/legacy-backups/`，再用事务导入数据库；导入失败不修改原文件。
+- 原有个人令牌、启停状态、设备 ID、User-Agent、凭据与证书保留；旧客户端名成为默认显示名，并生成稳定使用者 ID。
+- 旧实例还需在本机网页创建管理密码；这不会改变已迁移的个人令牌。
+- 成功迁移只执行一次。此后 JSON 是旧数据备份，不再轮询，不再参与配置更新；不要继续编辑它管理新版本。
+- 仅迁移管理员指定的本项目目录，不读取官方 Claude 登录文件。
+
+备份时停止服务，复制完整 `.state` 和同目录的 `.relay-instance`，恢复时保持配套。**不要只复制正在运行中的 relay.db**，WAL 中可能还有已提交数据。数据库或实例标记遗失、损坏、权限异常时拒绝启动，不会自动开放重新设置；请恢复备份。DPAPI 数据换 Windows 身份后不能保证解密，本版本不提供网页重置或跨身份恢复工具。
+
+## 保留的命令行入口
+
+网页和命令行调用同一数据库服务，可以并发管理，令牌撤销无需等待文件轮询。建议用列表中的主键指定使用者：
 
 ```powershell
-C:\Tools\Relay\HouseholdRelay.exe client
+.\HouseholdRelay.exe clients list --home D:\RelayData
+.\HouseholdRelay.exe clients add --display-name 小王 --home D:\RelayData
+.\HouseholdRelay.exe clients disable --id 使用者主键 --home D:\RelayData
+.\HouseholdRelay.exe clients enable --id 使用者主键 --home D:\RelayData
+.\HouseholdRelay.exe clients rotate --id 使用者主键 --home D:\RelayData
+.\HouseholdRelay.exe clients rename --id 使用者主键 --display-name 新显示名 --home D:\RelayData
 ```
 
-需要传 Claude Code 参数时：
+为兼容旧操作，可用 `--name office` 查找原客户端。CLI 创建/轮换仅在终端输出本次新令牌；请妥善保管终端记录，不重定向到共享日志。不会再写入含明文令牌的默认 `clients/` 目录。
 
-```powershell
-C:\Tools\Relay\HouseholdRelay.exe client -- --model sonnet
-```
+`account` 继续支持本机终端隐藏输入上游凭据，并通过同一服务加密写入数据库，重启后使用。它不会验证实际模型调用，也不自动刷新凭据。`init --host 域名` 保留旧版私有 CA 配置能力，证书保存到数据库，不再探测 Claude Code 或自动创建三个人；已有证书时拒绝覆盖。新实例推荐先完成本机网页管理设置，后续版本再配置上游及对外连接。
 
-也可以用同一份主程序指定客户端包：
+已经迁移的 HTTPS 入口继续使用原证书、监听端口和上游。花生壳旧路径使用 TCP 透传，旧客户端仍需信任原私有 CA；这不是“只填地址和令牌”的可信 HTTPS 新路径。既有客户端包可继续运行 `client --bundle 文件夹`，其本机 Claude Code 安装及独立配置行为保持不变。
 
-```powershell
-.\HouseholdRelay.exe client --bundle .\clients\study
-```
+## 转发行为
 
-启动器只修改 Claude Code 子进程的环境变量；使用客户端包中的 `.claude-state` 保存独立配置和历史，不改现有全局登录文件。原有用户级插件和偏好不会自动复制到这个独立配置目录。项目自己的设置仍需避免覆盖认证、apiKeyHelper 或提供商。
+- 只开放 POST `/v1/messages`、POST `/v1/messages/count_tokens`、GET `/v1/models`，以及 HEAD `/api/hello`。
+- 个人令牌可通过 `Authorization: Bearer ...` 或 `x-api-key` 传入；同时传入不同令牌时拒绝。
+- 默认全局并发 2、每人 1、最多排队 16、每人每分钟 120 次。限流和并发绑定不可变使用者 ID，改名或轮换不能重置它们。
+- SSE 即时转发、取消释放资源；不自动重放，不跟随上游跳转。429 触发全局冷却，401/403 暂停上游，旧配置路径更新凭据后需重启。
+- 上游仍固定为 `https://api.anthropic.com`，API 模式保留原有 `x-api-key` 转发；上游地址及两种凭据的网页直接配置由后续版本交付。
+- 未配置上游时，已认证模型请求返回明确的 503。`/healthz` 只表示进程可达，带个人令牌的 `/status` 只提供运行状态，不是个人用量。
+- 日志只记请求元数据；不记录请求/响应正文、密码、上游凭据或个人令牌。
 
-## 怎样集中成一个主机的请求特征
-
-| 部分 | 实现 |
-| --- | --- |
-| 上游网络连接 | 所有模型 API 请求由家中同一个 C# 进程发出，复用同一个 `SocketsHttpHandler` 连接池 |
-| 账号凭据 | 一个主机令牌，客户端只持有各自的中转令牌 |
-| User-Agent | 初始化时读取主机 Claude Code 版本，生成固定值；不同客户端不会随意改变它 |
-| SDK 与转发诊断头 | 去除 `x-stainless-*`、`Forwarded`、`X-Forwarded-*` 等客户端传输诊断信息 |
-| 设备元数据 | 为主机生成并持久保存 64 位十六进制设备 ID，只替换已识别 `metadata.user_id` 格式的设备字段 |
-| 会话信息 | 保留每个 session ID 和 account ID，不合并会话、不复用别人的工具结果 |
-| 提示词、代码和工具 | 不修改内容，不修改系统提示里的 attribution 字符串；元数据补丁采用局部字节替换 |
-
-已支持旧的 `user_<device>_account_<account>_session_<session>` 格式，以及包含 `device_id` 的 JSON 字符串格式。未知格式原样转发；可以在 `.state/server.json` 中把 `normalizeDeviceMetadata` 改为 `false`。两端保持相同 Claude Code 版本有助于协议一致性；升级后可修改 `upstreamUserAgent` 并重启。
-
-**这只统一程序可控制的传输和设备元数据，不代表所有请求都能被认定为同一台物理电脑。** 本地项目路径、操作系统提示和会话内容仍可能不同；MCP、WebFetch、浏览器、云任务等额外网络活动也不全部经过这个模型 API 中转。设备归一处理不是账号可用性的证明。
-
-## 访问控制和可靠性
-
-- 每客户端一个 256 位随机访问令牌，服务端只存哈希，固定时间比较；分别停用或轮换。
-- 默认账号全局并发 2，每客户端并发 1；队列上限 16，排队超时 30 秒。
-- 默认每客户端每分钟 120 次请求，上传上限 16 MiB，上传超时 30 秒，上游请求超时 10 分钟。
-- SSE 流式转发，收到数据即推送；取消客户端请求会取消对应的上游连接。
-- 429 触发全局冷却，遵守 Retry-After；401/403 暂停后续上游请求，更新凭据并重启后恢复。
-- 中转不自动重放请求，不跟随上游重定向，不把流式回复断点拼接成新回复。Claude Code 自身仍有重试机制。
-- 上游固定为 `https://api.anthropic.com`，仅开放 Messages、Count Tokens、Models 路由，不是通用公网代理。
-- HTTPS 完整校验证书；只为 Claude Code 子进程加载私有 CA，不关闭校验、不安装系统根证书。
-- 主账号令牌与服务器私钥使用 DPAPI 加密；状态目录限制当前用户和 SYSTEM。运行时 Windows TLS 使用临时用户密钥容器，正常释放时由框架清理。当前用户下的其他程序或管理员仍可访问运行中的进程。
-- 日志仅含请求标识、客户端名称、固定路由、状态和耗时，不记录提示词、代码、令牌。
-
-客户端包中的中转令牌是可转移的明文凭据，需要妥善保管；丢失后在主机撤销对应令牌。
-
-## 日常管理
-
-在主机上：
-
-```powershell
-.\HouseholdRelay.exe clients list
-.\HouseholdRelay.exe clients disable --name office
-.\HouseholdRelay.exe clients enable --name office
-.\HouseholdRelay.exe clients rotate --name bedroom
-.\HouseholdRelay.exe clients add --name laptop
-```
-
-客户端访问名单约 0.5 秒内热更新。停用或轮换会阻止后续请求及排队请求，已经发出的请求可以完成。轮换后重新复制对应客户端包；不要并行运行多个管理命令。最多 8 个客户端令牌，始终只有一个上游账号。
-
-上游令牌更新：重新执行官方 `claude setup-token`，再运行 `account`，重启 `serve`。程序不自动读取或刷新官方客户端的登录凭据。
-
-配置里的并发、超时、设备归一、User-Agent 和出站代理修改后需要重启。主机如需使用本地 HTTP 代理，在 `server.json` 中设置：
-
-```json
-"upstreamProxy": "http://127.0.0.1:7890"
-```
-
-不填则直接出站。代理仅作用于主机连接上游，客户端访问花生壳域名不依赖 VPN。
-
-## 故障定位
-
-- **连接失败**：核对花生壳域名、5433 是否为 TCP 映射、目标主机与 8787 端口、主机是否开机。花生壳接收端在同一主机时，可用本机回环地址避免不必要的局域网开放。
-- **证书错误**：URL 域名必须与初始化时一致，并完整复制 `relay-ca.pem`，通过 `client` 命令启动。证书有效期 2 年。更换域名或证书时，需要重新初始化到新数据目录并重新分发客户端包。
-- **中转 401**：该客户端令牌不正确或已停用。
-- **上游 401/403，随后 503**：检查第一条上游错误，确认令牌及协议兼容性；更新主机令牌并重启。
-- **429**：等待冷却或排队结束，不要反复重启规避服务器限流。
-- **502**：检查主机出站网络及上游代理配置。程序不会自动切换其他账号。
-- **更换 Windows 用户/重装系统**：原 DPAPI 文件不能直接移植，需要重新设置凭据及证书。
-
-`GET /healthz` 只证明中转可达；带客户端令牌的 `GET /status` 可查看并发和暂停状态。只有实际模型请求成功，才能证明真实上游账号已经接通。
-
-## 开发、构建与验证
-
-打开仓库根目录的 `HouseholdRelay.sln`，或使用：
+## 开发与验证
 
 ```powershell
 dotnet build HouseholdRelay.sln -c Release
-dotnet run --project HouseholdRelay.Tests -c Release
+dotnet run --project HouseholdRelay.Tests -c Release --no-build
 dotnet publish HouseholdRelay -c Release --self-contained false -o artifacts/HouseholdRelay-release
 ```
 
-测试工程不依赖测试框架包，使用本地模拟上游验证协议、并发、限流、取消、加密与客户端启动。最后一项会启动本机安装的两个真实 Claude Code 进程，经 HTTPS 和模拟 TCP 端口映射调用本地上游；使用隔离配置和虚构令牌，不发送真实账号的模型请求。
+运行时新增 `Microsoft.Data.Sqlite 10.0.6`；Razor Pages、密码哈希、Cookie 和 CSRF 使用 ASP.NET Core 自带组件，不引入前端构建链。测试仍为现有自定义 .NET 测试程序；真实 Claude Code 用例使用本机模拟上游。浏览器测试单独使用 Playwright 和无窗口 Edge，复现命令及验收证据见 [管理与持久化验证](../docs/usability/FOUNDATION-VALIDATION.md)。
 
-本次本地验证不能替代真实 OAuth 接入验证；真实账号和花生壳公网地址尚需部署后联调。支持范围为终端 Claude Code 的模型 API 调用，不包括 Claude 网页、Remote Control 或云端任务接口。
+本次不包含真实账户/API 模型调用或公网验证，也未完成全部易用性需求。

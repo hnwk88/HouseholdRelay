@@ -9,7 +9,7 @@ public static class Program
         Console.OutputEncoding = Encoding.UTF8;
         try
         {
-            if (args.Length == 0) { Help(); return 0; }
+            if (args.Length == 0) args = ["serve"];
             string? Option(string name)
             {
                 var index = Array.IndexOf(args, name);
@@ -27,8 +27,8 @@ public static class Program
                 case "init":
                     await management.Initialize(Option("--host") ?? throw new InvalidOperationException("请用 --host 指定花生壳域名。"), Port("--public-port", 5433), Port("--listen-port", 8787)); break;
                 case "account": management.SetAccount(); break;
-                case "serve": await management.Serve(); break;
-                case "clients": management.ManageClient(args.ElementAtOrDefault(1) ?? "list", Option("--name")); break;
+                case "serve": await management.Serve(Port("--admin-port", 8788)); break;
+                case "clients": management.ManageClient(args.ElementAtOrDefault(1) ?? "list", Option("--name"), Option("--id"), Option("--display-name")); break;
                 case "client":
                     var split = Array.IndexOf(args, "--");
                     return await ClientLauncher.Run(Path.GetFullPath(Option("--bundle") ?? AppContext.BaseDirectory), split >= 0 ? args[(split + 1)..] : []);
@@ -37,6 +37,8 @@ public static class Program
             return 0;
         }
         catch (InvalidOperationException error) { Console.Error.WriteLine(error.Message); return 1; }
+        catch (Microsoft.Data.Sqlite.SqliteException error)
+        { Console.Error.WriteLine($"数据库操作失败（SQLite {error.SqliteErrorCode}）。请检查数据目录权限、文件占用及备份完整性；不会重新开放首次设置。"); return 1; }
         catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Console.Error.WriteLine("文件、Windows 凭据或端口操作失败。请检查路径、当前 Windows 用户及端口占用。"); return 1; }
         catch (Exception) { Console.Error.WriteLine("操作失败。请检查配置文件格式及 .NET 10 运行环境。"); return 1; }
@@ -45,9 +47,10 @@ public static class Program
         Household Relay — C# 单账号中转
         init --host 你的花生壳域名 [--public-port 5433] [--listen-port 8787]
         account                              隐藏输入并加密保存上游令牌
-        serve                                启动 HTTPS 中转
+        serve [--admin-port 8788]             启动本机管理页与已配置的 HTTPS 中转
         clients list                         查看客户端
         clients add|rotate|disable|enable --name office
+        clients rename --id 使用者主键 --display-name 显示名
         client [--bundle 文件夹] -- [Claude Code 参数]
         主机命令可用 --home 文件夹指定数据目录；默认为程序所在目录。
         """);

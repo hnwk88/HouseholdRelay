@@ -1,0 +1,19 @@
+﻿@page
+@model SetupModel
+@{ ViewData["Title"] = "首次设置"; }
+<section class="narrow card">
+    <p class="eyebrow">欢迎使用</p><h1>先建立管理身份</h1>
+    <p>设置一个管理密码，用它管理使用者和令牌。首次设置只需完成一次。</p>
+    <form method="post">
+        <div asp-validation-summary="All" role="alert"></div>
+        <label asp-for="Code">本机引导码</label>
+        <input asp-for="Code" type="password" autocomplete="off" required maxlength="512" aria-describedby="code-help" />
+        <small id="code-help">从程序的本机启动窗口复制引导码。请勿把引导码放进网址。</small>
+        <label asp-for="Password">管理密码</label>
+        <input asp-for="Password" type="password" autocomplete="new-password" required minlength="12" maxlength="128" />
+        <small>12 至 128 个字符，建议使用较长的密码短语。</small>
+        <label asp-for="Confirmation">再次输入密码</label>
+        <input asp-for="Confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="128" />
+        <button type="submit">完成首次设置</button>
+    </form>
+</section>

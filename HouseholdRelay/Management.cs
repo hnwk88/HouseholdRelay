@@ -10,30 +10,22 @@ public sealed class Management(string home)
     public string Home { get; } = Path.GetFullPath(home);
     public string State => Path.Combine(Home, ".state");
     public string ConfigPath => Path.Combine(State, "server.json");
-    public RelayConfiguration Read() { var value = ConfigurationFiles.Read<RelayConfiguration>(ConfigPath); value.Validate(); return value; }
-
-    public async Task Initialize(string host, int publicPort, int listenPort)
+    private RelayDatabase? database;
+    public RelayDatabase Database => database ??= new RelayDatabase(Home);
+    public RelayConfiguration Read()
     {
-        if (File.Exists(ConfigPath)) throw new InvalidOperationException("已经初始化，请使用 account / clients 命令管理。");
-        if (Uri.CheckHostName(host) == UriHostNameType.Unknown || host.Contains(':') || publicPort is < 1 or > 65535 || listenPort is < 1024 or > 65535)
-            throw new InvalidOperationException("请输入有效域名或 IPv4 地址，端口必须有效。");
-        var userAgent = await ClientLauncher.DetectUserAgent();
-        WindowsSecrets.ProtectDirectory(State); WindowsSecrets.ProtectDirectory(Path.Combine(Home, "clients"));
-        using var certificate = CreateCertificate(host, out var authorityPem);
-        var pfx = certificate.Export(X509ContentType.Pfx);
-        try { WindowsSecrets.Save(Path.Combine(State, "tls.dpapi"), pfx); } finally { CryptographicOperations.ZeroMemory(pfx); }
-        File.WriteAllText(Path.Combine(State, "relay-ca.pem"), authorityPem, Encoding.ASCII);
-        var config = new RelayConfiguration { PublicUrl = $"https://{host}:{publicPort}", ListenPort = listenPort, UpstreamUserAgent = userAgent };
-        foreach (var name in new[] { "study", "bedroom", "office" })
-        {
-            var token = ConfigurationFiles.NewToken(); config.Clients.Add(new ClientAccess(name, ConfigurationFiles.Hash(token))); ExportClient(name, token, config);
-        }
-        config.Validate(); ConfigurationFiles.Write(ConfigPath, config);
-        Console.WriteLine($"初始化完成。花生壳 TCP {publicPort} → 本机 TCP {listenPort}；对外地址：{config.PublicUrl}");
-        Console.WriteLine("已生成 study、bedroom、office 三个独立客户端包。下一步执行 account，然后 serve。");
-        Console.WriteLine($"证书 SHA-256：{certificate.GetCertHashString(HashAlgorithmName.SHA256)}");
+        var config = new ConfigurationService(Database).Read().Value;
+        config.Clients = new IdentityService(Database).ReadAccess().ToList();
+        return config;
     }
-
+    public Task Initialize(string host, int publicPort, int listenPort)
+    {
+        var settings = new ConfigurationService(Database);
+        if (settings.HasCertificate) throw new InvalidOperationException("已有证书，请使用现有配置启动服务。");
+        settings.ConfigureLegacyTls(host, publicPort, listenPort);
+        Console.WriteLine("已保存旧版私有 CA 连接配置。请运行 serve，通过本机网页设置管理员并逐人发放令牌。");
+        return Task.CompletedTask;
+    }
     public static X509Certificate2 CreateCertificate(string host, out string authorityPem)
     {
         using var authorityKey = RSA.Create(2048);
@@ -64,9 +56,9 @@ public sealed class Management(string home)
 
     public void SetAccount()
     {
-        _ = Read();
+        var settings = new ConfigurationService(Database);
         if (Console.IsInputRedirected) throw new InvalidOperationException("请在本机交互终端输入令牌，不接受命令行参数或重定向输入。");
-        Console.WriteLine("请粘贴 claude setup-token 生成的账号令牌。输入隐藏，按回车保存：");
+        Console.WriteLine("请粘贴上游访问令牌。输入隐藏，按回车保存：");
         var characters = new List<char>();
         while (true)
         {
@@ -75,86 +67,59 @@ public sealed class Management(string home)
             if (key.Key == ConsoleKey.Backspace) { if (characters.Count > 0) characters.RemoveAt(characters.Count - 1); }
             else if (!char.IsControl(key.KeyChar)) characters.Add(key.KeyChar);
         }
-        var text = new string(characters.ToArray()).Trim(); characters.Clear();
-        if (text.Length < 16 || text.Length > 8192) throw new InvalidOperationException("令牌长度错误。");
-        var bytes = Encoding.UTF8.GetBytes(text);
-        try { WindowsSecrets.Save(Path.Combine(State, "account.dpapi"), bytes); }
-        finally { CryptographicOperations.ZeroMemory(bytes); }
-        Console.WriteLine("已用当前 Windows 用户的 DPAPI 加密保存。重启服务后生效。");
+        var token = new string(characters.ToArray()).Trim(); characters.Clear();
+        settings.SaveCredential(token);
+        Console.WriteLine("上游凭据已加密存入数据库。重启服务后生效，尚未验证模型调用。");
     }
 
-    public void ManageClient(string action, string? name)
+    public void ManageClient(string action, string? name, string? id = null, string? displayName = null)
     {
-        var config = Read();
+        var identities = new IdentityService(Database);
         if (action == "list")
         {
-            foreach (var item in config.Clients) Console.WriteLine($"{item.Name,-12} {(item.Enabled ? "启用" : "停用")}");
+            foreach (var user in identities.List()) Console.WriteLine($"{user.Id}  {user.Name}  {user.DisplayName}  {(user.Enabled ? "启用" : "停用")}");
             return;
         }
-        if (name is null || !RelayConfiguration.IsClientName(name)) throw new InvalidOperationException("客户端名称应为小写字母、数字、短横线或下划线，最多 32 字符。");
-        var index = config.Clients.FindIndex(c => c.Name == name);
-        if (action == "add")
-        {
-            if (index >= 0 || config.Clients.Count >= 8) throw new InvalidOperationException("名称已存在，或客户端数量已达到 8 个。");
-            var token = ConfigurationFiles.NewToken(); config.Clients.Add(new ClientAccess(name, ConfigurationFiles.Hash(token))); ExportClient(name, token, config);
-        }
+        IssuedToken? issued = null;
+        if (action == "add") issued = identities.Create(displayName ?? name ?? throw new InvalidOperationException("请提供 --display-name 或 --name。"), name);
         else
         {
-            if (index < 0) throw new InvalidOperationException("没有这个客户端。");
-            if (action == "rotate")
+            id ??= identities.List().SingleOrDefault(user => user.Name == name)?.Id;
+            if (id is null) throw new InvalidOperationException("请用 --id 指定使用者主键，或用 --name 查找旧客户端。");
+            switch (action)
             {
-                var token = ConfigurationFiles.NewToken(); config.Clients[index] = new ClientAccess(name, ConfigurationFiles.Hash(token)); ExportClient(name, token, config);
-            }
-            else if (action is "enable" or "disable") config.Clients[index] = config.Clients[index] with { Enabled = action == "enable" };
-            else throw new InvalidOperationException("clients 支持 list / add / rotate / enable / disable。");
-        }
-        ConfigurationFiles.Write(ConfigPath, config); Console.WriteLine("已保存，运行中的服务会在约 0.5 秒内更新客户端访问权限。");
-    }
-
-    private void ExportClient(string name, string token, RelayConfiguration config)
-    {
-        var directory = Path.Combine(Home, "clients", name); Directory.CreateDirectory(directory);
-        ConfigurationFiles.Write(Path.Combine(directory, "client.json"), new ClientBundle(config.PublicUrl, token));
-        File.Copy(Path.Combine(State, "relay-ca.pem"), Path.Combine(directory, "relay-ca.pem"), true);
-        foreach (var suffix in new[] { ".exe", ".dll", ".deps.json", ".runtimeconfig.json" })
-        {
-            var file = "HouseholdRelay" + suffix; var source = Path.Combine(AppContext.BaseDirectory, file);
-            if (File.Exists(source)) File.Copy(source, Path.Combine(directory, file), true);
-        }
-    }
-
-    public async Task Serve()
-    {
-        var config = Read();
-        var tokenBytes = WindowsSecrets.Load(Path.Combine(State, "account.dpapi"));
-        var token = Encoding.UTF8.GetString(tokenBytes); CryptographicOperations.ZeroMemory(tokenBytes);
-        var certificateBytes = WindowsSecrets.Load(Path.Combine(State, "tls.dpapi"));
-        using var certificate = LoadServerCertificate(certificateBytes);
-        CryptographicOperations.ZeroMemory(certificateBytes);
-        using var relay = new RelayServer(config, token, data => Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(data)));
-        await using var app = relay.Build(certificate);
-        await app.StartAsync();
-        Console.WriteLine($"HTTPS 已启动：本机 {config.ListenPort}，公网 {config.PublicUrl}。按 Ctrl+C 停止。");
-        using var stop = new CancellationTokenSource();
-        using var registration = app.Lifetime.ApplicationStopping.Register(stop.Cancel);
-        var watcher = WatchClients(relay, stop.Token);
-        try { await app.WaitForShutdownAsync(); }
-        finally { stop.Cancel(); await watcher; }
-    }
-
-    private async Task WatchClients(RelayServer relay, CancellationToken stop)
-    {
-        var modified = File.GetLastWriteTimeUtc(ConfigPath); using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(stop))
-            {
-                var current = File.GetLastWriteTimeUtc(ConfigPath); if (current == modified) continue;
-                modified = current;
-                try { relay.Clients.Replace(ConfigurationFiles.Read<RelayConfiguration>(ConfigPath).Clients); Console.WriteLine("{\"event\":\"clients_reloaded\"}"); }
-                catch { relay.Clients.DisableAll(); Console.WriteLine("{\"event\":\"invalid_config_clients_disabled\"}"); }
+                case "rotate": issued = identities.Rotate(id); break;
+                case "enable": identities.SetEnabled(id, true); break;
+                case "disable": identities.SetEnabled(id, false); break;
+                case "rename": identities.Rename(id, displayName ?? throw new InvalidOperationException("请提供 --display-name。")); break;
+                default: throw new InvalidOperationException("clients 支持 list / add / rotate / enable / disable / rename。");
             }
         }
-        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        Console.WriteLine("已保存，新的权限检查立即生效。");
+        if (issued is not null)
+        {
+            Console.WriteLine($"使用者：{issued.UserId}；个人令牌仅显示这一次：");
+            Console.WriteLine(issued.Token);
+        }
+    }
+
+    public async Task Serve(int adminPort = 8788)
+    {
+        if (adminPort is < 1024 or > 65535) throw new InvalidOperationException("管理端口应在 1024 至 65535 之间。");
+        var settings = new ConfigurationService(Database); var config = settings.Read().Value;
+        var identities = new IdentityService(Database);
+        using var relay = new RelayServer(config, settings.LoadCredential(), data => Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(data)), clients: identities.Clients);
+        var pfx = settings.LoadCertificate();
+        using var certificate = pfx is null ? null : LoadServerCertificate(pfx);
+        if (pfx is not null) CryptographicOperations.ZeroMemory(pfx);
+        await using var admin = ManagementWeb.Build(Database, identities, relay, adminPort);
+        await using var api = certificate is null ? null : relay.Build(certificate);
+        await admin.StartAsync();
+        if (api is not null) await api.StartAsync();
+        Console.WriteLine($"本机管理：http://127.0.0.1:{adminPort}；按 Ctrl+C 停止。");
+        var bootstrap = new AdministratorService(Database).BootstrapCode();
+        if (bootstrap is not null) Console.WriteLine($"首次设置引导码（仅供本机输入）：{bootstrap}");
+        Console.WriteLine(api is null ? "尚未配置对外 HTTPS；上游是否可用以实际请求为准。" : $"旧版 HTTPS 监听端口：{config.ListenPort}；需客户端信任旧版 CA。");
+        await admin.WaitForShutdownAsync();
     }
 }

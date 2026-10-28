@@ -17,7 +17,7 @@ public sealed class RelayServer : IDisposable
     private static readonly Dictionary<string, string> Routes = new()
     { ["/v1/messages"] = "POST", ["/v1/messages/count_tokens"] = "POST", ["/v1/models"] = "GET" };
     private readonly RelayConfiguration config;
-    private readonly string credential;
+    private readonly string? credential;
     private readonly HttpClient http;
     private readonly Uri upstream;
     private readonly Action<object> log;
@@ -26,15 +26,15 @@ public sealed class RelayServer : IDisposable
     public ClientRegistry Clients { get; }
     public Admission Admission { get; }
 
-    public RelayServer(RelayConfiguration config, string credential, Action<object>? log = null, Uri? testUpstream = null)
+    public RelayServer(RelayConfiguration config, string? credential, Action<object>? log = null, Uri? testUpstream = null, ClientRegistry? clients = null)
     {
         config.Validate();
-        if (string.IsNullOrWhiteSpace(credential) || credential.Any(char.IsControl)) throw new InvalidOperationException("账号令牌格式错误。");
+        if (credential is not null && (string.IsNullOrWhiteSpace(credential) || credential.Any(char.IsControl))) throw new InvalidOperationException("账号令牌格式错误。");
         if (testUpstream is not null && !(testUpstream.Scheme == "http" && testUpstream.Host == "127.0.0.1"))
             throw new InvalidOperationException("模拟上游只允许本机 HTTP。");
         this.config = config; this.credential = credential; this.log = log ?? (_ => { });
         upstream = testUpstream ?? new Uri("https://api.anthropic.com");
-        Clients = new ClientRegistry(config.Clients); Admission = new Admission(config);
+        Clients = clients ?? new ClientRegistry(config.Clients); Admission = new Admission(config);
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false, UseCookies = false, AutomaticDecompression = DecompressionMethods.None,
@@ -78,11 +78,12 @@ public sealed class RelayServer : IDisposable
     }
     private void CheckState()
     {
+        if (credential is null) throw new RelayFailure(503, "Upstream is not configured.");
         if (Volatile.Read(ref paused) != 0) throw new RelayFailure(503, "Upstream authentication paused. Update the host credential and restart.");
         var remaining = Interlocked.Read(ref cooldownUntil) - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (remaining > 0) throw new RelayFailure(429, "Upstream cooldown is active.", (int)Math.Ceiling(remaining / 1000d));
     }
-    private async Task Handle(HttpContext context)
+    public async Task Handle(HttpContext context)
     {
         var stopwatch = Stopwatch.StartNew(); var id = Guid.NewGuid().ToString("N"); var name = "unknown";
         var path = context.Request.Path.Value ?? "/"; var outcome = "complete";
@@ -102,8 +103,8 @@ public sealed class RelayServer : IDisposable
             if (path == "/api/hello" && context.Request.Method == "HEAD") { context.Response.StatusCode = 200; return; }
             if (!Routes.TryGetValue(path, out var method)) throw new RelayFailure(404, "Endpoint not exposed by this relay.");
             if (context.Request.Method != method) throw new RelayFailure(405, "Method not allowed.");
-            CheckState(); Admission.CheckRate(name);
-            using var lease = await Admission.Enter(name, context.RequestAborted);
+            CheckState(); Admission.CheckRate(client.Id);
+            using var lease = await Admission.Enter(client.Id, context.RequestAborted);
             if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked while queued.");
             CheckState();
             var body = await ReadBody(context);
@@ -121,6 +122,8 @@ public sealed class RelayServer : IDisposable
                 }
                 catch (JsonException) { throw new RelayFailure(400, "Expected a JSON object."); }
             }
+            // JSON 处理完成后再核验，缩短上传结束与真正发往上游之间的撤销窗口。
+            if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked before dispatch.");
             using var request = new HttpRequestMessage(new HttpMethod(method), new Uri(upstream, path + context.Request.QueryString))
             {
                 Content = new ByteArrayContent(body), Version = HttpVersion.Version20,

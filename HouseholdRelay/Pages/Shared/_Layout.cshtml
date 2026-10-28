@@ -1,0 +1,23 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] · Household Relay</title>
+    <link rel="stylesheet" href="~/site.css" asp-append-version="true" />
+</head>
+<body>
+    <a class="skip" href="#main">跳到主要内容</a>
+    <header><a class="brand" asp-page="/Index">Household <strong>Relay</strong></a><span class="badge">本机管理</span></header>
+    @if (User.Identity?.IsAuthenticated == true)
+    {
+        <nav aria-label="管理导航">
+            <a asp-page="/Index">概览</a><a asp-page="/Users">使用者与令牌</a><a asp-page="/Settings">项目设置</a>
+            <form method="post" asp-page="/Logout"><button class="subtle" type="submit">退出登录</button></form>
+        </nav>
+    }
+    <main id="main">@RenderBody()</main>
+    <footer>一个上游，每人独立令牌。管理页面仅供本机使用。</footer>
+    <script src="~/site.js" asp-append-version="true" defer></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+﻿@page
+@model SettingsModel
+@{ ViewData["Title"] = "项目设置"; }
+<p class="eyebrow">配置</p><h1>项目设置</h1>
+<p>设置保存在本机，重启后仍然保留。监听端口和转发限制需重启服务生效。</p>
+@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<form method="post" class="card settings">
+    <div asp-validation-summary="All" role="alert"></div><input type="hidden" asp-for="Version" />
+    <label asp-for="Input.PublicUrl">对外地址（可稍后填写）</label>
+    <input asp-for="Input.PublicUrl" type="url" maxlength="2048" placeholder="https://relay.example.com:5433" />
+    <small>只保存连接说明中的地址。可信 HTTPS 配置和公网连接检测尚未提供。</small>
+    <label asp-for="Input.ListenPort">中转监听端口</label><input asp-for="Input.ListenPort" type="number" min="1024" max="65535" required />
+    <small>此端口用于已配置证书的中转入口；本机管理端口独立设置。</small>
+    <details><summary>转发与限流设置</summary>
+        <label asp-for="Input.MaxConcurrent">上游最大并发</label><input asp-for="Input.MaxConcurrent" type="number" min="1" max="8" required />
+        <label asp-for="Input.MaxPerClient">每人最大并发</label><input asp-for="Input.MaxPerClient" type="number" min="1" max="8" required />
+        <label asp-for="Input.MaxQueued">最大排队数</label><input asp-for="Input.MaxQueued" type="number" min="1" max="64" required />
+        <label asp-for="Input.RequestsPerMinute">每人每分钟请求上限</label><input asp-for="Input.RequestsPerMinute" type="number" min="1" max="10000" required />
+        <label asp-for="Input.QueueTimeoutSeconds">排队超时（秒）</label><input asp-for="Input.QueueTimeoutSeconds" type="number" min="1" max="120" required />
+        <label asp-for="Input.UploadTimeoutSeconds">上传超时（秒）</label><input asp-for="Input.UploadTimeoutSeconds" type="number" min="1" max="120" required />
+        <label asp-for="Input.RequestTimeoutSeconds">上游请求超时（秒）</label><input asp-for="Input.RequestTimeoutSeconds" type="number" min="1" max="3600" required />
+        <label asp-for="Input.UpstreamUserAgent">上游 User-Agent</label><input asp-for="Input.UpstreamUserAgent" maxlength="256" required />
+        <label class="checkbox"><input asp-for="Input.NormalizeDeviceMetadata" />统一已识别的设备元数据</label>
+    </details>
+    <button type="submit">保存设置</button>
+</form>

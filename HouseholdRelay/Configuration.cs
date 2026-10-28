@@ -4,7 +4,11 @@ using System.Text.Json;
 
 namespace HouseholdRelay;
 
-public sealed record ClientAccess(string Name, string TokenHash, bool Enabled = true);
+public sealed record ClientAccess(string Name, string TokenHash, bool Enabled = true, string? UserId = null, string? TokenId = null)
+{
+    // 旧内存夹具兼容名称；所有数据库身份使用不可变主键。
+    public string Id => UserId ?? Name;
+}
 public sealed record ClientBundle(string BaseUrl, string Token);
 
 public sealed class RelayConfiguration
@@ -13,7 +17,7 @@ public sealed class RelayConfiguration
     public string PublicUrl { get; set; } = "";
     public string AuthMode { get; set; } = "oauth";
     public string DeviceId { get; set; } = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
-    public string UpstreamUserAgent { get; set; } = "";
+    public string UpstreamUserAgent { get; set; } = "HouseholdRelay/1.0";
     public bool NormalizeDeviceMetadata { get; set; } = true;
     public string? UpstreamProxy { get; set; }
     public int MaxConcurrent { get; set; } = 2;
@@ -46,8 +50,9 @@ public sealed class RelayConfiguration
         && value[0] is >= 'a' and <= 'z' && value.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c is '_' or '-');
     public static void ValidateClients(IReadOnlyList<ClientAccess> clients)
     {
-        if (clients.Count is < 1 or > 8 || clients.Any(c => !IsClientName(c.Name) || !IsHex(c.TokenHash, 64))
+        if (clients.Count > 8 || clients.Any(c => !IsClientName(c.Name) || !IsHex(c.TokenHash, 64))
             || clients.Select(c => c.Name).Distinct().Count() != clients.Count
+            || clients.Select(c => c.Id).Distinct().Count() != clients.Count
             || clients.Select(c => c.TokenHash).Distinct(StringComparer.OrdinalIgnoreCase).Count() != clients.Count)
             throw new InvalidOperationException("客户端配置错误，最多允许 8 个独立令牌。");
     }

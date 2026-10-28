@@ -23,7 +23,14 @@ var tests = new (string Name, Func<Task> Test)[]
     ("401/403 pause upstream authentication", Tests.AuthenticationPause),
     ("timeouts release capacity and redirects never leak credentials", Tests.TimeoutAndRedirect),
     ("DPAPI, TLS, independent client issuance and rotation", Tests.Storage),
-    ("real Claude Code clients through TLS and a TCP tunnel to mock upstream", Tests.NativeClients)
+    ("real Claude Code clients through TLS and a TCP tunnel to mock upstream", Tests.NativeClients),
+    ("database identity, settings, sessions and restart persistence", FoundationTests.Persistence),
+    ("legacy migration preserves credentials, identities and disabled tokens", FoundationTests.Migration),
+    ("migration rollback and lost database fail closed", FoundationTests.Recovery),
+    ("concurrent management commits and stable user limits", FoundationTests.ConcurrentWrites),
+    ("failed permission writes do not publish partial revocation", FoundationTests.PermissionFailure),
+    ("web bootstrap, authentication, CSRF, host and origin boundaries", FoundationTests.WebSecurity),
+    ("database token revocation at queue and upload boundaries", FoundationTests.Revocation)
 };
 var failures = 0;
 var selected = tests.Where(item => args.Length == 0 || item.Name.Contains(args[0], StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -175,13 +182,14 @@ static class Tests
             var secret = Encoding.UTF8.GetBytes("fixture-not-a-real-account"); var encrypted = WindowsSecrets.Protect(secret);
             Check(!encrypted.AsSpan().SequenceEqual(secret)); Check(WindowsSecrets.Unprotect(encrypted).AsSpan().SequenceEqual(secret));
             var manager = new Management(root); await manager.Initialize("localhost", 5433, 8787);
+            var identities = new IdentityService(manager.Database);
+            identities.Create("书房", "study"); var issued = identities.Create("卧室", "bedroom"); identities.Create("公司", "office");
             var config = manager.Read(); Check(config.Clients.Count == 3);
-            var bundle = ConfigurationFiles.Read<ClientBundle>(Path.Combine(root, "clients", "bedroom", "client.json"));
-            Check(!File.ReadAllText(manager.ConfigPath).Contains(bundle.Token));
+            Check(!Directory.Exists(Path.Combine(root, "clients")), "New installations must not export all plaintext tokens");
             manager.ManageClient("disable", "office"); Check(!manager.Read().Clients.Single(c => c.Name == "office").Enabled);
-            manager.ManageClient("rotate", "bedroom");
-            var changed = ConfigurationFiles.Read<ClientBundle>(Path.Combine(root, "clients", "bedroom", "client.json")); Check(bundle.Token != changed.Token);
-            var pfx = WindowsSecrets.Load(Path.Combine(manager.State, "tls.dpapi"));
+            var changed = identities.Rotate(issued.UserId); Check(issued.Token != changed.Token);
+            Check(identities.Clients.Authenticate(issued.Token) is null && identities.Clients.Authenticate(changed.Token) is not null);
+            var pfx = new ConfigurationService(manager.Database).LoadCertificate()!;
             using var certificate = X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.EphemeralKeySet);
             Check(certificate.HasPrivateKey); CryptographicOperations.ZeroMemory(pfx);
         }
@@ -283,7 +291,7 @@ sealed class Fixture : IAsyncDisposable
     public required HttpClient Http { get; init; }
     public required ConcurrentQueue<Call> Calls { get; init; }
     public required ConcurrentQueue<string> Logs { get; init; }
-    public static async Task<Fixture> Create(RequestDelegate handler, Action<RelayConfiguration>? configure = null, X509Certificate2? certificate = null)
+    public static async Task<Fixture> Create(RequestDelegate handler, Action<RelayConfiguration>? configure = null, X509Certificate2? certificate = null, ClientRegistry? clients = null)
     {
         var calls = new ConcurrentQueue<Call>(); var logs = new ConcurrentQueue<string>();
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] }); builder.Logging.ClearProviders();
@@ -298,7 +306,7 @@ sealed class Fixture : IAsyncDisposable
         var config = new RelayConfiguration { UpstreamUserAgent = "claude-cli/fixture (external, cli)", Clients =
             [new("study", ConfigurationFiles.Hash("study-test-token")), new("bedroom", ConfigurationFiles.Hash("bedroom-test-token")), new("office", ConfigurationFiles.Hash("office-test-token"))] };
         configure?.Invoke(config);
-        var relay = new RelayServer(config, "fixture-upstream-secret", item => logs.Enqueue(JsonSerializer.Serialize(item)), new Uri(upstream.Urls.Single()));
+        var relay = new RelayServer(config, "fixture-upstream-secret", item => logs.Enqueue(JsonSerializer.Serialize(item)), new Uri(upstream.Urls.Single()), clients);
         var app = relay.Build(certificate, 0); await app.StartAsync();
         return new Fixture { Config = config, Relay = relay, App = app, Upstream = upstream, Url = app.Urls.Single(), Calls = calls, Logs = logs,
             Http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false }) };

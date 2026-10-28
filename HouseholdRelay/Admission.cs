@@ -12,7 +12,10 @@ public sealed class RelayFailure(int status, string message, int retryAfter = 0)
 public sealed class ClientRegistry
 {
     private ClientAccess[] clients;
-    public ClientRegistry(IEnumerable<ClientAccess> values) => clients = values.ToArray();
+    private readonly Func<IReadOnlyList<ClientAccess>>? readCommitted;
+    private readonly object refreshLock = new();
+    public ClientRegistry(IEnumerable<ClientAccess> values, Func<IReadOnlyList<ClientAccess>>? readCommitted = null)
+    { clients = values.ToArray(); this.readCommitted = readCommitted; }
     public void Replace(IReadOnlyList<ClientAccess> values)
     {
         RelayConfiguration.ValidateClients(values); Volatile.Write(ref clients, values.ToArray());
@@ -21,6 +24,15 @@ public sealed class ClientRegistry
     public ClientAccess? Authenticate(string? token)
     {
         if (string.IsNullOrEmpty(token) || token.Length > 512) return null;
+        // 每个鉴权边界读取数据库已提交快照，使另一个 CLI 进程的撤销也立即生效。
+        lock (refreshLock)
+        {
+            if (readCommitted is not null)
+            {
+                try { Replace(readCommitted()); }
+                catch { DisableAll(); throw new RelayFailure(503, "Access database unavailable."); }
+            }
+        }
         var hash = Convert.FromHexString(ConfigurationFiles.Hash(token));
         return Volatile.Read(ref clients).FirstOrDefault(c => c.Enabled && CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(c.TokenHash)));
     }
