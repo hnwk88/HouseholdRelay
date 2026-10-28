@@ -10,7 +10,7 @@ internal static class UpstreamResponses
     private static readonly HashSet<string> AllowedHeaders = new(StringComparer.OrdinalIgnoreCase)
     { "request-id", "x-request-id", "retry-after", "x-should-retry", "anthropic-organization-id" };
 
-    internal static async Task Copy(HttpResponseMessage upstream, HttpResponse response, string secret, string requestId, CancellationToken cancellation)
+    internal static async Task Copy(HttpResponseMessage upstream, HttpResponse response, string secret, string requestId, CancellationToken cancellation, UsageAccumulator? usage = null)
     {
         if (upstream.Content.Headers.ContentEncoding.Any(value => !value.Equals("identity", StringComparison.OrdinalIgnoreCase)))
             throw new RelayFailure(502, "Unexpected upstream content encoding.");
@@ -27,7 +27,7 @@ internal static class UpstreamResponses
         if (upstream.Content.Headers.ContentType?.MediaType == "text/event-stream")
         {
             response.ContentType = "text/event-stream; charset=utf-8";
-            await CopyEvents(stream, response.Body, secret, cancellation);
+            await CopyEvents(stream, response.Body, secret, cancellation, usage);
         }
         else
         {
@@ -40,6 +40,7 @@ internal static class UpstreamResponses
                 safe = SafeError("Upstream returned an unreadable error response.");
             }
             response.ContentType = "application/json; charset=utf-8";
+            usage?.Json(safe);
             await response.Body.WriteAsync(safe, cancellation);
         }
     }
@@ -92,7 +93,7 @@ internal static class UpstreamResponses
 
     private static byte[] SafeError(string message) => JsonSerializer.SerializeToUtf8Bytes(new { type = "error", error = new { type = "api_error", message } });
 
-    private static async Task CopyEvents(Stream input, Stream output, string secret, CancellationToken cancellation)
+    private static async Task CopyEvents(Stream input, Stream output, string secret, CancellationToken cancellation, UsageAccumulator? usage)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(32768);
         using var frame = new MemoryStream(); var lineStart = 0;
@@ -108,21 +109,23 @@ internal static class UpstreamResponses
                     var length = (int)frame.Length - lineStart - 1;
                     if (length == 0 || length == 1 && frame.GetBuffer()[lineStart] == 13)
                     {
-                        await FlushEvent(frame.ToArray(), output, secret, cancellation);
+                        await FlushEvent(frame.ToArray(), output, secret, cancellation, usage, true);
                         frame.SetLength(0); lineStart = 0;
                     }
                     else lineStart = (int)frame.Length;
                 }
-            if (frame.Length != 0) await FlushEvent(frame.ToArray(), output, secret, cancellation);
+            if (frame.Length != 0) await FlushEvent(frame.ToArray(), output, secret, cancellation, usage, false);
         }
         finally { ArrayPool<byte>.Shared.Return(buffer, true); }
     }
 
-    private static async Task FlushEvent(byte[] frame, Stream output, string secret, CancellationToken cancellation)
+    private static async Task FlushEvent(byte[] frame, Stream output, string secret, CancellationToken cancellation, UsageAccumulator? usage, bool terminated)
     {
         var text = Encoding.UTF8.GetString(frame); var lines = text.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
         var data = string.Join('\n', lines.Where(line => line.StartsWith("data:", StringComparison.Ordinal)).Select(line => line[5..].TrimStart(' ')));
         var isError = lines.Any(line => line.StartsWith("event:", StringComparison.Ordinal) && line[6..].Trim() == "error");
+        var eventName = lines.FirstOrDefault(line => line.StartsWith("event:", StringComparison.Ordinal))?[6..].Trim() ?? "";
+        usage?.Event(eventName, data, terminated);
         if (data.Length != 0)
         {
             try

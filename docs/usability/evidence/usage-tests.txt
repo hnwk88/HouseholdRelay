@@ -1,0 +1,105 @@
+﻿PASS device normalization preserves sessions and prompt bytes
+PASS host credentials/headers are shared; client sessions remain independent
+PASS access control, endpoint whitelist and upload limits
+PASS SSE flush and cancellation release upstream resources
+PASS two clients run concurrently and queued revocation is enforced
+PASS 429 cools down all clients without replay
+PASS 401/403 pause upstream authentication
+PASS timeouts release capacity and redirects never leak credentials
+已保存旧版私有 CA 连接配置。请运行 serve，通过本机网页设置管理员并逐人发放令牌。
+已保存，新的权限检查立即生效。
+PASS DPAPI, TLS, independent client issuance and rotation
+PASS real Claude Code clients through TLS and a TCP tunnel to mock upstream
+PASS database identity, settings, sessions and restart persistence
+PASS legacy migration preserves credentials, identities and disabled tokens
+PASS migration rollback and lost database fail closed
+PASS concurrent management commits and stable user limits
+PASS failed permission writes do not publish partial revocation
+PASS web bootstrap, authentication, CSRF, host and origin boundaries
+POST /Setup attempt 1: 200
+POST /Setup attempt 2: 200
+POST /Setup attempt 3: 200
+POST /Setup attempt 4: 200
+POST /Setup attempt 5: 200
+POST /Setup after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /Setup/ after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /setup after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /SETUP/ after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /setup/?attempt=6 after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /Setup?attempt=7 after limit: 429; administrators=0, sessions=0, bootstrap=1
+PASS web rate limit blocks setup aliases after canonical attempts
+POST /Login attempt 1: 200
+POST /Login attempt 2: 200
+POST /Login attempt 3: 200
+POST /Login attempt 4: 200
+POST /Login attempt 5: 200
+POST /Login after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /Login/ after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /login after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /LOGIN/ after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /login/?attempt=6 after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /Login?attempt=7 after limit: 429; administrators=1, sessions=0, bootstrap=0
+PASS web rate limit blocks login aliases after canonical attempts
+POST /Setup attempt 1: 200
+POST /Setup/ attempt 2: 200
+POST /setup attempt 3: 200
+POST /SETUP/ attempt 4: 200
+POST /setup/?attempt=6 attempt 5: 200
+POST /Setup after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /Setup/ after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /setup after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /SETUP/ after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /setup/?attempt=6 after limit: 429; administrators=0, sessions=0, bootstrap=1
+POST /Setup?attempt=7 after limit: 429; administrators=0, sessions=0, bootstrap=1
+PASS web rate limit shares setup budget across alternating aliases
+POST /Login attempt 1: 200
+POST /Login/ attempt 2: 200
+POST /login attempt 3: 200
+POST /LOGIN/ attempt 4: 200
+POST /login/?attempt=6 attempt 5: 200
+POST /Login after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /Login/ after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /login after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /LOGIN/ after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /login/?attempt=6 after limit: 429; administrators=1, sessions=0, bootstrap=0
+POST /Login?attempt=7 after limit: 429; administrators=1, sessions=0, bootstrap=0
+PASS web rate limit shares login budget across alternating aliases
+POST /setup/ fifth valid attempt: 302
+POST /login/ fifth valid attempt: 302
+PASS web rate limit permits fifth attempt and keeps page budgets separate
+PASS database token revocation at queue and upload boundaries
+PASS upstream address and URL contracts
+PASS API key mode isolates account headers
+PASS upstream JSON and SSE responses redact secrets
+PASS upstream candidate test and atomic activation
+PASS restricted upstream requires explicit native diagnostic and preserves client requests
+PASS native diagnostic rejects incomplete and error streams
+PASS native diagnostic cancellation releases its client and upstream
+PASS web directly configures, tests and activates an API upstream
+PASS upstream protocol modes, prefixes, query and restart persistence
+PASS upstream version switch isolates old authentication failures
+PASS upstream version switch isolates old cooldown
+PASS upstream diagnostic failures cannot pause or activate over current version
+PASS upstream connection, private address, TLS and cancellation boundaries
+PASS certificate validation, DPAPI import, restart and real TLS serving
+Clean native client: claude-cli/2.1.311 (external, cli); local HTTP, no CA file or legacy client bundle.
+PASS clean native client uses two connection variables and completes a tool conversation
+PASS upstream HTTP CONNECT proxy uses validated destination addresses
+PASS upstream schema upgrade rolls back and preserves existing identities
+PASS usage identity, rotation, rename and private queries in both upstream modes
+PASS usage categories, null totals, partial JSON and idempotent completion
+PASS usage authenticated rejections persist without dispatch
+PASS usage SSE byte fragments, cumulative counts, errors and missing endings
+PASS usage cancellation and timeout preserve partial counts and release connections
+PASS usage streaming memory stays bounded by individual events
+PASS usage busy and failed writes reject dispatch and expose completion failures
+PASS usage UTC retention boundary, hourly cleanup and restart recovery
+PASS usage schema migration rolls back before preserving identities
+USAGE LOAD: 48 concurrent requests + 10 management writes/queries, 2161 ms; deleted 10000 old rows in batches; index=usage_user_time
+PASS usage indexed window queries, paging and concurrent management load
+PASS usage queued rotation and dispatch persistence failures never send
+PASS usage reported money, cumulative stream costs and currency isolation
+PASS usage price snapshots, decimal totals and local DST time buckets
+PASS usage pricing forms enforce administrator, CSRF and version boundaries
+PASS usage graceful host shutdown drains and preserves completed requests
+54/54 passed; model traffic used only local mock servers.

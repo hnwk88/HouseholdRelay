@@ -19,7 +19,7 @@ function launch(file, args, options = {}) {
     children.add(child); child.once('exit', () => children.delete(child)); return child;
 }
 async function stop(child) {
-    if (!child || child.exitCode !== null) return;
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
     const done = new Promise(resolve => child.once('exit', resolve)); child.kill(); await done;
 }
 async function freePort() {
@@ -93,10 +93,34 @@ async function call(url, body, headers, stream) {
     if (stream) {
         const events = [...content.matchAll(/^event: (.+)$/gm)].map(match => match[1]);
         assert.ok(events.includes('message_stop') && !events.includes('error'), 'SSE 必须完整结束');
-        return { status: response.status, events, elapsed_ms: Date.now() - started };
+        const usage = {};
+        for (const match of content.matchAll(/^data: (.+)$/gm)) {
+            let data; try { data = JSON.parse(match[1]); } catch { continue; }
+            if (data.type === 'message_start') Object.assign(usage, data.message?.usage || {});
+            if (data.type === 'message_delta') Object.assign(usage, data.usage || {});
+        }
+        return { status: response.status, request_id: response.headers.get('x-relay-request-id'), events, usage, elapsed_ms: Date.now() - started };
     }
     const message = JSON.parse(content); assert.ok(message.type === 'message' && message.role === 'assistant', 'JSON 必须为真实 Messages 回复');
-    return { status: response.status, model: message.model, usage: message.usage, elapsed_ms: Date.now() - started };
+    return { status: response.status, request_id: response.headers.get('x-relay-request-id'), model: message.model, usage: message.usage, elapsed_ms: Date.now() - started };
+}
+async function personalUsage(url) {
+    const response = await fetch(url + '/my-usage/data', { headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(response.status, 200, '个人用量查询必须成功'); return response.json();
+}
+async function verifyUsage(url, call) {
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const report = await personalUsage(url); const row = report.rows.find(item => item.requestId === call.request_id);
+        if (row && row.outcome !== 'started') {
+            assert.equal(row.outcome, 'succeeded'); assert.equal(row.completeness, 'complete');
+            for (const [source, target] of [['input_tokens', 'input'], ['output_tokens', 'output'], ['cache_read_input_tokens', 'cacheRead'], ['cache_creation_input_tokens', 'cacheWrite']])
+                assert.equal(row.tokens[target], call.usage?.[source] ?? null, '持久化用量必须与实际响应一致');
+            assert.ok(row.money.source !== 'estimated', '未配置费率时不能猜测费用');
+            return { request_id: row.requestId, user_id: row.userId, upstream_version: row.upstreamVersion, tokens: row.tokens, money: row.money, completeness: row.completeness };
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error('个人用量未及时完成持久化');
 }
 (async () => {
     let input = ''; for await (const chunk of process.stdin) input += chunk.toString(); material = JSON.parse(input); input = '';
@@ -128,10 +152,13 @@ async function call(url, body, headers, stream) {
     await new Promise(resolve => interceptor.listen(0, '127.0.0.1', resolve)); const clientUrl = `http://127.0.0.1:${interceptor.address().port}`;
     for (const provider of material.providers) {
         const options = provider.options; const item = { base_url: options.baseUrl, authentication: options.authentication, model: options.model, proxy: options.proxyUrl, diagnostic: options.diagnostic };
-        evidence.providers.push(item); await candidate(page, url, provider); item.web_test_and_activation = true;
+        evidence.providers.push(item); const beforeProbe = await personalUsage(url);
+        await candidate(page, url, provider); item.web_test_and_activation = true;
+        assert.equal((await personalUsage(url)).total, beforeProbe.total, '管理员检测不能进入个人用量');
         item.native = await native(clientUrl, options.model); const simple = captured;
         item.client_version = simple.headers['user-agent'];
         item.json = await call(url, simple.body, simple.headers, false); item.sse = await call(url, simple.body, simple.headers, true);
+        item.json.persisted_usage = await verifyUsage(url, item.json); item.sse.persisted_usage = await verifyUsage(url, item.sse);
         toolRequests = 0; toolResults = 0; item.tool_session = await native(clientUrl, options.model, true);
         assert.ok(toolRequests > 0 && toolResults > 0, '必须实际发生 Read 和 tool_result 回合'); item.tool_roundtrip = true;
         await page.goto(url + '/Connection'); assert.ok(!(await page.content()).includes(provider.credential) && !(await page.content()).includes(token), '连接说明不能包含秘密');
@@ -139,6 +166,11 @@ async function call(url, body, headers, stream) {
         await page.screenshot({ path: path.join(output, new URL(options.baseUrl).host + '-connection.png'), fullPage: true });
         await stop(server); ({ url } = await start(port)); await page.context().clearCookies(); await login(page, url);
         item.after_restart = await call(url, simple.body, simple.headers, false);
+        item.after_restart.persisted_usage = await verifyUsage(url, item.after_restart);
+        const retained = await personalUsage(url); assert.ok(retained.rows.some(row => row.requestId === item.json.request_id), '重启必须保留旧调用');
+        item.personal_summary = retained.summary;
+        await page.goto(url + '/Usage'); await page.getByRole('heading', { name: '个人用量', exact: true }).waitFor();
+        await page.screenshot({ path: path.join(output, new URL(options.baseUrl).host + '-usage.png'), fullPage: true });
         await fs.writeFile(path.join(output, 'real-upstream-results.json'), JSON.stringify(evidence, null, 2));
         console.log('真实上游完成：' + new URL(options.baseUrl).host + '，网页/JSON/SSE/工具/重启通过');
     }

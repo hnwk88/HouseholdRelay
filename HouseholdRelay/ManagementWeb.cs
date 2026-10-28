@@ -34,6 +34,9 @@ public static class ManagementWeb
         builder.Services.AddSingleton(new UpstreamService(database));
         builder.Services.AddSingleton(new CertificateService(database));
         builder.Services.AddSingleton(relay);
+        builder.Services.AddSingleton(relay.EnableUsage(database));
+        builder.Services.AddSingleton(new UsagePricing(database));
+        builder.Services.AddHostedService<UsageMaintenance>();
         builder.Services.AddRazorPages(options =>
         {
             options.Conventions.AuthorizeFolder("/");

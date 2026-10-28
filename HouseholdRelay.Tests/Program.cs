@@ -54,7 +54,22 @@ var tests = new (string Name, Func<Task> Test)[]
     ("certificate validation, DPAPI import, restart and real TLS serving", UpstreamSecurityTests.CertificateImport),
     ("clean native client uses two connection variables and completes a tool conversation", CleanClientTests.ToolConversation),
     ("upstream HTTP CONNECT proxy uses validated destination addresses", UpstreamProxyTests.ConnectProxy),
-    ("upstream schema upgrade rolls back and preserves existing identities", UpstreamMigrationTests.UpgradeRollback)
+    ("upstream schema upgrade rolls back and preserves existing identities", UpstreamMigrationTests.UpgradeRollback),
+    ("usage identity, rotation, rename and private queries in both upstream modes", UsageIntegrationTests.IdentityAndModes),
+    ("usage categories, null totals, partial JSON and idempotent completion", UsageIntegrationTests.CategoriesAndUnknown),
+    ("usage authenticated rejections persist without dispatch", UsageIntegrationTests.Rejections),
+    ("usage SSE byte fragments, cumulative counts, errors and missing endings", UsageStreamingTests.FragmentsAndEndings),
+    ("usage cancellation and timeout preserve partial counts and release connections", UsageStreamingTests.CancellationAndTimeout),
+    ("usage streaming memory stays bounded by individual events", UsageStreamingTests.BoundedEvents),
+    ("usage busy and failed writes reject dispatch and expose completion failures", UsageStorageTests.WriteFailures),
+    ("usage UTC retention boundary, hourly cleanup and restart recovery", UsageStorageTests.RetentionAndRecovery),
+    ("usage schema migration rolls back before preserving identities", UsageStorageTests.MigrationRollback),
+    ("usage indexed window queries, paging and concurrent management load", UsageConcurrencyTests.WindowQueriesAndLoad),
+    ("usage queued rotation and dispatch persistence failures never send", UsageConcurrencyTests.QueueAndDispatchFailures),
+    ("usage reported money, cumulative stream costs and currency isolation", UsageMoneyTests.ReportedCosts),
+    ("usage price snapshots, decimal totals and local DST time buckets", UsageMoneyTests.PriceSnapshotsAndTimeZones),
+    ("usage pricing forms enforce administrator, CSRF and version boundaries", UsageMoneyTests.PricingWebSecurity),
+    ("usage graceful host shutdown drains and preserves completed requests", UsageRestartTests.GracefulRestart)
 };
 var failures = 0;
 var selected = tests.Where(item => args.Length == 0 || item.Name.Contains(args[0], StringComparison.OrdinalIgnoreCase)).ToArray();

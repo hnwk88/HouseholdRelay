@@ -10,7 +10,7 @@ internal static class UpstreamSchema
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version == 2) return;
+        if (version is 2 or 3) return;
         if (version != 1) throw new InvalidOperationException("数据库版本不支持。");
         using var transaction = connection.BeginTransaction();
         var settings = JsonSerializer.Deserialize<RelayConfiguration>((string)Scalar(connection, transaction, "SELECT json FROM settings WHERE id=1")!, ConfigurationFiles.Json)!;

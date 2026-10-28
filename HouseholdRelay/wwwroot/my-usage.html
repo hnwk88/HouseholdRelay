@@ -1,0 +1,18 @@
+﻿<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>我的用量 · Household Relay</title><link rel="stylesheet" href="/site.css"><script src="/usage-personal.js" defer></script></head>
+<body><a class="skip" href="#main">跳到主要内容</a><header><span class="brand">Household <strong>Relay</strong></span><span class="badge">个人查询</span></header>
+<main id="main"><p class="eyebrow">调用记录</p><h1>我的用量</h1>
+<p>输入自己的中转令牌，只能查询本人最近 40 × 24 小时的记录。令牌仅用于当前页面请求，关闭页面即清除。</p>
+<form id="usage-form" class="card usage-filters">
+<div class="full"><label for="token">个人令牌</label><input id="token" type="password" maxlength="512" autocomplete="off" required></div>
+<div><label for="from">开始时间（含）</label><input id="from" type="datetime-local"></div>
+<div><label for="until">结束时间（不含）</label><input id="until" type="datetime-local"></div>
+<div><label for="kind">接口类别</label><select id="kind"><option value="">全部接口</option><option value="inference">推理</option><option value="estimate">估算</option><option value="models">模型查询</option></select></div>
+<div><label for="model">模型（精确匹配）</label><input id="model" maxlength="160"></div>
+<div><label for="outcome">结果</label><select id="outcome"><option value="">全部结果</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option><option value="started">处理中 / 待写入</option></select></div>
+<div><label for="granularity">时间统计</label><select id="granularity"><option value="day">按天</option><option value="hour">按小时</option></select></div>
+<div><button type="submit">查询我的用量</button><button id="forget" type="button" class="secondary">清除令牌与结果</button></div>
+</form><p id="status" role="status" aria-live="polite"></p><div id="results"></div>
+<div id="pagination" class="actions" hidden><button id="previous" type="button" class="secondary">上一页</button><span id="page-label"></span><button id="next" type="button" class="secondary">下一页</button></div>
+</main><footer>时间按浏览器时区显示。Token 为上游报告的已知合计，未知不代表零。金额区分上游报告和 Token 估算，估算不等于实际账单。币种分别统计。</footer></body></html>

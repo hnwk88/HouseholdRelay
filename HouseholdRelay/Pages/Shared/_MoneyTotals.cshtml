@@ -1,0 +1,10 @@
+﻿@model HouseholdRelay.UsageSummary
+@if (Model.Kind == "inference")
+{
+    @if (Model.Money.Count == 0) { <p>金额：未知</p> }
+    @foreach (var money in Model.Money)
+    {
+        <p>已知金额（@UsageLabels.MoneySource(money.Source)）：<strong>@money.Amount.ToString("0.#########") @money.Currency</strong> · @money.Requests 次，其中不完整 @money.Incomplete 次</p>
+    }
+    <p>金额未知：@Model.UnknownAmounts 次。不同币种和来源分开统计。</p>
+}

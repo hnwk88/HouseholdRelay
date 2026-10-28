@@ -18,6 +18,11 @@
     <p>在安装好的 Claude Code 客户端设置下面两个变量，再按上方推荐名称选择模型。无需旧客户端包或私有 CA 注入；证书必须已被客户端信任。</p>
     <pre><code id="claude-variables">@Model.Variables</code></pre><button type="button" data-copy="claude-variables">复制两个变量</button><span class="copy-status" role="status"></span>
 </section>
+<section class="card"><h2>查询自己的用量</h2>
+    <p>打开中转根地址下的 <code>/my-usage</code>，在页面输入自己的个人令牌，即可查看调用类型、Token、金额及按时间统计。令牌不要放进网址。</p>
+    @if (Model.RootUrl.Length > 0) { <a href="@(Model.RootUrl + "/my-usage")">打开个人用量页</a> }
+    <p>金额没有可靠来源时显示未知，估算会明确标注；轮换令牌后仍可查询原来的历史。</p>
+</section>
 <section class="card"><h2>Bearer 请求示例（POSIX shell）</h2><pre><code id="bearer-example">@Model.BearerExample</code></pre><button type="button" data-copy="bearer-example">复制 Bearer 示例</button><span class="copy-status" role="status"></span></section>
 <section class="card"><h2>x-api-key 请求示例（POSIX shell）</h2><pre><code id="key-example">@Model.ApiKeyExample</code></pre><button type="button" data-copy="key-example">复制 x-api-key 示例</button><span class="copy-status" role="status"></span></section>
 <section class="card"><h2>接口和排查</h2>

@@ -46,16 +46,17 @@ sealed class WebFixture : IAsyncDisposable
     public HttpClient Http { get; }
     public string Url => App.Urls.Single();
     public const string Password = "fixture-only-password-abc123";
-    private WebFixture()
+    private WebFixture(Action<RelayConfiguration>? configure = null)
     {
         Database = new RelayDatabase(Home.Path); Identities = new(Database); Administrators = new(Database);
-        Relay = new RelayServer(new ConfigurationService(Database).Read().Value, null, clients: Identities.Clients, upstreams: new UpstreamService(Database));
+        var configuration = new ConfigurationService(Database).Read().Value; configure?.Invoke(configuration);
+        Relay = new RelayServer(configuration, null, clients: Identities.Clients, upstreams: new UpstreamService(Database));
         App = ManagementWeb.Build(Database, Identities, Relay, 0);
         Http = NewClient();
     }
     public static HttpClient NewClient() => new(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false });
-    public static async Task<WebFixture> Create()
-    { var fixture = new WebFixture(); await fixture.App.StartAsync(); return fixture; }
+    public static async Task<WebFixture> Create(Action<RelayConfiguration>? configure = null)
+    { var fixture = new WebFixture(configure); await fixture.App.StartAsync(); return fixture; }
     public async Task<string> Csrf(string path, HttpClient? client = null)
     {
         using var response = await (client ?? Http).GetAsync(Url + path);

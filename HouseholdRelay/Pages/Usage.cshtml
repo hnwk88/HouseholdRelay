@@ -1,0 +1,69 @@
+﻿@page
+@model UsageModel
+@{ ViewData["Title"] = "用量"; }
+<p class="eyebrow">调用记录</p><h1>个人用量</h1>
+<p>保留最近 40 × 24 小时。时间按本机时区显示，清理按请求开始时间的 UTC 滚动窗口执行。</p>
+<p>输入、输出和缓存列为上游报告的<strong>已知合计</strong>；缺失或不完整请求另列，未知不代表零。估算不计入推理消耗。</p>
+<p>金额按“上游报告”和“估算”分别显示；估算仅计算 Token，不等于账单扣费。<a asp-page="/Pricing">配置模型估算费率</a></p>
+<div asp-validation-summary="All" role="alert"></div>
+<form method="get" class="card usage-filters" data-usage-filter>
+    <input asp-for="TimeZone" type="hidden" data-timezone />
+    <div><label asp-for="UserId">使用者</label><select asp-for="UserId"><option value="">全部使用者</option>@foreach (var user in Model.Users) { <option value="@user.Id">@user.DisplayName</option> }</select></div>
+    <div><label asp-for="From">开始时间（含）</label><input asp-for="From" type="datetime-local" data-utc="@Model.From?.ToString("O")" /></div>
+    <div><label asp-for="Until">结束时间（不含）</label><input asp-for="Until" type="datetime-local" data-utc="@Model.Until?.ToString("O")" /></div>
+    <div><label asp-for="Kind">接口类别</label><select asp-for="Kind"><option value="">全部接口</option><option value="inference">推理</option><option value="estimate">估算</option><option value="models">模型查询</option></select></div>
+    <div><label asp-for="ModelName">模型（精确匹配）</label><input asp-for="ModelName" maxlength="160" /></div>
+    <div><label asp-for="Outcome">结果</label><select asp-for="Outcome"><option value="">全部结果</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option><option value="started">处理中 / 待写入</option></select></div>
+    <div><label asp-for="Granularity">时间统计</label><select asp-for="Granularity"><option value="day">按天</option><option value="hour">按小时</option></select></div>
+    <div><button type="submit">查询用量</button> <a asp-page="/Usage">重置条件</a></div>
+</form>
+@if (Model.Report is { } report)
+{
+    @if (report.PersistenceFailures > 0) { <p role="alert" class="validation-summary-errors">用量保存或清理曾失败 @report.PersistenceFailures 次，请检查服务日志和数据目录。待写入记录不能视为完整统计。</p> }
+    <p>当前窗口从 <time datetime="@report.WindowStart.ToString("O")">@report.WindowStart.ToLocalTime()</time> 起，共 @report.Total 次请求。</p>
+    @if (report.Total == 0) { <p class="notice">没有符合条件的请求记录。</p> }
+    @foreach (var item in report.Summary)
+    {
+        <section class="card" data-usage-kind="@item.Kind"><h2>@UsageLabels.Kind(item.Kind) · @item.Requests 次</h2>
+            <p>成功 @item.Succeeded · 失败 @item.Failed · 取消 @item.Cancelled · 中断 @item.Interrupted · 处理中 / 待写入 @item.Pending · 未发送 @item.NotSent</p>
+            @if (item.Kind != "models") {
+                <p>已知输入：<strong>@UsageLabels.Count(item.Tokens.Input)</strong>@if (item.Kind == "inference") { <span> · 已知输出：<strong>@UsageLabels.Count(item.Tokens.Output)</strong></span> }</p>
+                @if (item.Kind == "inference") { <p>缓存读取：@UsageLabels.Count(item.Tokens.CacheRead) · 缓存写入：@UsageLabels.Count(item.Tokens.CacheWrite)</p> }
+                <p>缺失 / 不完整：<strong>@item.Incomplete</strong> 次。缓存列独立显示，不与普通输入相加。</p>
+            } else { <p>Token：不适用</p> }
+            <partial name="_MoneyTotals" model="item" />
+        </section>
+    }
+    <h2>按@(report.Granularity == "hour" ? "小时" : "天")统计</h2><p>统计时区：@report.TimeZone；每个时间段按请求开始时间归属，汇总包含全部筛选结果。</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="按时间统计，可横向滚动"><table>
+        <thead><tr><th>时段开始</th><th>类型</th><th>请求 / 成功</th><th>失败 / 取消 / 中断</th><th>已知输入 / 输出</th><th>缓存读 / 写</th><th>用量不完整</th><th>金额</th></tr></thead><tbody>
+        @foreach (var period in report.Periods) {
+            var item = period.Summary;
+            <tr><td>@period.Start.ToString("yyyy-MM-dd HH:mm zzz")</td><td>@UsageLabels.Kind(item.Kind)</td><td>@item.Requests / @item.Succeeded</td><td>@item.Failed / @item.Cancelled / @item.Interrupted</td>
+                <td>@(item.Kind == "models" ? "不适用" : UsageLabels.Count(item.Tokens.Input) + " / " + (item.Kind == "estimate" ? "不适用" : UsageLabels.Count(item.Tokens.Output)))</td>
+                <td>@(item.Kind == "inference" ? UsageLabels.Count(item.Tokens.CacheRead) + " / " + UsageLabels.Count(item.Tokens.CacheWrite) : "不适用")</td>
+                <td>@item.Incomplete 次</td><td>@if (item.Kind == "inference") { <partial name="_MoneyTotals" model="item" /> } else { <span>不适用</span> }</td></tr>
+        }
+        </tbody></table></div>
+    <h2>请求明细</h2><div class="table-scroll" tabindex="0" role="region" aria-label="用量明细，可横向滚动"><table>
+        <thead><tr><th>时间 / 请求</th><th>使用者 / 模型</th><th>接口 / 结果</th><th>发送 / 状态</th><th>输入 / 输出</th><th>缓存读 / 写</th><th>金额</th><th>完整性 / 版本</th></tr></thead><tbody>
+        @foreach (var row in report.Rows)
+        {
+            <tr><td><time datetime="@row.StartedAt.ToString("O")">@row.StartedAt.ToLocalTime()</time><small>@row.RequestId</small></td>
+                <td>@row.DisplayName<small>@(row.Model ?? "模型未知")</small></td>
+                <td>@UsageLabels.Kind(row.Kind)<small>@UsageLabels.Outcome(row.Outcome)</small></td>
+                <td>@(row.Dispatched ? "已尝试发送" : "未发送")<small>中转 @(row.StatusCode?.ToString() ?? "—") / 上游 @(row.UpstreamStatus?.ToString() ?? "—")</small></td>
+                <td>@(row.Completeness == "not_applicable" ? "不适用" : UsageLabels.Count(row.Tokens.Input) + " / " + (row.Kind == "estimate" ? "不适用" : UsageLabels.Count(row.Tokens.Output)))</td>
+                <td>@(row.Kind == "inference" && row.Dispatched ? UsageLabels.Count(row.Tokens.CacheRead) + " / " + UsageLabels.Count(row.Tokens.CacheWrite) : "不适用")</td>
+                <td>@UsageLabels.Money(row.Money)</td>
+                <td>@UsageLabels.Completeness(row.Completeness)<small>上游版本 @(row.UpstreamVersion?.ToString() ?? "未知")</small></td></tr>
+        }
+        </tbody></table></div>
+    <div class="actions" aria-label="分页">
+        @if (report.Page > 1) { <a href="@Model.PageLink(report.Page - 1)">上一页</a> }
+        <span>第 @report.Page 页 · 每页 @report.PageSize 条</span>
+        @if ((long)report.Page * report.PageSize < report.Total) { <a href="@Model.PageLink(report.Page + 1)">下一页</a> }
+    </div>
+}
+<p>个人可在中转地址的 <code>/my-usage</code> 页面输入自己的令牌查询。</p>
+<script src="~/usage-admin.js" asp-append-version="true" defer></script>

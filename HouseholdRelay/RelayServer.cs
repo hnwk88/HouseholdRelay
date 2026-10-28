@@ -18,6 +18,9 @@ public sealed class RelayServer : IDisposable
     public Admission Admission { get; }
     public UpstreamPool Upstreams { get; }
     public bool HttpsActive { get; internal set; }
+    public UsageStore? Usage { get; private set; }
+
+    internal UsageStore EnableUsage(RelayDatabase database) => Usage ??= new UsageStore(database, log: log);
 
     public RelayServer(RelayConfiguration config, string? credential, Action<object>? log = null, Uri? testUpstream = null, ClientRegistry? clients = null, UpstreamService? upstreams = null)
     {
@@ -55,7 +58,7 @@ public sealed class RelayServer : IDisposable
         var app = builder.Build(); app.Run(Handle); return app;
     }
 
-    private static string? GetToken(HttpRequest request)
+    internal static string? GetToken(HttpRequest request)
     {
         var authorization = request.Headers.Authorization.ToString();
         var bearer = authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? authorization[7..] : null;
@@ -66,11 +69,13 @@ public sealed class RelayServer : IDisposable
     public async Task Handle(HttpContext context)
     {
         var stopwatch = Stopwatch.StartNew(); var id = Guid.NewGuid().ToString("N"); var name = "unknown";
-        var path = context.Request.Path.Value ?? "/"; var outcome = "complete";
+        var path = context.Request.Path.Value ?? "/"; var outcome = "succeeded";
+        UsageAccumulator? usage = null; var recorded = false; var dispatched = false; int? upstreamStatus = null;
         try
         {
             if (path == "/healthz" && context.Request.Method == "GET")
             { await context.Response.WriteAsJsonAsync(new { ok = true }, context.RequestAborted); return; }
+            if (await PersonalUsage.TryHandle(context, Clients, Usage)) return;
             var token = GetToken(context.Request);
             var client = Clients.Authenticate(token) ?? throw new RelayFailure(401, "Invalid or disabled relay token.");
             name = client.Name;
@@ -84,6 +89,9 @@ public sealed class RelayServer : IDisposable
             if (path == "/api/hello" && context.Request.Method == "HEAD") { context.Response.StatusCode = 200; return; }
             if (!Routes.TryGetValue(path, out var method)) throw new RelayFailure(404, "Endpoint not exposed by this relay.");
             if (context.Request.Method != method) throw new RelayFailure(405, "Method not allowed.");
+            var kind = path == "/v1/messages" ? "inference" : path == "/v1/models" ? "models" : "estimate";
+            usage = new UsageAccumulator(kind);
+            if (Usage is not null) { await Usage.Start(id, client, kind); recorded = true; }
             using var upstream = Upstreams.Acquire();
             upstream.CheckState(); Admission.CheckRate(client.Id);
             using var lease = await Admission.Enter(client.Id, context.RequestAborted);
@@ -92,6 +100,7 @@ public sealed class RelayServer : IDisposable
             var body = await ReadBody(context);
             if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked during upload.");
             upstream.CheckState();
+            string? model = null;
             if (method == "POST")
             {
                 if (!(context.Request.ContentType ?? "").StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
@@ -100,6 +109,8 @@ public sealed class RelayServer : IDisposable
                 {
                     using var document = JsonDocument.Parse(body);
                     if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
+                    if (document.RootElement.TryGetProperty("model", out var modelValue) && modelValue.ValueKind == JsonValueKind.String)
+                        model = SafeModel(modelValue.GetString(), token, upstream.Snapshot.Credential);
                     if (upstream.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata) body = DeviceMetadata.Normalize(body, config.DeviceId);
                 }
                 catch (JsonException) { throw new RelayFailure(400, "Expected a JSON object."); }
@@ -111,9 +122,15 @@ public sealed class RelayServer : IDisposable
             timeout.CancelAfter(TimeSpan.FromSeconds(config.RequestTimeoutSeconds));
             try
             {
+                timeout.Token.ThrowIfCancellationRequested();
+                if (recorded) await Usage!.Dispatch(id, upstream.Snapshot.Version, model);
+                dispatched = true;
                 using var response = await upstream.Send(request, timeout.Token);
+                upstreamStatus = (int)response.StatusCode;
                 upstream.Observe(response);
-                await UpstreamResponses.Copy(response, context.Response, upstream.Snapshot.Credential!, id, timeout.Token);
+                await UpstreamResponses.Copy(response, context.Response, upstream.Snapshot.Credential!, id, timeout.Token, usage);
+                if (!response.IsSuccessStatusCode || usage.Error) outcome = "failed";
+                else if (usage.IsStream && !usage.ProtocolComplete) outcome = "interrupted";
                 Interlocked.Increment(ref completed);
             }
             catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
@@ -121,14 +138,27 @@ public sealed class RelayServer : IDisposable
             catch (HttpRequestException) { throw new RelayFailure(502, "Upstream connection failed. Check host connectivity."); }
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { outcome = "cancelled"; context.Abort(); }
-        catch (RelayFailure error) { outcome = "error"; await Fail(context, error); }
-        catch (Microsoft.AspNetCore.Http.BadHttpRequestException error) { outcome = "error"; await Fail(context, new RelayFailure(error.StatusCode, "Invalid or oversized request.")); }
-        catch (Exception) { outcome = "error"; await Fail(context, new RelayFailure(500, "Internal relay error.")); }
+        catch (RelayFailure error) { outcome = "failed"; await Fail(context, error); }
+        catch (Microsoft.AspNetCore.Http.BadHttpRequestException error) { outcome = "failed"; await Fail(context, new RelayFailure(error.StatusCode, "Invalid or oversized request.")); }
+        catch (IOException) { outcome = "interrupted"; await Fail(context, new RelayFailure(502, "Upstream response interrupted.")); }
+        catch (Exception) { outcome = "failed"; await Fail(context, new RelayFailure(500, "Internal relay error.")); }
         finally
         {
+            if (recorded)
+                await Usage!.Finish(id, new UsageEnd(outcome, dispatched, context.Response.StatusCode, upstreamStatus,
+                    stopwatch.ElapsedMilliseconds, usage!.Completeness(dispatched, outcome == "succeeded"), usage.Tokens,
+                    usage.ReportedMoney is { } money ? money with { Completeness = usage.ProtocolComplete && outcome == "succeeded" ? "complete" : "partial" } : null));
             log(new { time = DateTimeOffset.UtcNow, requestId = id, client = name, route = Routes.ContainsKey(path) ? path : "local",
                 status = context.Response.StatusCode, outcome, durationMs = stopwatch.ElapsedMilliseconds });
         }
+    }
+
+    private static string? SafeModel(string? model, string? token, string? credential)
+    {
+        if (model is not { Length: > 0 and <= 160 } || model.Any(c => !(char.IsAsciiLetterOrDigit(c) || "-_.:/@".Contains(c)))) return null;
+        if (token is { Length: > 0 } && model.Contains(token, StringComparison.Ordinal)
+            || credential is { Length: > 0 } && model.Contains(credential, StringComparison.Ordinal)) return null;
+        return model;
     }
 
     private async Task<byte[]> ReadBody(HttpContext context)

@@ -40,11 +40,12 @@ public sealed class RelayDatabase
             InstanceId = File.ReadAllText(marker).Trim();
             if (!Guid.TryParseExact(InstanceId, "N", out _)) throw new InvalidOperationException("实例标记损坏，请恢复备份。");
             using var connection = Open();
-            if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) is not (1 or 2)
+            if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) is not (1 or 2 or 3)
                 || (string?)Scalar(connection, null, "PRAGMA quick_check") != "ok")
                 throw new InvalidOperationException("数据库版本不支持或完整性检查失败，请恢复备份。");
             LegacyImport.Run(this, migrationCheckpoint);
             UpstreamSchema.Upgrade(this);
+            UsageSchema.Upgrade(this);
         }
         finally
         {
@@ -90,11 +91,12 @@ public sealed class RelayDatabase
     }
 
     /// <summary>已有数据库只以读写模式打开；文件遗失时绝不悄悄建空库。</summary>
-    public SqliteConnection Open()
+    public SqliteConnection Open(int? timeoutSeconds = null)
     {
         if (!File.Exists(Path) || !File.Exists(marker) || File.ReadAllText(marker).Trim() != InstanceId)
             throw new InvalidOperationException("实例数据不可用，请检查数据目录或恢复备份。");
-        var connection = new SqliteConnection(connectionString);
+        var connection = new SqliteConnection(timeoutSeconds is null ? connectionString
+            : new SqliteConnectionStringBuilder(connectionString) { DefaultTimeout = timeoutSeconds.Value }.ToString());
         try
         {
             connection.Open();
