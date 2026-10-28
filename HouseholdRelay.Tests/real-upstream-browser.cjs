@@ -8,11 +8,14 @@ const http = require('node:http');
 const net = require('node:net');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
+const { secureFetch, trustFixture, nativeSession, redact } = require('./real-validation-support.cjs');
 const dll = path.resolve(process.argv[2]), output = path.resolve(process.argv[3]);
-let server, browser, interceptor, instance, material, token;
+const clientOnly = process.argv[4] === '--client-only';
+let server, browser, interceptor, instance, material, token, authorityPem, caPath, relayUrl, fingerprint, secondUser;
 const evidence = { started_at: new Date().toISOString(), providers: [], server_stopped: false };
 const password = crypto.randomBytes(24).toString('hex');
 const children = new Set();
+const relayFetch = (url, options) => secureFetch(url, options, authorityPem);
 function launch(file, args, options = {}) {
     const child = spawn(file, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], ...options });
     try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { }
@@ -65,29 +68,16 @@ async function candidate(page, url, provider) {
 }
 async function native(url, model, tool = false) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'HouseholdRelay-rework-client-'));
-    if (tool) await fs.writeFile(path.join(directory, 'probe.txt'), 'HOUSEHOLD_REAL_TOOL_OK');
-    const env = { ...process.env };
-    for (const key of Object.keys(env)) if (/^(ANTHROPIC_|CLAUDE_)/i.test(key) || /PROXY/i.test(key) || ['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'NODE_TLS_REJECT_UNAUTHORIZED'].includes(key)) delete env[key];
-    Object.assign(env, { ANTHROPIC_BASE_URL: url, ANTHROPIC_AUTH_TOKEN: token, CLAUDE_CONFIG_DIR: path.join(directory, 'config'), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' });
-    const args = ['--safe-mode', '--no-session-persistence', '--strict-mcp-config', '--no-chrome', '--setting-sources', '', '--tools', tool ? 'Read' : '', '--model', model, '--max-turns', tool ? '3' : '1', '--output-format', 'json'];
-    if (tool) args.push('--allowedTools', 'Read');
-    args.push('--print', tool ? 'Use the Read tool to read probe.txt in the current directory, then reply with its exact content.' : 'Reply with OK.');
-    const child = launch(material.claude, args, { cwd: directory, env });
-    let stdout = ''; child.stdout.on('data', value => stdout += value.toString()); child.stderr.resume();
-    const timer = setTimeout(() => child.kill(), 90000);
-    const code = await new Promise(resolve => child.once('exit', resolve)); clearTimeout(timer);
-    assert.ok(code === 0, '原生客户端会话失败');
-    const result = stdout.split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).find(value => value?.type === 'result');
-    assert.ok(result && !result.is_error && result.subtype === 'success', '原生客户端未返回成功结果');
-    assert.ok(result.result.includes(tool ? 'HOUSEHOLD_REAL_TOOL_OK' : 'OK'), '客户端结果不符合专用测试提示');
-    return { exit_code: code, success: true, tool, turns: result.num_turns, usage: result.usage };
+    return nativeSession({ launch, material, token, url, model, tool, directory, caPath, evidence, output });
 }
-async function call(url, body, headers, stream) {
-    const outgoing = { 'content-type': 'application/json', Authorization: 'Bearer ' + token };
+async function call(url, body, headers, stream, personalToken = token) {
+    const outgoing = { 'content-type': 'application/json', Authorization: 'Bearer ' + personalToken };
     for (const name of ['user-agent', 'anthropic-beta', 'anthropic-version', 'x-app']) if (headers[name]) outgoing[name] = headers[name];
     const started = Date.now();
-    const response = await fetch(url + '/v1/messages?beta=true', { method: 'POST', headers: outgoing, body: JSON.stringify({ ...body, stream }), signal: AbortSignal.timeout(60000) });
-    const content = await response.text();
+    const response = await relayFetch(url + '/v1/messages?beta=true', { method: 'POST', headers: outgoing, body: JSON.stringify({ ...body, stream }), signal: AbortSignal.timeout(60000) });
+    let content = '', chunks = 0, firstChunkMs = null; const decoder = new TextDecoder();
+    for await (const chunk of response.body) { firstChunkMs ??= Date.now() - started; chunks++; content += decoder.decode(chunk, { stream: true }); }
+    content += decoder.decode();
     assert.ok(material.providers.every(provider => !content.includes(provider.credential)), '响应不得泄露上游凭据');
     assert.ok(response.status === 200, '真实转发请求未成功');
     if (stream) {
@@ -99,18 +89,18 @@ async function call(url, body, headers, stream) {
             if (data.type === 'message_start') Object.assign(usage, data.message?.usage || {});
             if (data.type === 'message_delta') Object.assign(usage, data.usage || {});
         }
-        return { status: response.status, request_id: response.headers.get('x-relay-request-id'), events, usage, elapsed_ms: Date.now() - started };
+        return { status: response.status, request_id: response.headers.get('x-relay-request-id'), events, usage, chunks, first_chunk_ms: firstChunkMs, elapsed_ms: Date.now() - started, tls: url.startsWith('https:') };
     }
     const message = JSON.parse(content); assert.ok(message.type === 'message' && message.role === 'assistant', 'JSON 必须为真实 Messages 回复');
     return { status: response.status, request_id: response.headers.get('x-relay-request-id'), model: message.model, usage: message.usage, elapsed_ms: Date.now() - started };
 }
-async function personalUsage(url) {
-    const response = await fetch(url + '/my-usage/data', { headers: { Authorization: 'Bearer ' + token } });
+async function personalUsage(url, personalToken = token) {
+    const response = await relayFetch(url + '/my-usage/data', { headers: { Authorization: 'Bearer ' + personalToken } });
     assert.equal(response.status, 200, '个人用量查询必须成功'); return response.json();
 }
-async function verifyUsage(url, call) {
+async function verifyUsage(url, call, personalToken = token) {
     for (let attempt = 0; attempt < 50; attempt++) {
-        const report = await personalUsage(url); const row = report.rows.find(item => item.requestId === call.request_id);
+        const report = await personalUsage(url, personalToken); const row = report.rows.find(item => item.requestId === call.request_id);
         if (row && row.outcome !== 'started') {
             assert.equal(row.outcome, 'succeeded'); assert.equal(row.completeness, 'complete');
             for (const [source, target] of [['input_tokens', 'input'], ['output_tokens', 'output'], ['cache_read_input_tokens', 'cacheRead'], ['cache_creation_input_tokens', 'cacheWrite']])
@@ -122,6 +112,46 @@ async function verifyUsage(url, call) {
     }
     throw new Error('个人用量未及时完成持久化');
 }
+async function createUser(page, url, name) {
+    await page.goto(url + '/Users'); await page.locator('#new-name').fill(name); await page.getByRole('button', { name: '创建并生成令牌' }).click();
+    const issued = { token: (await page.locator('#issued-token').textContent()).trim(), id: await page.locator('.user').last().getAttribute('data-user-id') };
+    await page.goto(url + '/Users'); assert.equal(await page.locator('#issued-token').count(), 0, '令牌只能展示一次'); return issued;
+}
+async function configureTls(page, url, port) {
+    evidence.stage = 'private-ca-web-creation';
+    const tlsPort = await freePort(); relayUrl = `https://127.0.0.1:${tlsPort}`;
+    await page.goto(url + '/Https'); await page.getByLabel('私人 HTTPS 根地址', { exact: true }).fill(relayUrl);
+    await page.getByLabel('私人 HTTPS 本机监听端口', { exact: true }).fill(String(tlsPort));
+    await page.getByRole('button', { name: '创建私有 CA 与服务器证书', exact: true }).click();
+    await page.getByText(/私有 CA 及服务器证书已创建/).waitFor();
+    await page.screenshot({ path: path.join(output, 'https-created.png'), fullPage: true });
+    await page.goto(url + '/Connection'); fingerprint = await page.locator('#ca-fingerprint').textContent();
+    const download = await page.request.get(url + '/Connection?handler=TrustPackage'); assert.equal(download.status(), 200);
+    await fs.writeFile(path.join(output, 'client-trust.zip'), await download.body());
+    await trustFixture(launch, 'Prepare', output, fingerprint);
+    authorityPem = await fs.readFile(path.join(output, 'trust', 'relay-ca.pem'), 'utf8');
+    assert.ok(!authorityPem.includes('PRIVATE KEY'));
+    await stop(server); await start(port);
+    await assert.rejects(() => secureFetch(relayUrl + '/healthz'), '未安装信任必须失败');
+    await assert.rejects(() => secureFetch(relayUrl + '/healthz', {}, authorityPem, 'wrong-name.invalid'), '错误名称必须失败');
+    if (clientOnly) {
+        caPath = path.join(output, 'trust', 'relay-ca.pem');
+        evidence.private_tls = { root_sha256: fingerprint, url: relayUrl, untrusted_rejected: true, wrong_name_rejected: true,
+            fingerprint_mismatch_rejected: true, normal_certificate_validation: true, client_ca_file: true,
+            windows_trust_installation: 'not_executed', browser_trust: 'not_executed', reason: 'Windows root confirmation requires the operator; this run independently checks client TLS.' };
+        await page.context().clearCookies(); await login(page, url); return page;
+    }
+    evidence.stage = 'client-trust-installation';
+    await trustFixture(launch, 'Install', output, fingerprint);
+    await trustFixture(launch, 'Install', output, fingerprint);
+    const installed = JSON.parse(await trustFixture(launch, 'Inspect', output, fingerprint, relayUrl)); caPath = installed.ca_path;
+    evidence.private_tls = { root_sha256: fingerprint, url: relayUrl, untrusted_rejected: true, wrong_name_rejected: true,
+        fingerprint_mismatch_rejected: true, windows_tls_status: installed.windows_tls_status, installer_repeatable: true, normal_certificate_validation: true };
+    await browser.close(); browser = await chromium.launch({ channel: 'msedge', headless: true });
+    const fresh = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    await fresh.goto(relayUrl + '/healthz'); assert.equal((await fresh.locator('body').textContent()).includes('ok'), true);
+    evidence.private_tls.browser_trust = true; await login(fresh, url); return fresh;
+}
 (async () => {
     let input = ''; for await (const chunk of process.stdin) input += chunk.toString(); material = JSON.parse(input); input = '';
     await fs.mkdir(output, { recursive: true }); instance = await fs.mkdtemp(path.join(os.tmpdir(), 'HouseholdRelay-rework-browser-'));
@@ -132,59 +162,84 @@ async function verifyUsage(url, call) {
     await page.goto(url + '/Setup'); await page.getByLabel('本机引导码').fill(code);
     await page.getByLabel('管理密码', { exact: true }).fill(password); await page.getByLabel('再次输入密码').fill(password);
     await page.getByRole('button', { name: '完成首次设置' }).click(); await page.waitForURL(/\/Login/); await login(page, url);
-    await page.goto(url + '/Users'); await page.locator('#new-name').fill('真实联调'); await page.getByRole('button', { name: '创建并生成令牌' }).click();
-    token = await page.locator('#issued-token').textContent();
-    let captured, toolRequests = 0, toolResults = 0;
+    page = await configureTls(page, url, port);
+    const firstUser = await createUser(page, url, '真实甲'); token = firstUser.token; secondUser = await createUser(page, url, '真实乙');
+    evidence.users = [firstUser.id, secondUser.id];
+    let captured;
+    // 仅从本机模拟响应收集原生请求形状；真实会话直接连接产品 HTTPS，不经过截获代理。
     interceptor = http.createServer(async (request, response) => {
         try {
             const chunks = []; for await (const chunk of request) chunks.push(chunk); const body = Buffer.concat(chunks);
             if (request.url.startsWith('/v1/messages') && !request.url.includes('count_tokens')) {
                 const message = JSON.parse(body); captured = { body: message, headers: request.headers };
-                if (message.tools?.some(tool => tool.name === 'Read')) toolRequests++;
-                if (message.messages?.some(message => Array.isArray(message.content) && message.content.some(block => block.type === 'tool_result'))) toolResults++;
+                response.writeHead(200, { 'content-type': 'text/event-stream' });
+                const event = (type, value) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`);
+                event('message_start', { message: { id: 'msg_shape_fixture', type: 'message', role: 'assistant', model: message.model, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } });
+                event('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
+                event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'OK' } }); event('content_block_stop', { index: 0 });
+                event('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } }); event('message_stop', {}); response.end(); return;
             }
-            const headers = { ...request.headers }; delete headers.host; delete headers['content-length']; delete headers.connection;
-            const upstream = await fetch(url + request.url, { method: request.method, headers, body: request.method === 'POST' ? body : undefined, signal: AbortSignal.timeout(90000) });
-            response.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
-            for await (const chunk of upstream.body) response.write(chunk); response.end();
+            response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"input_tokens":1,"data":[]}');
         } catch { response.destroy(); }
     });
     await new Promise(resolve => interceptor.listen(0, '127.0.0.1', resolve)); const clientUrl = `http://127.0.0.1:${interceptor.address().port}`;
     for (const provider of material.providers) {
         const options = provider.options; const item = { base_url: options.baseUrl, authentication: options.authentication, model: options.model, proxy: options.proxyUrl, diagnostic: options.diagnostic };
-        evidence.providers.push(item); const beforeProbe = await personalUsage(url);
+        evidence.stage = new URL(options.baseUrl).host + ':candidate'; evidence.providers.push(item); const beforeProbe = await personalUsage(relayUrl);
         await candidate(page, url, provider); item.web_test_and_activation = true;
-        assert.equal((await personalUsage(url)).total, beforeProbe.total, '管理员检测不能进入个人用量');
-        item.native = await native(clientUrl, options.model); const simple = captured;
+        assert.equal((await personalUsage(relayUrl)).total, beforeProbe.total, '管理员检测不能进入个人用量');
+        evidence.stage = new URL(options.baseUrl).host + ':offline-request-shape'; await native(clientUrl, options.model); const simple = captured;
+        evidence.stage = new URL(options.baseUrl).host + ':native-https'; item.native = await native(relayUrl, options.model);
         item.client_version = simple.headers['user-agent'];
-        item.json = await call(url, simple.body, simple.headers, false); item.sse = await call(url, simple.body, simple.headers, true);
-        item.json.persisted_usage = await verifyUsage(url, item.json); item.sse.persisted_usage = await verifyUsage(url, item.sse);
-        toolRequests = 0; toolResults = 0; item.tool_session = await native(clientUrl, options.model, true);
-        assert.ok(toolRequests > 0 && toolResults > 0, '必须实际发生 Read 和 tool_result 回合'); item.tool_roundtrip = true;
+        evidence.stage = new URL(options.baseUrl).host + ':json-sse-two-users';
+        [item.json, item.sse] = await Promise.all([call(relayUrl, simple.body, simple.headers, false), call(relayUrl, simple.body, simple.headers, true, secondUser.token)]);
+        item.json.persisted_usage = await verifyUsage(relayUrl, item.json); item.sse.persisted_usage = await verifyUsage(relayUrl, item.sse, secondUser.token);
+        assert.equal(item.json.persisted_usage.user_id, firstUser.id); assert.equal(item.sse.persisted_usage.user_id, secondUser.id);
+        assert.ok(!(await personalUsage(relayUrl)).rows.some(row => row.userId === secondUser.id));
+        evidence.stage = new URL(options.baseUrl).host + ':tool-https'; item.tool_session = await native(relayUrl, options.model, true); item.tool_roundtrip = true;
         await page.goto(url + '/Connection'); assert.ok(!(await page.content()).includes(provider.credential) && !(await page.content()).includes(token), '连接说明不能包含秘密');
         if (options.diagnostic === 'claude-code') await page.getByText(/当前上游已用 Claude Code 实际调用验证/).waitFor();
         await page.screenshot({ path: path.join(output, new URL(options.baseUrl).host + '-connection.png'), fullPage: true });
         await stop(server); ({ url } = await start(port)); await page.context().clearCookies(); await login(page, url);
-        item.after_restart = await call(url, simple.body, simple.headers, false);
-        item.after_restart.persisted_usage = await verifyUsage(url, item.after_restart);
-        const retained = await personalUsage(url); assert.ok(retained.rows.some(row => row.requestId === item.json.request_id), '重启必须保留旧调用');
+        evidence.stage = new URL(options.baseUrl).host + ':restart-https';
+        item.after_restart = await call(relayUrl, simple.body, simple.headers, false);
+        item.after_restart.persisted_usage = await verifyUsage(relayUrl, item.after_restart);
+        const retained = await personalUsage(relayUrl); assert.ok(retained.rows.some(row => row.requestId === item.json.request_id), '重启必须保留旧调用');
         item.personal_summary = retained.summary;
         await page.goto(url + '/Usage'); await page.getByRole('heading', { name: '个人用量', exact: true }).waitFor();
         await page.screenshot({ path: path.join(output, new URL(options.baseUrl).host + '-usage.png'), fullPage: true });
         await fs.writeFile(path.join(output, 'real-upstream-results.json'), JSON.stringify(evidence, null, 2));
         console.log('真实上游完成：' + new URL(options.baseUrl).host + '，网页/JSON/SSE/工具/重启通过');
     }
-    await candidate(page, url, material.providers[0]); evidence.switch_back = await native(clientUrl, material.providers[0].options.model);
+    evidence.stage = 'switch-back-https'; await candidate(page, url, material.providers[0]); evidence.switch_back = await native(relayUrl, material.providers[0].options.model);
+    evidence.stage = 'rotate-disable-private-usage'; await page.goto(url + '/Users');
+    await page.locator(`[data-user-id="${firstUser.id}"]`).getByRole('button', { name: '轮换令牌', exact: true }).click();
+    const oldToken = token; token = (await page.locator('#issued-token').textContent()).trim();
+    assert.equal((await relayFetch(relayUrl + '/my-usage/data', { headers: { Authorization: 'Bearer ' + oldToken } })).status, 401);
+    assert.ok((await personalUsage(relayUrl)).rows.some(row => row.requestId === evidence.providers[0].json.request_id));
+    await page.goto(url + '/Users'); await page.locator(`[data-user-id="${secondUser.id}"]`).getByRole('button', { name: '停用', exact: true }).click();
+    for (const route of ['/my-usage/data', '/v1/models']) assert.equal((await relayFetch(relayUrl + route, { headers: { Authorization: 'Bearer ' + secondUser.token } })).status, 401);
+    evidence.rotation_and_disable = true;
     await page.setViewportSize({ width: 390, height: 844 }); await page.goto(url + '/Upstream');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), '窄屏不得水平溢出');
     await page.screenshot({ path: path.join(output, 'narrow-upstream.png'), fullPage: true }); evidence.narrow_screen = true;
+    await page.goto(url + '/Connection'); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.screenshot({ path: path.join(output, 'narrow-connection.png'), fullPage: true });
+    const personal = await browser.newPage({ viewport: { width: 390, height: 844 } }); await personal.goto((clientOnly ? url : relayUrl) + '/my-usage');
+    await personal.getByLabel('个人令牌', { exact: true }).fill(token); await personal.getByRole('button', { name: '查询我的用量', exact: true }).click();
+    await personal.getByRole('heading', { name: '请求明细', exact: true }).waitFor();
+    await personal.getByLabel('个人令牌', { exact: true }).fill('');
+    await personal.screenshot({ path: path.join(output, clientOnly ? 'narrow-personal-local.png' : 'narrow-personal-https.png'), fullPage: true });
+    evidence.personal_browser_transport = clientOnly ? 'local-http' : 'https';
+    evidence.stage = 'completed';
 })().catch(error => {
-    evidence.error = String(error.message).split('\n')[0];
-    for (const secret of [password, token, ...(material?.providers.map(provider => provider.credential) || [])].filter(Boolean)) evidence.error = evidence.error.split(secret).join('[redacted]');
+    evidence.error = redact(String(error.message), [password, token, secondUser?.token, ...(material?.providers.map(provider => provider.credential) || [])]);
     console.error(evidence.error); process.exitCode = 1;
 }).finally(async () => {
     for (const child of [...children]) await stop(child);
     if (interceptor) await new Promise(resolve => interceptor.close(resolve));
     if (browser) await browser.close(); evidence.server_stopped = true;
+    try { await trustFixture(launch, 'Restore', output, fingerprint || ''); evidence.trust_restored = true; }
+    catch (error) { evidence.trust_restored = false; evidence.cleanup_error = String(error.message).slice(0, 2000); process.exitCode = 1; }
     await fs.writeFile(path.join(output, 'real-upstream-results.json'), JSON.stringify(evidence, null, 2));
 });

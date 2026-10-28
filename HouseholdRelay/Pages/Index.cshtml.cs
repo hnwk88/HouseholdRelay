@@ -18,7 +18,7 @@ public sealed class IndexModel(ConfigurationService settings, IdentityService id
         UpstreamStatus = !active.Configured ? "尚未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0 ? "上游冷却中"
             : active.Report?.CanActivate == true ? "最小模型调用已验证" : "已有凭据 · 调用未检测";
         var certificate = certificates.ReadInfo(); CertificateStatus = certificate is not null
-            ? certificate.ValidUntil > DateTimeOffset.UtcNow ? "已导入可信证书" : "证书已过期"
-            : CertificateConfigured ? "已有旧版证书 · 需额外信任" : "尚未配置 HTTPS";
+            ? certificate.ValidUntil > DateTimeOffset.UtcNow ? certificate.Mode == "private" ? "私有 CA · 客户端安装一次信任" : "已导入可信证书" : "证书已过期"
+            : "尚未配置 HTTPS";
     }
 }

@@ -1,0 +1,442 @@
+﻿{
+  "browser": "156.0.4314.50",
+  "mock_upstream": true,
+  "checks": [
+    "全新网页完成首次设置、两位使用者、上游测试与激活；管理员诊断未进入个人用量。",
+    "配置费率后覆盖 JSON/SSE、上游报告金额、估算金额、未知用量、Count Tokens 与 Models 分栏；按小时和自选时间筛选。",
+    "个人页面只返回本人；伪造身份被拒；轮换、改名保留历史；停用令牌不能查询。改价不改变历史估算。",
+    "请求处理中强制结束独立服务进程，重启后恢复为中断/不完整；已结束记录和金额保留。390px 管理与个人页面无横向溢出。"
+  ],
+  "admin_rows": 7,
+  "personal_a": {
+    "windowStart": "2026-09-18T16:36:59.3762749+00:00",
+    "asOf": "2026-10-28T16:36:59.3762749+00:00",
+    "page": 1,
+    "pageSize": 25,
+    "total": 5,
+    "summary": [
+      {
+        "kind": "estimate",
+        "requests": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "cancelled": 0,
+        "interrupted": 0,
+        "pending": 0,
+        "notSent": 0,
+        "incomplete": 0,
+        "tokens": {
+          "input": 123,
+          "output": null,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "unknownAmounts": 0,
+        "money": []
+      },
+      {
+        "kind": "inference",
+        "requests": 3,
+        "succeeded": 2,
+        "failed": 0,
+        "cancelled": 0,
+        "interrupted": 1,
+        "pending": 0,
+        "notSent": 0,
+        "incomplete": 1,
+        "tokens": {
+          "input": 21,
+          "output": 29,
+          "cacheRead": 7,
+          "cacheWrite": 5
+        },
+        "unknownAmounts": 1,
+        "money": [
+          {
+            "currency": "USD",
+            "source": "reported",
+            "amount": 0.1,
+            "requests": 2,
+            "incomplete": 0
+          }
+        ]
+      },
+      {
+        "kind": "models",
+        "requests": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "cancelled": 0,
+        "interrupted": 0,
+        "pending": 0,
+        "notSent": 0,
+        "incomplete": 0,
+        "tokens": {
+          "input": null,
+          "output": null,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "unknownAmounts": 0,
+        "money": []
+      }
+    ],
+    "rows": [
+      {
+        "requestId": "bb701a69114341339f61605567fc3ac6",
+        "userId": "420983e56c57484c9904be33b3b7e2bf",
+        "displayName": "统计甲改名",
+        "tokenId": "229a7e812ac34b35a4a8c6184f6f4bbf",
+        "upstreamVersion": 2,
+        "startedAt": "2026-10-28T16:36:58.6486584+00:00",
+        "endedAt": "2026-10-28T16:36:59.1495985+00:00",
+        "kind": "inference",
+        "model": "fixture-model",
+        "outcome": "interrupted",
+        "dispatched": true,
+        "statusCode": null,
+        "upstreamStatus": null,
+        "durationMs": null,
+        "completeness": "partial",
+        "tokens": {
+          "input": null,
+          "output": null,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "money": {
+          "amount": null,
+          "currency": null,
+          "source": "unknown",
+          "completeness": "partial"
+        }
+      },
+      {
+        "requestId": "a78b3a4fba6747cab82d08613f4f0aee",
+        "userId": "420983e56c57484c9904be33b3b7e2bf",
+        "displayName": "统计甲改名",
+        "tokenId": "d2a6d7f28c6b473bbbdf6e7bd1e2813e",
+        "upstreamVersion": 2,
+        "startedAt": "2026-10-28T16:36:56.9480457+00:00",
+        "endedAt": "2026-10-28T16:36:56.9985854+00:00",
+        "kind": "models",
+        "model": null,
+        "outcome": "succeeded",
+        "dispatched": true,
+        "statusCode": 200,
+        "upstreamStatus": 200,
+        "durationMs": 51,
+        "completeness": "not_applicable",
+        "tokens": {
+          "input": null,
+          "output": null,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "money": {
+          "amount": null,
+          "currency": null,
+          "source": "not_applicable",
+          "completeness": "not_applicable"
+        }
+      },
+      {
+        "requestId": "6e90b28f7047491cb621c86ceb2cfe2e",
+        "userId": "420983e56c57484c9904be33b3b7e2bf",
+        "displayName": "统计甲改名",
+        "tokenId": "d2a6d7f28c6b473bbbdf6e7bd1e2813e",
+        "upstreamVersion": 2,
+        "startedAt": "2026-10-28T16:36:56.8727289+00:00",
+        "endedAt": "2026-10-28T16:36:56.9188539+00:00",
+        "kind": "estimate",
+        "model": "fixture-model",
+        "outcome": "succeeded",
+        "dispatched": true,
+        "statusCode": 200,
+        "upstreamStatus": 200,
+        "durationMs": 47,
+        "completeness": "complete",
+        "tokens": {
+          "input": 123,
+          "output": null,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "money": {
+          "amount": null,
+          "currency": null,
+          "source": "not_applicable",
+          "completeness": "not_applicable"
+        }
+      },
+      {
+        "requestId": "864b9b63d80d4bd982405ec96b998193",
+        "userId": "420983e56c57484c9904be33b3b7e2bf",
+        "displayName": "统计甲改名",
+        "tokenId": "d2a6d7f28c6b473bbbdf6e7bd1e2813e",
+        "upstreamVersion": 2,
+        "startedAt": "2026-10-28T16:36:56.7954036+00:00",
+        "endedAt": "2026-10-28T16:36:56.8489957+00:00",
+        "kind": "inference",
+        "model": "fixture-model",
+        "outcome": "succeeded",
+        "dispatched": true,
+        "statusCode": 200,
+        "upstreamStatus": 200,
+        "durationMs": 54,
+        "completeness": "complete",
+        "tokens": {
+          "input": 11,
+          "output": 9,
+          "cacheRead": 7,
+          "cacheWrite": 5
+        },
+        "money": {
+          "amount": 0.09,
+          "currency": "USD",
+          "source": "reported",
+          "completeness": "complete"
+        }
+      },
+      {
+        "requestId": "dbd9753511484f149cb2ab515e2eec77",
+        "userId": "420983e56c57484c9904be33b3b7e2bf",
+        "displayName": "统计甲改名",
+        "tokenId": "d2a6d7f28c6b473bbbdf6e7bd1e2813e",
+        "upstreamVersion": 2,
+        "startedAt": "2026-10-28T16:36:56.0551971+00:00",
+        "endedAt": "2026-10-28T16:36:56.1717089+00:00",
+        "kind": "inference",
+        "model": "fixture-model",
+        "outcome": "succeeded",
+        "dispatched": true,
+        "statusCode": 200,
+        "upstreamStatus": 200,
+        "durationMs": 104,
+        "completeness": "complete",
+        "tokens": {
+          "input": 10,
+          "output": 20,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "money": {
+          "amount": 0.01,
+          "currency": "USD",
+          "source": "reported",
+          "completeness": "complete"
+        }
+      }
+    ],
+    "persistenceFailures": 0,
+    "granularity": "day",
+    "timeZone": "UTC",
+    "periods": [
+      {
+        "start": "2026-10-28T00:00:00+00:00",
+        "summary": {
+          "kind": "estimate",
+          "requests": 1,
+          "succeeded": 1,
+          "failed": 0,
+          "cancelled": 0,
+          "interrupted": 0,
+          "pending": 0,
+          "notSent": 0,
+          "incomplete": 0,
+          "tokens": {
+            "input": 123,
+            "output": null,
+            "cacheRead": null,
+            "cacheWrite": null
+          },
+          "unknownAmounts": 0,
+          "money": []
+        }
+      },
+      {
+        "start": "2026-10-28T00:00:00+00:00",
+        "summary": {
+          "kind": "inference",
+          "requests": 3,
+          "succeeded": 2,
+          "failed": 0,
+          "cancelled": 0,
+          "interrupted": 1,
+          "pending": 0,
+          "notSent": 0,
+          "incomplete": 1,
+          "tokens": {
+            "input": 21,
+            "output": 29,
+            "cacheRead": 7,
+            "cacheWrite": 5
+          },
+          "unknownAmounts": 1,
+          "money": [
+            {
+              "currency": "USD",
+              "source": "reported",
+              "amount": 0.1,
+              "requests": 2,
+              "incomplete": 0
+            }
+          ]
+        }
+      },
+      {
+        "start": "2026-10-28T00:00:00+00:00",
+        "summary": {
+          "kind": "models",
+          "requests": 1,
+          "succeeded": 1,
+          "failed": 0,
+          "cancelled": 0,
+          "interrupted": 0,
+          "pending": 0,
+          "notSent": 0,
+          "incomplete": 0,
+          "tokens": {
+            "input": null,
+            "output": null,
+            "cacheRead": null,
+            "cacheWrite": null
+          },
+          "unknownAmounts": 0,
+          "money": []
+        }
+      }
+    ]
+  },
+  "personal_b_before_disable": {
+    "windowStart": "2026-09-18T16:36:57.12256+00:00",
+    "asOf": "2026-10-28T16:36:57.12256+00:00",
+    "page": 1,
+    "pageSize": 25,
+    "total": 2,
+    "summary": [
+      {
+        "kind": "inference",
+        "requests": 2,
+        "succeeded": 2,
+        "failed": 0,
+        "cancelled": 0,
+        "interrupted": 0,
+        "pending": 0,
+        "notSent": 0,
+        "incomplete": 1,
+        "tokens": {
+          "input": 30,
+          "output": 40,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "unknownAmounts": 1,
+        "money": [
+          {
+            "currency": "USD",
+            "source": "estimated",
+            "amount": 0.00011,
+            "requests": 1,
+            "incomplete": 0
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "requestId": "8a537ac712fa4cbaa504ecc2e33a8def",
+        "userId": "21b0bba6b6b04ac3b1bdbf9c12210898",
+        "displayName": "统计乙",
+        "tokenId": "709e78b3b9ae4e66ae9388151e5d8a07",
+        "upstreamVersion": 2,
+        "startedAt": "2026-10-28T16:36:57.0279225+00:00",
+        "endedAt": "2026-10-28T16:36:57.0745073+00:00",
+        "kind": "inference",
+        "model": "fixture-model",
+        "outcome": "succeeded",
+        "dispatched": true,
+        "statusCode": 200,
+        "upstreamStatus": 200,
+        "durationMs": 46,
+        "completeness": "complete",
+        "tokens": {
+          "input": 30,
+          "output": 40,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "money": {
+          "amount": 0.00011,
+          "currency": "USD",
+          "source": "estimated",
+          "completeness": "complete"
+        }
+      },
+      {
+        "requestId": "714cb98ff8514deca38b75ba6996cd63",
+        "userId": "21b0bba6b6b04ac3b1bdbf9c12210898",
+        "displayName": "统计乙",
+        "tokenId": "709e78b3b9ae4e66ae9388151e5d8a07",
+        "upstreamVersion": 2,
+        "startedAt": "2026-10-28T16:36:56.0537136+00:00",
+        "endedAt": "2026-10-28T16:36:56.1563337+00:00",
+        "kind": "inference",
+        "model": "fixture-model",
+        "outcome": "succeeded",
+        "dispatched": true,
+        "statusCode": 200,
+        "upstreamStatus": 200,
+        "durationMs": 97,
+        "completeness": "not_provided",
+        "tokens": {
+          "input": null,
+          "output": null,
+          "cacheRead": null,
+          "cacheWrite": null
+        },
+        "money": {
+          "amount": null,
+          "currency": null,
+          "source": "unknown",
+          "completeness": "unknown"
+        }
+      }
+    ],
+    "persistenceFailures": 0,
+    "granularity": "day",
+    "timeZone": "UTC",
+    "periods": [
+      {
+        "start": "2026-10-28T00:00:00+00:00",
+        "summary": {
+          "kind": "inference",
+          "requests": 2,
+          "succeeded": 2,
+          "failed": 0,
+          "cancelled": 0,
+          "interrupted": 0,
+          "pending": 0,
+          "notSent": 0,
+          "incomplete": 1,
+          "tokens": {
+            "input": 30,
+            "output": 40,
+            "cacheRead": null,
+            "cacheWrite": null
+          },
+          "unknownAmounts": 1,
+          "money": [
+            {
+              "currency": "USD",
+              "source": "estimated",
+              "amount": 0.00011,
+              "requests": 1,
+              "incomplete": 0
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

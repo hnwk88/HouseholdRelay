@@ -64,21 +64,6 @@ public sealed class ConfigurationService(RelayDatabase database)
     {
         if (Uri.CheckHostName(host) == UriHostNameType.Unknown || host.Contains(':') || publicPort is < 1 or > 65535 || listenPort is < 1024 or > 65535)
             throw new InvalidOperationException("请输入有效域名或 IPv4 地址，端口必须有效。");
-        using var certificate = Management.CreateCertificate(host, out var ca);
-        var pfx = certificate.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx);
-        try
-        {
-            var encrypted = WindowsSecrets.Protect(pfx);
-            database.Write((connection, transaction) =>
-            {
-                var config = JsonSerializer.Deserialize<RelayConfiguration>((string)Scalar(connection, transaction, "SELECT json FROM settings WHERE id=1")!, ConfigurationFiles.Json)!;
-                config.PublicUrl = $"https://{host}:{publicPort}"; config.ListenPort = listenPort; config.Validate();
-                Execute(connection, transaction, "UPDATE settings SET json=$json,version=version+1 WHERE id=1", ("$json", SerializeSettings(config)));
-                Execute(connection, transaction, "INSERT INTO secrets VALUES('tls',$value) ON CONFLICT(name) DO UPDATE SET protected=excluded.protected", ("$value", encrypted));
-                Execute(connection, transaction, "DELETE FROM public_assets WHERE name='tls_info'");
-                return Execute(connection, transaction, "INSERT INTO public_assets VALUES('legacy_ca',$value) ON CONFLICT(name) DO UPDATE SET value=excluded.value", ("$value", ca));
-            });
-        }
-        finally { CryptographicOperations.ZeroMemory(pfx); }
+        new CertificateService(database).CreatePrivate(Read().Version, $"https://{host}:{publicPort}", listenPort);
     }
 }

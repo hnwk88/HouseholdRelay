@@ -11,5 +11,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.6" />
     <InternalsVisibleTo Include="HouseholdRelay.Tests" />
     <Content Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="ClientTrust/*" />
+    <Content Include="../docs/usability/PRIVATE-DEPLOYMENT.md" Link="PRIVATE-DEPLOYMENT.md" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../docs/usability/PRIVATE-DEPLOYMENT-VALIDATION.md" Link="PRIVATE-DEPLOYMENT-VALIDATION.md" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

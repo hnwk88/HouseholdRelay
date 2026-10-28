@@ -9,13 +9,24 @@ namespace HouseholdRelay;
 public sealed record CertificateInfo(string Mode, string Host, DateTimeOffset ValidUntil, string Thumbprint, DateTimeOffset CheckedAt);
 
 /// <summary>导入系统信任的服务器证书，复用原 DPAPI 机密与设置事务。</summary>
-public sealed class CertificateService(RelayDatabase database)
+public sealed partial class CertificateService(RelayDatabase database)
 {
     public CertificateInfo? ReadInfo()
     {
         using var connection = database.Open();
         var json = Scalar(connection, null, "SELECT value FROM public_assets WHERE name='tls_info'") as string;
-        return json is null ? null : JsonSerializer.Deserialize<CertificateInfo>(json, ConfigurationFiles.Json);
+        if (json is not null) return JsonSerializer.Deserialize<CertificateInfo>(json, ConfigurationFiles.Json);
+        // 迁移来的私有证书沿用原根与私钥，仅补充展示信息，不改变客户端信任。
+        if (Scalar(connection, null, "SELECT value FROM public_assets WHERE name='legacy_ca'") is not string) return null;
+        var pfx = new ConfigurationService(database).LoadCertificate();
+        if (pfx is null) return null;
+        try
+        {
+            using var leaf = X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.EphemeralKeySet);
+            return new("private", PublicAddress(new ConfigurationService(database).Read().Value.PublicUrl).DnsSafeHost,
+                leaf.NotAfter.ToUniversalTime(), leaf.Thumbprint, DateTimeOffset.MinValue);
+        }
+        finally { CryptographicOperations.ZeroMemory(pfx); }
     }
 
     public void Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password)
@@ -78,7 +89,7 @@ public sealed class CertificateService(RelayDatabase database)
         chain.ChainPolicy.RevocationMode = X509RevocationMode.Online; chain.ChainPolicy.UrlRetrievalTimeout = TimeSpan.FromSeconds(5);
         if (testRoots is not null)
         {
-            // 仅测试程序集可提供独立信任根；生产入口始终使用系统信任，不修改证书存储。
+            // 私有证书使用本实例根；外部 PFX 导入的公共入口仍使用系统信任及吊销检查。
             chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust; chain.ChainPolicy.CustomTrustStore.AddRange(testRoots);
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck; chain.ChainPolicy.DisableCertificateDownloads = true;
         }
@@ -98,10 +109,11 @@ public sealed class CertificateService(RelayDatabase database)
             if (ReadInfo()?.Mode == "trusted") Validate(certificate, certificates, PublicAddress(new ConfigurationService(database).Read().Value.PublicUrl).DnsSafeHost);
             else
             {
-                // 旧实例的 CA 单独保存在 public_assets；发送配套链，避免按同名颁发者猜测证书链。
-                using var connection = database.Open();
-                if (Scalar(connection, null, "SELECT value FROM public_assets WHERE name='legacy_ca'") is string pem)
-                    certificates.Add(X509Certificate2.CreateFromPem(pem));
+                // 私有 CA 使用本实例确切的根验证，仍检查名称、有效期和服务器用途。
+                var pem = ReadAuthorityPem() ?? throw new InvalidOperationException("私有 CA 公共证书缺失，请恢复完整备份。");
+                var authority = X509Certificate2.CreateFromPem(pem); certificates.Add(authority);
+                Validate(certificate, certificates, PublicAddress(new ConfigurationService(database).Read().Value.PublicUrl).DnsSafeHost,
+                    new X509Certificate2Collection(authority));
             }
             return new ServerCertificates(certificate, certificates);
         }

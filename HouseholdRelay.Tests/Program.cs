@@ -69,7 +69,10 @@ var tests = new (string Name, Func<Task> Test)[]
     ("usage reported money, cumulative stream costs and currency isolation", UsageMoneyTests.ReportedCosts),
     ("usage price snapshots, decimal totals and local DST time buckets", UsageMoneyTests.PriceSnapshotsAndTimeZones),
     ("usage pricing forms enforce administrator, CSRF and version boundaries", UsageMoneyTests.PricingWebSecurity),
-    ("usage graceful host shutdown drains and preserves completed requests", UsageRestartTests.GracefulRestart)
+    ("usage graceful host shutdown drains and preserves completed requests", UsageRestartTests.GracefulRestart),
+    ("private certificate lifecycle, version conflicts and expired startup rejection", PrivateCertificateTests.Lifecycle),
+    ("private certificate web creation, CSRF and public-only trust download", PrivateCertificateTests.WebJourney),
+    ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var failures = 0;
 var selected = tests.Where(item => args.Length == 0 || item.Name.Contains(args[0], StringComparison.OrdinalIgnoreCase)).ToArray();

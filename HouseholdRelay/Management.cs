@@ -23,7 +23,7 @@ public sealed class Management(string home)
         var settings = new ConfigurationService(Database);
         if (settings.HasCertificate) throw new InvalidOperationException("已有证书，请使用现有配置启动服务。");
         settings.ConfigureLegacyTls(host, publicPort, listenPort);
-        Console.WriteLine("已保存旧版私有 CA 连接配置。请运行 serve，通过本机网页设置管理员并逐人发放令牌。");
+        Console.WriteLine("已保存私有 CA 连接配置。请运行 serve，通过本机网页设置管理员并逐人发放令牌。");
         return Task.CompletedTask;
     }
     public static X509Certificate2 CreateCertificate(string host, out string authorityPem)
@@ -124,9 +124,9 @@ public sealed class Management(string home)
         Console.WriteLine($"本机管理：http://127.0.0.1:{adminPort}；按 Ctrl+C 停止。");
         var bootstrap = new AdministratorService(Database).BootstrapCode();
         if (bootstrap is not null) Console.WriteLine($"首次设置引导码（仅供本机输入）：{bootstrap}");
-        Console.WriteLine(api is null ? "对外 HTTPS 未启用，请在本机网页导入可信证书并重启。" : certificates.ReadInfo()?.Mode == "trusted"
-            ? $"HTTPS 监听端口：{config.ListenPort}；公网映射是否可达需从外部客户端验证。"
-            : $"旧版 HTTPS 监听端口：{config.ListenPort}；需客户端额外信任旧版 CA。");
+        Console.WriteLine(api is null ? "对外 HTTPS 未启用，请在本机网页创建或导入证书并重启。" : certificates.ReadInfo()?.Mode == "trusted"
+            ? $"HTTPS 监听端口：{config.ListenPort}；请从实际客户端验证连接。"
+            : $"私有 CA HTTPS 监听端口：{config.ListenPort}；请从连接页下载公共信任包，每台客户端安装一次。");
         await admin.WaitForShutdownAsync();
     }
 }

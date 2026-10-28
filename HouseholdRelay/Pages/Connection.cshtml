@@ -5,7 +5,7 @@
 <p>客户端协议选择 Anthropic Messages。账户/API 模式切换不需要使用者更换中转地址或个人令牌。</p>
 @if (Model.ClaudeCodeOnly)
 { <p class="notice">当前上游已用 Claude Code 实际调用验证。此类上游可能拒绝通用 API 请求；请使用 Claude Code。下面的 curl 示例仅说明个人令牌的认证写法，不表示该上游接受这些简短请求。</p> }
-<p class="notice">@Model.HttpsStatus 保存地址不会自动建立公网映射，请从实际客户端验证连接。</p>
+<p class="notice">@Model.HttpsStatus 保存地址不会自动建立网络映射，请从实际客户端验证连接。</p>
 <section class="card"><h2>连接信息</h2><p>根地址：<code id="relay-root">@(Model.RootUrl.Length == 0 ? "尚未填写" : Model.RootUrl)</code></p>
     @if (Model.RootUrl.Length > 0) { <button type="button" data-copy="relay-root">复制根地址</button><span class="copy-status" role="status"></span> }
     <p>推荐模型：@(Model.RecommendedModel.Length == 0 ? "尚无通过调用验证的模型" : Model.RecommendedModel)</p>
@@ -14,8 +14,19 @@
     <p>使用者令牌只在创建或轮换时展示一次，此页不会读取或回填已有令牌。请把示例占位符替换为自己的个人令牌。</p>
     <a asp-page="/Users">创建使用者或轮换个人令牌</a>
 </section>
+@if (Model.AuthorityFingerprint is not null)
+{
+    <section class="card"><h2>每台 Windows 电脑：一次性安装信任</h2>
+        <p>下载并解压公共信任包，向管理员独立核对下方 CA 指纹，然后在包目录中用 PowerShell 执行安装命令。仅安装公共根证书，不含私钥或个人令牌。</p>
+        <p>CA SHA-256：<code id="ca-fingerprint">@Model.AuthorityFingerprint</code></p>
+        <a asp-page-handler="TrustPackage">下载客户端公共信任包</a>
+        <pre><code id="trust-command">@Model.TrustCommand</code></pre><button type="button" data-copy="trust-command">复制信任安装命令</button><span class="copy-status" role="status"></span>
+        <p>脚本安装当前用户的 Windows 根信任，并设置 Claude Code 所需的 NODE_EXTRA_CA_CERTS，保留已有 CA。安装后完全退出并重新打开终端、客户端和浏览器，再设置下面两项连接信息。其他 Windows 用户需各自安装。</p>
+        <p>先打开根地址下的 /healthz 检查浏览器证书，再运行 Claude Code 最小会话。浏览器信任不代表客户端已继承新环境；不要关闭证书校验。更换 CA 后需重新核对和安装。</p>
+    </section>
+}
 <section class="card"><h2>Claude Code（PowerShell）</h2>
-    <p>在安装好的 Claude Code 客户端设置下面两个变量，再按上方推荐名称选择模型。无需旧客户端包或私有 CA 注入；证书必须已被客户端信任。</p>
+    <p>完成一次性信任后，日常在 Claude Code 所用终端设置下面两个变量，再按上方推荐名称选择模型。个人令牌不要写入共享脚本、网址或截图。</p>
     <pre><code id="claude-variables">@Model.Variables</code></pre><button type="button" data-copy="claude-variables">复制两个变量</button><span class="copy-status" role="status"></span>
 </section>
 <section class="card"><h2>查询自己的用量</h2>

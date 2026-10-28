@@ -1,25 +1,38 @@
 ﻿@page
 @model HttpsModel
 @{ ViewData["Title"] = "HTTPS 入口"; }
-<p class="eyebrow">安全连接</p><h1>导入可信 HTTPS 证书</h1>
-<p>证书需要覆盖你的公开域名，并受客户端系统信任。可继续使用已有 TCP 端口映射，由本程序完成 TLS 加密。</p>
+<p class="eyebrow">安全连接</p><h1>HTTPS 入口</h1>
+<p>私人设备可使用本实例私有 CA，每台电脑安装一次信任。地址应使用客户端能到达的主机名或 IP，证书必须与该地址匹配。</p>
 <div asp-validation-summary="All" role="alert"></div>
 @if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
 <section class="card"><h2>当前状态</h2>
     @if (Model.Info is { } info)
     {
-        <p class="status">@(info.ValidUntil > DateTimeOffset.UtcNow ? "已导入通过系统信任检查的证书" : "证书已过期，请更新")</p>
+        <p class="status">@(info.ValidUntil <= DateTimeOffset.UtcNow ? "证书已过期，请更新" : info.Mode == "private" ? "私有 CA · 每台客户端需安装一次信任" : "已导入通过系统信任检查的证书")</p>
         <p>域名：@info.Host；有效期至 @info.ValidUntil.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</p>
-        <p>导入检查：@info.CheckedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</p>
+        @if (info.CheckedAt != DateTimeOffset.MinValue) { <p>证书检查：@info.CheckedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</p> }
     }
-    else { <p class="status">@(Model.Legacy ? "旧版私有 CA 模式，需要客户端额外信任" : "尚未配置 HTTPS")</p> }
-    <p>@(Model.Listening ? "本进程的 HTTPS 监听已启动。" : "本进程尚未启动 HTTPS 监听。") 公网可达性仍需从外部客户端验证。</p>
+    else { <p class="status">尚未配置 HTTPS</p> }
+    <p>@(Model.Listening ? "本进程的 HTTPS 监听已启动；如刚更换证书或端口，仍须重启。" : "本进程尚未启动 HTTPS 监听。") 保存地址不会配置 DNS、防火墙或端口映射，请从实际客户端验证。</p>
+    @if (Model.AuthorityFingerprint is not null)
+    { <p>CA SHA-256：<code>@Model.AuthorityFingerprint</code></p><a asp-page="/Connection">下载公共信任包及安装说明</a> }
 </section>
+<form method="post" asp-page-handler="Private" class="card settings">
+    <h2>私人设备：创建私有 CA</h2>
+    <input type="hidden" asp-for="Version" id="private-version" />
+    <label for="private-url">私人 HTTPS 根地址</label><input name="PublicUrl" id="private-url" value="@Model.PublicUrl" type="url" required maxlength="2048" placeholder="https://192.168.1.20:8787" />
+    <label for="private-port">私人 HTTPS 本机监听端口</label><input name="ListenPort" id="private-port" value="@Model.ListenPort" type="number" required min="1024" max="65535" />
+    <small>本机试用可填 https://localhost:8787；其他电脑请使用主机的局域网地址或可解析的名称。CA 私钥只在签发期间存在于内存，服务器私钥加密保存。</small>
+    <label class="checkbox"><input asp-for="ReplaceExisting" /> 我确认更换已有证书，并为每台客户端重新安装新 CA 信任</label>
+    <button type="submit">创建私有 CA 与服务器证书</button>
+</form>
 <form method="post" enctype="multipart/form-data" class="card settings">
+    <h2>已有证书：导入 PFX</h2>
+    <p>以后使用公网可信 CA 时，可导入匹配地址的证书。此路径检查系统信任链及吊销状态。</p>
     <input type="hidden" asp-for="Version" />
     <label asp-for="PublicUrl">可信 HTTPS 根地址</label><input asp-for="PublicUrl" type="url" required maxlength="2048" placeholder="https://relay.example.com:5433" />
     <label asp-for="ListenPort">本机中转监听端口</label><input asp-for="ListenPort" type="number" required min="1024" max="65535" />
-    <small>映射的公开端口可以与本机监听端口不同。管理网页继续只绑定本机回环地址。</small>
+    <small>入口端口可以与本机监听端口不同。管理网页继续只绑定本机回环地址。</small>
     <label asp-for="CertificateFile">PFX 证书文件（含私钥及中间证书链）</label><input asp-for="CertificateFile" type="file" accept=".pfx,.p12" required />
     <label asp-for="Password">PFX 密码（无密码可留空）</label><input asp-for="Password" type="password" autocomplete="new-password" maxlength="1024" />
     <small>私钥加密保存在本机；密码不保存、不回填。不自动安装根证书。</small>

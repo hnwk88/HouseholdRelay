@@ -114,6 +114,30 @@ async function relay(url, token, stream = false) {
     await page.getByLabel('PFX 证书文件（含私钥及中间证书链）').setInputFiles({ name: 'invalid.pfx', mimeType: 'application/x-pkcs12', buffer: Buffer.from('invalid fixture certificate') });
     await page.getByRole('button', { name: '验证并保存证书' }).click(); await page.getByText('无法读取 PFX，请检查文件和证书密码。', { exact: true }).waitFor();
     await screenshot(page, '11-certificate-rejected');
+    await page.goto(url + '/Https');
+    await page.getByLabel('私人 HTTPS 根地址', { exact: true }).fill('https://localhost:8787');
+    await page.getByLabel('私人 HTTPS 本机监听端口', { exact: true }).fill('8787');
+    await page.getByLabel('私人 HTTPS 根地址', { exact: true }).focus(); await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'private-port', '键盘应进入有标签的端口输入');
+    await page.locator('form[action*="handler=Private"]').evaluate(form => form.addEventListener('submit', () => {
+        const status = form.querySelector('[data-submit-status]');
+        sessionStorage.setItem('fixture-loading-status', status?.textContent === '正在处理，请稍候…' && status.getAttribute('role') === 'status' ? 'seen' : 'missing');
+    }));
+    await page.getByRole('button', { name: '创建私有 CA 与服务器证书', exact: true }).click();
+    await page.getByText(/私有 CA 及服务器证书已创建/).waitFor();
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('fixture-loading-status')), 'seen', '提交期间应在旧页面显示等待状态');
+    await page.evaluate(() => sessionStorage.removeItem('fixture-loading-status')); await screenshot(page, '14-private-certificate-created');
+    await page.goto(url + '/Connection');
+    const publicPackage = await page.request.get(url + '/Connection?handler=TrustPackage'); assert.equal(publicPackage.status(), 200);
+    await fs.writeFile(path.join(output, 'client-trust.zip'), await publicPackage.body());
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url });
+    await page.getByRole('button', { name: '复制信任安装命令', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '已复制' }).waitFor();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), await page.locator('#trust-command').textContent());
+    await page.getByRole('button', { name: '复制根地址', exact: true }).focus(); await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'https://localhost:8787');
+    assert.ok(!(await page.content()).includes(accountSecret) && !(await page.content()).includes(token));
+    await screenshot(page, '15-private-connection');
     await context.close(); await stop(); ({ url, code } = await start(listenPort)); assert.equal(code, undefined);
     context = await browser.newContext({ viewport: { width: 390, height: 844 } }); page = await context.newPage();
     await login(page, url); assert.equal((await relay(url, token)).status, 200);
@@ -128,6 +152,7 @@ async function relay(url, token, stream = false) {
     steps.push('实际 JSON/SSE 请求与路径前缀/查询参数通过；账户 401 后暂停，网页重新保存和激活后恢复。');
     steps.push('连接说明无上游或个人令牌回填；无效 PFX 在网页被拒绝；重启后活动配置、检测结果及调用仍有效。');
     steps.push('390px 上游和连接说明页面无水平溢出。所有模型请求仅发往本机模拟上游。');
+    steps.push('网页创建私有 CA、公共包下载、表单等待提示、键盘跳转/提交和复制反馈通过；本脚本未安装系统根信任。');
     steps.push('未提供公开可信证书、域名及真实账户/API 凭据，因此公网和真实上游尚未实测。');
     await fs.writeFile(path.join(output, 'upstream-browser-steps.md'), '\uFEFF# 上游网页验证\n\n浏览器：' + await browser.version() + '\n\n' + steps.map(step => '- ' + step).join('\n') + '\n', 'utf8');
     console.log('PASS upstream browser journey: API/account setup, test, activate, JSON/SSE, credential failure, recovery, restart, certificates, connection, mobile');

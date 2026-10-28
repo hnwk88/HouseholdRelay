@@ -1,0 +1,11 @@
+﻿✔ synthetic client failure remains visible and redacted: marker (142.4576ms)
+✔ synthetic client failure remains visible and redacted: missing-tool (126.3079ms)
+✔ synthetic client failure remains visible and redacted: process-exit (124.1898ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 528.7201
