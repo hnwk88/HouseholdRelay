@@ -40,10 +40,11 @@ public sealed class RelayDatabase
             InstanceId = File.ReadAllText(marker).Trim();
             if (!Guid.TryParseExact(InstanceId, "N", out _)) throw new InvalidOperationException("实例标记损坏，请恢复备份。");
             using var connection = Open();
-            if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) != 1
+            if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) is not (1 or 2)
                 || (string?)Scalar(connection, null, "PRAGMA quick_check") != "ok")
                 throw new InvalidOperationException("数据库版本不支持或完整性检查失败，请恢复备份。");
             LegacyImport.Run(this, migrationCheckpoint);
+            UpstreamSchema.Upgrade(this);
         }
         finally
         {

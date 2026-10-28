@@ -1,0 +1,58 @@
+﻿@page
+@model UpstreamModel
+@{ ViewData["Title"] = "上游接入"; }
+<p class="eyebrow">共享上游</p><h1>配置并验证上游</h1>
+<p>账户令牌和 API 密钥均由你直接填写。先保存候选，测试成功后激活；当前请求可继续完成。</p>
+<div asp-validation-summary="All" role="alert"></div>
+@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<section class="card"><h2>当前活动上游</h2><p class="status">@Model.RuntimeStatus</p>
+    @if (Model.Active.Configured)
+    {
+        <p>@(Model.Active.Options.Mode == "oauth" ? "账户令牌" : "API 密钥") · 版本 @Model.Active.Version</p>
+        <p>Messages 地址：<code>@UpstreamAddress.Endpoint(Model.Active.Options, "/v1/messages")</code></p>
+        <p>凭据：已配置；到期时间未知。更换凭据需要重新保存、测试和激活。</p>
+    }
+</section>
+<form method="post" asp-page-handler="Save" class="card settings">
+    <h2>保存新候选</h2><input type="hidden" asp-for="Version" />
+    <label asp-for="Input.Mode">接入模式</label><select asp-for="Input.Mode"><option value="api-key">API 密钥</option><option value="oauth">账户令牌</option></select>
+    <label asp-for="Input.Preset">提供商预设</label><select asp-for="Input.Preset"><option value="anthropic">Anthropic（账户模式添加 OAuth beta）</option><option value="compatible">兼容 Anthropic Messages 的中转</option></select>
+    <label asp-for="Input.BaseUrl">上游 API 根地址</label><input asp-for="Input.BaseUrl" type="url" maxlength="2048" required />
+    <small>可填写根地址、结尾 /v1 或自定义前缀；前缀保留，/v1 只添加一次。非认证查询参数保留，下游查询参数随后追加；地址不能含凭据。</small>
+    <label asp-for="Input.Authentication">API 模式认证方式</label><select asp-for="Input.Authentication"><option value="x-api-key">x-api-key（API 默认）</option><option value="bearer">Bearer</option></select>
+    <small>账户模式始终使用 Bearer；API 模式不会发送账户 OAuth beta。</small>
+    <label class="checkbox"><input asp-for="Input.OAuthBeta" />兼容中转的账户模式需要 OAuth beta</label>
+    <label asp-for="Credential">上游凭据（账户访问令牌或 API 密钥）</label><input asp-for="Credential" type="password" autocomplete="new-password" maxlength="8192" required />
+    <small>已有凭据不回填。秘密加密保存，不用于生成下游连接示例。</small>
+    <label asp-for="Input.Model">要测试并推荐的模型</label><input asp-for="Input.Model" maxlength="200" required placeholder="填写你有权限调用的模型名称" />
+    <small>模型目录不支持时仍可填写名称，以实际调用结果确认权限。</small>
+    <details><summary>网络与兼容设置</summary>
+        <label class="checkbox"><input asp-for="Input.AllowPrivateNetwork" />允许连接本机或私网地址（包括 HTTP）</label>
+        <small>HTTP 仅允许回环、RFC1918 私网或 IPv6 唯一本地地址；不接受链路本地地址。</small>
+        <label asp-for="Input.ProxyUrl">出站 HTTP CONNECT 代理（可选）</label><input asp-for="Input.ProxyUrl" type="url" maxlength="2048" placeholder="http://127.0.0.1:7890" />
+        <small>这是本机/私网代理地址，与上游 API 地址分开；不接受带账号密码的代理 URL。</small>
+    </details>
+    <button type="submit">保存候选配置</button>
+</form>
+@if (Model.Candidate is { } candidate)
+{
+    <section class="card" aria-labelledby="candidate-heading"><h2 id="candidate-heading">最近保存的候选</h2>
+        <p>状态：@(candidate.State switch { "passed" => "检测通过，等待激活", "testing" => "正在检测，可稍后刷新页面", "activated" => "已激活", "failed" => "检测失败", _ => "尚未检测" })</p>
+        <p>Messages：<code>@UpstreamAddress.Endpoint(candidate.Options, "/v1/messages")</code></p>
+        <p>Models：<code>@UpstreamAddress.Endpoint(candidate.Options, "/v1/models")</code></p>
+        @if (candidate.Report is { } report)
+        {
+            <dl><dt>检测时间</dt><dd>@report.CheckedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</dd>
+                <dt>@(candidate.Options.BaseUrl.StartsWith("https://", StringComparison.Ordinal) ? "连通 / TLS" : "连通（HTTP，未使用 TLS）")</dt><dd>@UpstreamReport.Label(report.Connection)</dd><dt>鉴权</dt><dd>@UpstreamReport.Label(report.Authentication)</dd>
+                <dt>模型目录</dt><dd>@UpstreamReport.Label(report.ModelDiscovery)</dd><dt>最小模型调用</dt><dd>@UpstreamReport.Label(report.Call)</dd></dl>
+            <p>@report.Message</p><p>实际返回模型：@(report.VerifiedModel ?? "尚未取得")</p>
+            @if (report.Models.Length > 0) { <p>目录返回的模型（最多 100 个）：@string.Join("、", report.Models)</p> }
+        }
+        <form method="post" asp-page-handler="Test"><input type="hidden" name="candidateId" value="@candidate.Id" />
+            <label class="checkbox"><input type="checkbox" name="confirmed" value="true" required />我同意发起一次最小模型调用，可能消耗少量上游额度</label>
+            <small>这是管理员诊断，不计入个人业务用量。检测不会切换当前活动上游。</small><button type="submit" class="secondary">测试候选</button>
+        </form>
+        @if (candidate.State == "passed")
+        { <form method="post" asp-page-handler="Activate"><input type="hidden" name="candidateId" value="@candidate.Id" /><button type="submit">激活此候选</button></form> }
+    </section>
+}

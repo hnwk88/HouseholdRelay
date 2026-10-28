@@ -35,7 +35,21 @@ var tests = new (string Name, Func<Task> Test)[]
     ("web rate limit shares setup budget across alternating aliases", () => FoundationTests.WebRateLimitAliases(setup: true, alternating: true)),
     ("web rate limit shares login budget across alternating aliases", () => FoundationTests.WebRateLimitAliases(setup: false, alternating: true)),
     ("web rate limit permits fifth attempt and keeps page budgets separate", FoundationTests.WebRateLimitValidAttempts),
-    ("database token revocation at queue and upload boundaries", FoundationTests.Revocation)
+    ("database token revocation at queue and upload boundaries", FoundationTests.Revocation),
+    ("upstream address and URL contracts", UpstreamIntegrationTests.AddressContracts),
+    ("API key mode isolates account headers", UpstreamIntegrationTests.AuthenticationModes),
+    ("upstream JSON and SSE responses redact secrets", UpstreamIntegrationTests.ResponseSanitization),
+    ("upstream candidate test and atomic activation", UpstreamIntegrationTests.CandidateLifecycle),
+    ("web directly configures, tests and activates an API upstream", UpstreamIntegrationTests.WebDirectConfiguration),
+    ("upstream protocol modes, prefixes, query and restart persistence", UpstreamVersionTests.ProtocolModes),
+    ("upstream version switch isolates old authentication failures", () => UpstreamVersionTests.VersionIsolation(401)),
+    ("upstream version switch isolates old cooldown", () => UpstreamVersionTests.VersionIsolation(429)),
+    ("upstream diagnostic failures cannot pause or activate over current version", UpstreamVersionTests.FailedDiagnosticIsolation),
+    ("upstream connection, private address, TLS and cancellation boundaries", UpstreamSecurityTests.NetworkBoundaries),
+    ("certificate validation, DPAPI import, restart and real TLS serving", UpstreamSecurityTests.CertificateImport),
+    ("clean native client uses two connection variables and completes a tool conversation", CleanClientTests.ToolConversation),
+    ("upstream HTTP CONNECT proxy uses validated destination addresses", UpstreamProxyTests.ConnectProxy),
+    ("upstream schema upgrade rolls back and preserves existing identities", UpstreamMigrationTests.UpgradeRollback)
 };
 var failures = 0;
 var selected = tests.Where(item => args.Length == 0 || item.Name.Contains(args[0], StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -223,7 +237,7 @@ static class Tests
             await Event("content_block_stop", new { type = "content_block_stop", index = 0 });
             await Event("message_delta", new { type = "message_delta", delta = new { stop_reason = "end_turn", stop_sequence = (string?)null }, usage = new { output_tokens = 4 } });
             await Event("message_stop", new { type = "message_stop" });
-        }, certificate: certificate);
+        }, certificate: certificate, certificateChain: new X509Certificate2Collection(authority));
         await using var tunnel = new Tunnel(new Uri(f.Url).Port);
         using (var handler = new HttpClientHandler { UseProxy = false })
         {
@@ -296,7 +310,7 @@ sealed class Fixture : IAsyncDisposable
     public required HttpClient Http { get; init; }
     public required ConcurrentQueue<Call> Calls { get; init; }
     public required ConcurrentQueue<string> Logs { get; init; }
-    public static async Task<Fixture> Create(RequestDelegate handler, Action<RelayConfiguration>? configure = null, X509Certificate2? certificate = null, ClientRegistry? clients = null)
+    public static async Task<Fixture> Create(RequestDelegate handler, Action<RelayConfiguration>? configure = null, X509Certificate2? certificate = null, ClientRegistry? clients = null, X509Certificate2Collection? certificateChain = null)
     {
         var calls = new ConcurrentQueue<Call>(); var logs = new ConcurrentQueue<string>();
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] }); builder.Logging.ClearProviders();
@@ -312,7 +326,7 @@ sealed class Fixture : IAsyncDisposable
             [new("study", ConfigurationFiles.Hash("study-test-token")), new("bedroom", ConfigurationFiles.Hash("bedroom-test-token")), new("office", ConfigurationFiles.Hash("office-test-token"))] };
         configure?.Invoke(config);
         var relay = new RelayServer(config, "fixture-upstream-secret", item => logs.Enqueue(JsonSerializer.Serialize(item)), new Uri(upstream.Urls.Single()), clients);
-        var app = relay.Build(certificate, 0); await app.StartAsync();
+        var app = relay.Build(certificate, 0, certificateChain); await app.StartAsync();
         return new Fixture { Config = config, Relay = relay, App = app, Upstream = upstream, Url = app.Urls.Single(), Calls = calls, Logs = logs,
             Http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false }) };
     }

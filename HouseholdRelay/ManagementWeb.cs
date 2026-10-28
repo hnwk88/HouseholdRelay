@@ -23,7 +23,7 @@ public static class ManagementWeb
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.AddServerHeader = false; options.Listen(IPAddress.Loopback, port);
-            options.Limits.MaxRequestBodySize = 65536;
+            options.Limits.MaxRequestBodySize = 2 * 1024 * 1024;
             options.Limits.MaxRequestHeadersTotalSize = 16384;
             options.Limits.MaxConcurrentConnections = 64;
         });
@@ -31,6 +31,9 @@ public static class ManagementWeb
         builder.Services.AddSingleton(identities);
         builder.Services.AddSingleton(new ConfigurationService(database));
         builder.Services.AddSingleton(new AdministratorService(database));
+        builder.Services.AddSingleton(new UpstreamService(database));
+        builder.Services.AddSingleton(new CertificateService(database));
+        builder.Services.AddSingleton(relay);
         builder.Services.AddRazorPages(options =>
         {
             options.Conventions.AuthorizeFolder("/");

@@ -13,3 +13,4 @@ tools/.gate-settings.lock
 .state/
 .relay-instance
 artifacts/usability-foundation/
+artifacts/usability-upstream/

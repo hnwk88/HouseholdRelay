@@ -27,6 +27,9 @@ public sealed class ConfigurationService(RelayDatabase database)
         if (config.PublicUrl.Length != 0 && (!Uri.TryCreate(config.PublicUrl, UriKind.Absolute, out var url)
             || url.Scheme != "https" || url.UserInfo.Length != 0 || url.Query.Length != 0 || url.Fragment.Length != 0 || url.AbsolutePath != "/"))
             throw new InvalidOperationException("对外地址应为 HTTPS 根地址，不含密码、查询参数或路径。");
+        var certificate = new CertificateService(database).ReadInfo();
+        if (certificate is not null && (config.PublicUrl.Length == 0 || !certificate.Host.Equals(new Uri(config.PublicUrl).DnsSafeHost, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("对外域名已变化，请在 HTTPS 入口页同时导入匹配的新证书。");
         database.Write((connection, transaction) =>
         {
             if (Execute(connection, transaction, "UPDATE settings SET version=version+1,json=$json WHERE id=1 AND version=$version",
@@ -54,15 +57,8 @@ public sealed class ConfigurationService(RelayDatabase database)
     }
     public void SaveCredential(string credential)
     {
-        if (credential.Length is < 16 or > 8192 || credential.Any(char.IsControl)) throw new InvalidOperationException("上游令牌格式不正确。");
-        var plain = Encoding.UTF8.GetBytes(credential);
-        try
-        {
-            var encrypted = WindowsSecrets.Protect(plain);
-            database.Write((connection, transaction) => Execute(connection, transaction,
-                "UPDATE upstream SET credential=$value,version=version+1 WHERE id=1", ("$value", encrypted)));
-        }
-        finally { CryptographicOperations.ZeroMemory(plain); }
+        var upstreams = new UpstreamService(database); var active = upstreams.ReadActive();
+        upstreams.SaveCandidate(active.Version, active.Options, credential);
     }
     public void ConfigureLegacyTls(string host, int publicPort, int listenPort)
     {
@@ -79,6 +75,7 @@ public sealed class ConfigurationService(RelayDatabase database)
                 config.PublicUrl = $"https://{host}:{publicPort}"; config.ListenPort = listenPort; config.Validate();
                 Execute(connection, transaction, "UPDATE settings SET json=$json,version=version+1 WHERE id=1", ("$json", SerializeSettings(config)));
                 Execute(connection, transaction, "INSERT INTO secrets VALUES('tls',$value) ON CONFLICT(name) DO UPDATE SET protected=excluded.protected", ("$value", encrypted));
+                Execute(connection, transaction, "DELETE FROM public_assets WHERE name='tls_info'");
                 return Execute(connection, transaction, "INSERT INTO public_assets VALUES('legacy_ca',$value) ON CONFLICT(name) DO UPDATE SET value=excluded.value", ("$value", ca));
             });
         }

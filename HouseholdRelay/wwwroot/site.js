@@ -5,7 +5,7 @@
             await navigator.clipboard.writeText(document.getElementById(button.dataset.copy).textContent);
             status.textContent = '已复制';
         } catch {
-            status.textContent = '无法自动复制，请选中令牌手动复制。';
+            status.textContent = '无法自动复制，请选中内容手动复制。';
         }
     });
 });

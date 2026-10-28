@@ -45,6 +45,8 @@ public sealed class Management(string home)
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
         request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.1") }, false));
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+        // 私有 CA 名称可能相同；明确签发者的密钥和序列号，防止 TLS 链选择同名的另一证书。
+        request.CertificateExtensions.Add(X509AuthorityKeyIdentifierExtension.CreateFromCertificate(authority, true, true));
         using var issued = request.Create(authority, DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddYears(2), RandomNumberGenerator.GetBytes(16));
         return issued.CopyWithPrivateKey(rsa);
     }
@@ -69,7 +71,7 @@ public sealed class Management(string home)
         }
         var token = new string(characters.ToArray()).Trim(); characters.Clear();
         settings.SaveCredential(token);
-        Console.WriteLine("上游凭据已加密存入数据库。重启服务后生效，尚未验证模型调用。");
+        Console.WriteLine("上游凭据已加密保存为候选配置。请在本机网页填写模型、测试后激活。");
     }
 
     public void ManageClient(string action, string? name, string? id = null, string? displayName = null)
@@ -108,18 +110,23 @@ public sealed class Management(string home)
         if (adminPort is < 1024 or > 65535) throw new InvalidOperationException("管理端口应在 1024 至 65535 之间。");
         var settings = new ConfigurationService(Database); var config = settings.Read().Value;
         var identities = new IdentityService(Database);
-        using var relay = new RelayServer(config, settings.LoadCredential(), data => Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(data)), clients: identities.Clients);
-        var pfx = settings.LoadCertificate();
-        using var certificate = pfx is null ? null : LoadServerCertificate(pfx);
-        if (pfx is not null) CryptographicOperations.ZeroMemory(pfx);
+        using var relay = new RelayServer(config, null, data => Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(data)), clients: identities.Clients, upstreams: new UpstreamService(Database));
+        var certificates = new CertificateService(Database);
+        ServerCertificates? loaded = null;
+        try { loaded = certificates.LoadForServing(); }
+        catch (Exception error) when (error is CryptographicException or InvalidOperationException)
+        { Console.WriteLine("HTTPS 证书无法启用，请在本机管理页面检查证书链、域名和有效期后重新导入。"); }
+        using var certificate = loaded;
         await using var admin = ManagementWeb.Build(Database, identities, relay, adminPort);
-        await using var api = certificate is null ? null : relay.Build(certificate);
+        await using var api = certificate is null ? null : relay.Build(certificate.Certificate, certificateChain: certificate.Chain);
         await admin.StartAsync();
-        if (api is not null) await api.StartAsync();
+        if (api is not null) { await api.StartAsync(); relay.HttpsActive = true; }
         Console.WriteLine($"本机管理：http://127.0.0.1:{adminPort}；按 Ctrl+C 停止。");
         var bootstrap = new AdministratorService(Database).BootstrapCode();
         if (bootstrap is not null) Console.WriteLine($"首次设置引导码（仅供本机输入）：{bootstrap}");
-        Console.WriteLine(api is null ? "尚未配置对外 HTTPS；上游是否可用以实际请求为准。" : $"旧版 HTTPS 监听端口：{config.ListenPort}；需客户端信任旧版 CA。");
+        Console.WriteLine(api is null ? "对外 HTTPS 未启用，请在本机网页导入可信证书并重启。" : certificates.ReadInfo()?.Mode == "trusted"
+            ? $"HTTPS 监听端口：{config.ListenPort}；公网映射是否可达需从外部客户端验证。"
+            : $"旧版 HTTPS 监听端口：{config.ListenPort}；需客户端额外信任旧版 CA。");
         await admin.WaitForShutdownAsync();
     }
 }

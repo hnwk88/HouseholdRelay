@@ -49,7 +49,7 @@ sealed class WebFixture : IAsyncDisposable
     private WebFixture()
     {
         Database = new RelayDatabase(Home.Path); Identities = new(Database); Administrators = new(Database);
-        Relay = new RelayServer(new ConfigurationService(Database).Read().Value, null, clients: Identities.Clients);
+        Relay = new RelayServer(new ConfigurationService(Database).Read().Value, null, clients: Identities.Clients, upstreams: new UpstreamService(Database));
         App = ManagementWeb.Build(Database, Identities, Relay, 0);
         Http = NewClient();
     }

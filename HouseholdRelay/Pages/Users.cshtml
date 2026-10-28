@@ -11,7 +11,7 @@
         <h2 id="token-heading">@Model.Issued.DisplayName 的新令牌</h2>
         <p>仅本次显示。请现在复制并交给本人；离开后无法再次查看，可重新轮换。</p>
         <code id="issued-token" data-sensitive>@Model.Issued.Token</code>
-        <button type="button" data-copy="issued-token">复制令牌</button><span class="copy-status" role="status"></span>
+        <button type="button" data-copy="issued-token">复制令牌</button><span class="copy-status" role="status"></span><p><a asp-page="/Connection">查看根地址、推荐模型和连接示例</a></p>
     </section>
 }
 <section class="card"><h2>添加使用者</h2>

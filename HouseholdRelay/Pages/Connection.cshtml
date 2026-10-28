@@ -1,0 +1,25 @@
+﻿@page
+@model ConnectionModel
+@{ ViewData["Title"] = "连接说明"; }
+<p class="eyebrow">统一调用</p><h1>地址与个人令牌</h1>
+<p>客户端协议选择 Anthropic Messages。账户/API 模式切换不需要使用者更换中转地址或个人令牌。</p>
+<p class="notice">@Model.HttpsStatus 保存地址不会自动建立公网映射，请从实际客户端验证连接。</p>
+<section class="card"><h2>连接信息</h2><p>根地址：<code id="relay-root">@(Model.RootUrl.Length == 0 ? "尚未填写" : Model.RootUrl)</code></p>
+    @if (Model.RootUrl.Length > 0) { <button type="button" data-copy="relay-root">复制根地址</button><span class="copy-status" role="status"></span> }
+    <p>推荐模型：@(Model.RecommendedModel.Length == 0 ? "尚无通过调用验证的模型" : Model.RecommendedModel)</p>
+    <p>最小调用实际返回的模型：@(Model.VerifiedModel ?? "尚未取得")</p>
+    @if (Model.Models.Length > 0) { <p>上游目录返回：@string.Join("、", Model.Models)</p> }
+    <p>使用者令牌只在创建或轮换时展示一次，此页不会读取或回填已有令牌。请把示例占位符替换为自己的个人令牌。</p>
+    <a asp-page="/Users">创建使用者或轮换个人令牌</a>
+</section>
+<section class="card"><h2>Claude Code（PowerShell）</h2>
+    <p>在安装好的 Claude Code 客户端设置下面两个变量，再按上方推荐名称选择模型。无需旧客户端包或私有 CA 注入；证书必须已被客户端信任。</p>
+    <pre><code id="claude-variables">@Model.Variables</code></pre><button type="button" data-copy="claude-variables">复制两个变量</button><span class="copy-status" role="status"></span>
+</section>
+<section class="card"><h2>Bearer 请求示例（POSIX shell）</h2><pre><code id="bearer-example">@Model.BearerExample</code></pre><button type="button" data-copy="bearer-example">复制 Bearer 示例</button><span class="copy-status" role="status"></span></section>
+<section class="card"><h2>x-api-key 请求示例（POSIX shell）</h2><pre><code id="key-example">@Model.ApiKeyExample</code></pre><button type="button" data-copy="key-example">复制 x-api-key 示例</button><span class="copy-status" role="status"></span></section>
+<section class="card"><h2>接口和排查</h2>
+    <p>支持 Messages JSON/SSE、Models、Count Tokens 和 HEAD /api/hello。是否支持模型目录或计数接口由所配上游决定；不转换 OpenAI Chat Completions、Responses 或云厂商专有协议。</p>
+    <p>401：核对个人令牌是否被停用或轮换；503 且提示上游认证暂停：管理员重新填写、测试并激活上游凭据；429：按 Retry-After 等待；502/504：检查地址、证书、代理和超时。服务不会自动重放请求。</p>
+    <p>SSE 客户端应开启流式读取；如果经过额外反向代理，需要关闭代理缓冲。不要把上游账户令牌或 API 密钥发给使用者。</p>
+</section>

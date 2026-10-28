@@ -12,7 +12,7 @@
     @if (User.Identity?.IsAuthenticated == true)
     {
         <nav aria-label="管理导航">
-            <a asp-page="/Index">概览</a><a asp-page="/Users">使用者与令牌</a><a asp-page="/Settings">项目设置</a>
+            <a asp-page="/Index">概览</a><a asp-page="/Users">使用者与令牌</a><a asp-page="/Settings">项目设置</a><a asp-page="/Upstream">上游接入</a><a asp-page="/Https">HTTPS 入口</a><a asp-page="/Connection">连接说明</a>
             <form method="post" asp-page="/Logout"><button class="subtle" type="submit">退出登录</button></form>
         </nav>
     }
