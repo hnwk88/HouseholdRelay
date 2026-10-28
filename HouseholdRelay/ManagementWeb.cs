@@ -4,6 +4,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.RateLimiting;
 
 namespace HouseholdRelay;
@@ -64,11 +65,14 @@ public static class ManagementWeb
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
-                HttpMethods.IsPost(context.Request.Method) && (context.Request.Path.Equals("/Login", StringComparison.OrdinalIgnoreCase)
-                    || context.Request.Path.Equals("/Setup", StringComparison.OrdinalIgnoreCase))
-                ? RateLimitPartition.GetFixedWindowLimiter(context.Request.Path.Value!.ToLowerInvariant(), _ => new FixedWindowRateLimiterOptions
+            {
+                // UseRouting 已匹配页面；同一页面的大小写、尾斜杠和其他有效别名必须共用预算。
+                var page = context.GetEndpoint()?.Metadata.GetMetadata<PageActionDescriptor>()?.ViewEnginePath;
+                return HttpMethods.IsPost(context.Request.Method) && page is "/Login" or "/Setup"
+                ? RateLimitPartition.GetFixedWindowLimiter(page, _ => new FixedWindowRateLimiterOptions
                     { PermitLimit = 5, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })
-                : RateLimitPartition.GetNoLimiter("other"));
+                : RateLimitPartition.GetNoLimiter("other");
+            });
             options.OnRejected = async (context, cancellation) =>
             {
                 context.HttpContext.Response.Headers.RetryAfter = "60";

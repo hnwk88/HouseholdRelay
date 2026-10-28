@@ -30,6 +30,11 @@ var tests = new (string Name, Func<Task> Test)[]
     ("concurrent management commits and stable user limits", FoundationTests.ConcurrentWrites),
     ("failed permission writes do not publish partial revocation", FoundationTests.PermissionFailure),
     ("web bootstrap, authentication, CSRF, host and origin boundaries", FoundationTests.WebSecurity),
+    ("web rate limit blocks setup aliases after canonical attempts", () => FoundationTests.WebRateLimitAliases(setup: true, alternating: false)),
+    ("web rate limit blocks login aliases after canonical attempts", () => FoundationTests.WebRateLimitAliases(setup: false, alternating: false)),
+    ("web rate limit shares setup budget across alternating aliases", () => FoundationTests.WebRateLimitAliases(setup: true, alternating: true)),
+    ("web rate limit shares login budget across alternating aliases", () => FoundationTests.WebRateLimitAliases(setup: false, alternating: true)),
+    ("web rate limit permits fifth attempt and keeps page budgets separate", FoundationTests.WebRateLimitValidAttempts),
     ("database token revocation at queue and upload boundaries", FoundationTests.Revocation)
 };
 var failures = 0;
