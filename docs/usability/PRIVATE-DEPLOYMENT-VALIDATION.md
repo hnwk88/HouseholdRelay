@@ -1,8 +1,10 @@
 ﻿# 私人部署验证记录
 
-验证日期：2026-10-29，Windows x64、.NET SDK 10.0.302、Edge 156.0.4314.50、原生 Claude Code 2.1.311。实现基于 e3926b8。
+验证日期：2026-10-29，Windows x64、.NET SDK 10.0.302、Edge 156.0.4314.50、原生 Claude Code 2.1.311。最终实现提交为 d36f301（承接 e3926b8）。
 
-**当前尚未完成最终交付。** 实现、57 项模拟回归、三组网页旅程和两家真实 API 的客户端 HTTPS 验证已经完成。Windows 当前用户根信任安装要求操作者在系统安全窗口确认；两次等待均到期，未完成该安装和安装后的真实浏览器 HTTPS 验证。订单保持实施中，不以客户端 CA 文件测试代替系统信任安装。
+**最终交付条件已完成（完整模式复核通过）。** 实现、57 项模拟回归、三组网页旅程和两家真实 API 的 HTTPS 验证已经完成。用户在 Windows 安全确认窗口核对并完成了当前用户根信任安装，随后完整模式复核通过；订单可交回待验收。此前两次等待超时仍作为失败记录保留，不能替代本次成功证据。
+
+最终完整模式运行结果保存在 `artifacts/private-deployment/real-system-check/real-upstream-results.json`。本轮 CA SHA-256 为 `B7A3100E0E2D8A0CBE5FE430CE07F716ED5955567D58077E10C2142215004E0C`；系统 TLS 状态为 200，重复安装通过，Edge 信任通过，原生 Claude Code 2.1.311 的 JSON、SSE、Read/tool_result、切换、重启、轮换和停用均通过，收尾已恢复用户信任环境（`trust_restored: true`）。
 
 ## 实现范围
 
@@ -23,16 +25,18 @@
 | API/账户切换、凭据失效恢复、PFX 拒绝、私有 CA 页面 | 无窗口真实 Edge、本机模拟 | 通过；含标签、键盘、等待状态、复制和 390px 布局 |
 | 已知/未知/金额、小时与区间、归属、停用、意外退出恢复 | 无窗口真实 Edge、本机模拟 | 通过，含可复查 SQLite 夹具 |
 | 未信任根、错误根/名称、过期证书 | 实际 TLS 与启动验证 | 拒绝；保持正常链、名称、时间和用途校验 |
-| 两家 API 的网页接入、JSON/SSE、工具、切换、重启 | 真实上游、私有 CA HTTPS、原生客户端 | 通过，客户端进程指定 CA 文件；见下表 |
+| 两家 API 的网页接入、JSON/SSE、工具、切换、重启 | 真实上游、私有 CA HTTPS、原生客户端 | 通过；最终完整模式使用系统信任，见下表和 `real-system-check/` |
 | 两人并发、四类 Token、轮换、停用 | 真实上游 HTTPS | 归属和 Token 与响应一致；两家费用均未知 |
-| Windows 系统根安装及安装后 Edge 信任 | 系统操作 | **未完成**：Windows 根证书确认等待到期 |
+| Windows 系统根安装及安装后 Edge 信任 | 系统操作 | **通过**：系统 TLS 200，Edge 无忽略证书错误访问成功，重复安装和清理通过 |
 | 真实官方账户、公网域名/映射、其他操作系统 | 尚未执行 | 按私人使用决定后置，不宣称已验证 |
 
 完整回归包括：账户/API 协议、响应及 SSE/头秘密标记、越权、首次设置抢占、CSRF、限流、取消、错误、累计/部分/缺失用量、两人并发、数据库锁与不可写、新旧数据迁移、正常停服排空、异常退出、UTC 40 天边界、每小时及离线跨期清理、分页和查询索引。负载样本为 48 个并发请求加 10 次管理读写，实测 1316 ms；一万条历史记录按批清理，个人查询命中 usage_user_time。该样本不是长期生产性能保证。
 
 ## 两家真实 API 与客户端 HTTPS
 
-这次使用发布程序和独立数据目录，网页完成首次设置、私有证书创建、两人令牌、候选测试和激活。模型为 claude-opus-5-5。下游实际连接为 HTTPS 回环地址，证书来自本次网页生成的私有 CA；Claude Code 通过 NODE_EXTRA_CA_CERTS 指向公共根，Node 请求使用同一根校验。未关闭校验，未使用测试伪造的系统信任。
+这次使用发布程序和独立数据目录，网页完成首次设置、私有证书创建、两人令牌、候选测试和激活。模型为 claude-opus-5-5。下游实际连接为 HTTPS 回环地址，证书来自本次网页生成的私有 CA；最终完整模式先完成 Windows 当前用户系统根信任，再由 Edge、Node 和 Claude Code 通过正常证书链校验。未关闭校验，未使用测试伪造的系统信任。
+
+此前的客户端专用 CA 文件运行仍保留在 `artifacts/private-deployment/real/`，用于记录人工确认前的隔离证据；本次 `real-system-check/` 才是系统信任、Edge 和实际客户端的完整模式证据。
 
 | 提供商与配置 | 请求 | 输入 / 输出 | 缓存读 / 写 | 持久化结果 |
 | --- | --- | --- | --- | --- |
@@ -64,7 +68,7 @@
 
 ## 发布与复现
 
-自包含 Windows x64 候选发布目录为 artifacts/private-deployment/windows-x64/。它带 .NET 运行时、静态网页和私人部署说明；不是含数据或凭据的实例备份。当前仍须完成上述系统安装实测后才能交回待验收。
+自包含 Windows x64 候选发布目录为 artifacts/private-deployment/windows-x64/。它带 .NET 运行时、静态网页和私人部署说明；不是含数据或凭据的实例备份。系统安装实测和完整模式复核已完成，可交回待验收。
 
 ```powershell
 [Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'BelowNormal'
@@ -84,8 +88,8 @@ node HouseholdRelay.Tests/usage-browser.cjs artifacts/private-deployment/windows
 dotnet artifacts/private-deployment/regression/bin/HouseholdRelay.Tests/release/HouseholdRelay.Tests.dll --real-upstream-browser artifacts/upstream-compatibility-20261028/relay-opus-proxy-preflight.json artifacts/upstream-compatibility-20261028/sftoken-api-key-relay.json artifacts/private-deployment/windows-x64/HouseholdRelay.dll artifacts/private-deployment/real-system-check
 ```
 
-完整模式需要操作者在 Windows 安全窗口核对本次 CA 并确认，然后自动检测系统 TLS、无忽略证书错误的 Edge、实际客户端和真实 API，结束恢复原用户信任与环境。仅独立检查客户端文件信任时在末尾加 `--client-only`，输出将明确把系统安装和浏览器信任标为未执行，不能用该模式替代完整模式。
+完整模式命令需要操作者在 Windows 安全窗口核对本次 CA 并确认，然后自动检测系统 TLS、无忽略证书错误的 Edge、实际客户端和真实 API，结束恢复原用户信任与环境。本次完整模式已通过，结果见 `artifacts/private-deployment/real-system-check/`。仅独立检查客户端文件信任时在末尾加 `--client-only`，输出会明确把系统安装和浏览器信任标为未执行，不能用该模式替代完整模式。
 
 窗口边界和数据库故障复现入口见 USAGE-VALIDATION.md。当前浏览器夹具在 artifacts/private-deployment/usage-browser/usage-fixture.db，原始输出和截图在各流程目录。已目视检查私有证书桌面页、390px 连接页与个人页；页面内容无截断，表格在独立区域横向滚动。
 
-L1 复查为 passed / ALL_PASSED，0 错误、0 提醒，运行标识 ea5b2e9d01ae489b889de70d628cb7b8。该结果仅是工程门禁结论，不表示尚未执行的 Windows 根信任流程已完成。
+L1 强制复查为 `passed / ALL_PASSED`，0 个错误、0 个提醒，运行标识 `b49faaee6ee24817812b4b560cea68ce`；最终完整模式结果另见 `real-system-check/real-upstream-results.json`。工程门禁结论与真实系统信任证据分别记录，不能互相替代。

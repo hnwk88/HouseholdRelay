@@ -31,4 +31,8 @@
 
 Windows 根信任确认的第二次等待也已到期；未把等待当成通过。已完成不依赖系统根安装的独立客户端 CA 文件验证：两家真实 API 经产品 HTTPS 完成原生 Claude Code 2.1.311、JSON/SSE、两人并发归属、四类 Token 逐项比对、Read/tool_result、切回、重启、轮换和停用。两家费用均保持未知。真实测试、临时服务、系统测试根及用户环境都已清理。完整结果及失败记录见 PRIVATE-DEPLOYMENT-VALIDATION.md；脱敏证据归档到 docs/usability/evidence/。
 
-剩余硬条件仅为完成 Windows 系统根信任安装的人工确认，以及随后通过完整模式验证系统 TLS、Edge 与客户端一次性安装过程。已向用户说明确认来自 Windows 安全机制并请求系统操作，未收到完成答复；没有改为待验收。下一步在用户能操作系统确认窗口时运行完整真实脚本，不扩大到官方账户或公网部署。
+此前剩余的硬条件是 Windows 系统根信任安装的人工确认，以及随后通过完整模式验证系统 TLS、Edge 与客户端一次性安装过程；这些内容已作为历史等待记录保留。用户完成 Windows 安全确认后，完整模式已重新运行并通过：系统 TLS 状态 200、Edge 信任通过、原生 Claude Code 2.1.311 的两家真实 API JSON/SSE/Read/tool_result、切换、重启、轮换和停用均通过，最终清理已恢复用户信任环境。脱敏结果见 `artifacts/private-deployment/real-system-check/real-upstream-results.json`，部署验证说明见 `PRIVATE-DEPLOYMENT-VALIDATION.md`。真实官方账户与公网部署继续后置。
+
+## 最终交付状态
+
+订单 63 的私人试运行范围已完成，发布包、部署/恢复文档和完整模式证据齐备。两家真实 API 的费用均保持未知，未把未知金额写成零；首轮失败、隔离复核和本次完整成功均保留。现可交回总监独立验收。
