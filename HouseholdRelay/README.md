@@ -65,6 +65,7 @@
 - 默认全局并发 2、每人 1、最多排队 16、每人每分钟 120 次。限流和并发绑定不可变使用者 ID，改名或轮换不能重置它们。
 - SSE 按完整事件即时刷新、取消释放资源；不自动重放，不跟随上游跳转。429 冷却和 401/403 暂停归属对应上游版本；网页测试并激活新凭据后恢复，旧请求的迟到错误不污染新版本。
 - 账户模式使用 Bearer，Anthropic 预设添加 OAuth beta；兼容中转按明确选项选择。API 默认 x-api-key，也可显式选择 Bearer，不携带 OAuth beta、不改账户设备元数据。
+- API 模式保留客户端的有效 User-Agent；账户模式仍使用部署设置中的统一 User-Agent。这样可保留上游要求的原生客户端请求特征。
 - 根 URL、结尾 /v1 和自定义路径前缀均可配置；前缀保留，/v1 只添加一次。非认证 query 保留，下游 query 随后追加；相同参数允许重复，按原顺序传给上游，不猜测覆盖语义。配置地址禁止内嵌凭据及认证 query。
 - 默认 HTTPS 并验证证书。回环/RFC1918/IPv6 唯一本地地址须显式允许，HTTP 只接受这些范围；DNS 解析后检查并按验证 IP 建连。可选本机/私网 HTTP CONNECT 代理与 API 地址分开，代理 URL 不支持用户名密码或 HTTPS。
 - 响应头只返回必要 request-id、retry-after、x-should-retry 和 Anthropic 限流头；不返回 Cookie 或未知敏感头。JSON 和 SSE 事件内替换当前上游凭据及其 URL/base64 表示，保留正常错误类型和消息的其余内容；非 JSON 错误换为安全错误说明。
@@ -74,6 +75,10 @@
 ## 上游与证书的使用边界
 
 只有有效 Anthropic Messages 回复才算最小调用成功。连通、模型目录返回或单独 HTTP 200 都不能通过激活检查；缺少模型目录时可以填写模型并完成实际调用。诊断不改变活动版本的暂停/冷却，不计入个人业务流量。上游密钥不回填，过期时间未知，不自动续期。两个浏览器同时更改活动配置时，旧候选激活会提示冲突。
+
+默认“标准 Messages”检测不需要安装 Claude Code。部分兼容中转只接受原生客户端请求：如果同一配置在 Claude Code 可用，但标准检测返回 400，可显式选择“Claude Code 实际调用”，重新保存候选后测试。这一选项需要服务所在电脑安装原生 Claude Code；它在独立目录禁用工具进行一次真实调用，上游凭据留在中转进程内，出站仍使用候选配置的代理及 TLS 校验。检测失败不会自动改认证或重放生成请求。通过只证明 Claude Code 场景，连接说明会提示普通 curl 请求可能仍被上游拒绝。
+
+已实测 `https://aitoll.net/v1/cc` 使用 API/Bearer/Claude Code 检测，`https://api.sftoken.top` 使用 API/x-api-key/标准检测，模型均为 `claude-opus-5-5`。两家均完成网页接入、JSON/SSE、原生工具会话、切换及重启后调用；适用范围及复现见[兼容性整改验证](../docs/usability/UPSTREAM-REWORK-VALIDATION.md)。
 
 PFX 导入验证私钥、域名 SAN、有效期、服务器用途、系统证书链与吊销状态；私钥由 DPAPI 保存，密码不保存。证书无法验证时保留本机管理入口，并拒绝启用该可信 HTTPS 入口。导入不会替客户端安装根证书；旧私有 CA 明确保留为需要额外信任的旧模式。本期选择直接 TLS 终止，不提供管理反向代理配置和受信代理头入口。
 
@@ -89,4 +94,4 @@ dotnet publish HouseholdRelay -c Release --self-contained false -o artifacts/Hou
 
 运行时使用 `Microsoft.Data.Sqlite 10.0.6`；Razor Pages、密码哈希、Cookie 和 CSRF 使用 ASP.NET Core 自带组件，不引入前端构建链。测试为自定义 .NET 测试程序；真实 Claude Code 用例使用本机模拟上游。浏览器测试使用 Playwright 和无窗口 Edge，证据见 [管理与持久化验证](../docs/usability/FOUNDATION-VALIDATION.md) 与 [上游接入验证](../docs/usability/UPSTREAM-VALIDATION.md)。
 
-本次不包含真实账户/API 模型调用或公网验证，也未完成全部易用性需求。
+已补充两家真实 API 中转的调用验证；真实账户 OAuth 和公网可信 HTTPS 仍未实测，全部易用性需求尚未完成。

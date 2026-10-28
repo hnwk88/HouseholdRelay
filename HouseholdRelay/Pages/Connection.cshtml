@@ -3,6 +3,8 @@
 @{ ViewData["Title"] = "连接说明"; }
 <p class="eyebrow">统一调用</p><h1>地址与个人令牌</h1>
 <p>客户端协议选择 Anthropic Messages。账户/API 模式切换不需要使用者更换中转地址或个人令牌。</p>
+@if (Model.ClaudeCodeOnly)
+{ <p class="notice">当前上游已用 Claude Code 实际调用验证。此类上游可能拒绝通用 API 请求；请使用 Claude Code。下面的 curl 示例仅说明个人令牌的认证写法，不表示该上游接受这些简短请求。</p> }
 <p class="notice">@Model.HttpsStatus 保存地址不会自动建立公网映射，请从实际客户端验证连接。</p>
 <section class="card"><h2>连接信息</h2><p>根地址：<code id="relay-root">@(Model.RootUrl.Length == 0 ? "尚未填写" : Model.RootUrl)</code></p>
     @if (Model.RootUrl.Length > 0) { <button type="button" data-copy="relay-root">复制根地址</button><span class="copy-status" role="status"></span> }

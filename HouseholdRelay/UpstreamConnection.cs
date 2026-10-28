@@ -48,7 +48,11 @@ public sealed class UpstreamConnection : IDisposable
                     || header.Key.StartsWith("x-forwarded-", StringComparison.OrdinalIgnoreCase) || header.Key.StartsWith("x-stainless-", StringComparison.OrdinalIgnoreCase)) continue;
                 if (!request.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray())) request.Content.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
             }
-        request.Headers.TryAddWithoutValidation("User-Agent", userAgent); request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
+        // API 上游可能校验客户端请求特征；账户模式仍统一使用部署配置的身份。
+        var clientAgent = headers?["User-Agent"].ToString();
+        var forwardedAgent = options.Mode == "api-key" && !connectionHeaders.Contains("User-Agent")
+            && clientAgent is { Length: > 0 and <= 256 } && !clientAgent.Any(char.IsControl) ? clientAgent : userAgent;
+        request.Headers.TryAddWithoutValidation("User-Agent", forwardedAgent); request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
         if (!request.Headers.Contains("anthropic-version")) request.Headers.Add("anthropic-version", "2023-06-01");
         var betas = (headers?["anthropic-beta"].ToString() ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(value => options.Mode == "oauth" && options.OAuthBeta || !value.StartsWith("oauth-", StringComparison.OrdinalIgnoreCase));

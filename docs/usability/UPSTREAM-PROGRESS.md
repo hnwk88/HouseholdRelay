@@ -31,7 +31,7 @@ Razor Pages 已增加上游接入、可信证书导入和连接说明，概览�
 
 真实 Edge 156.0.4314.50 无窗口新增网页旅程已跑通：从干净目录网页录入两种凭据并测试/激活，JSON/SSE 调用、账户失效后暂停及网页重新接入恢复、重启、无效 PFX 拒绝、连接示例不回填秘密及 390px 窄屏。证据在 artifacts/usability-upstream/。隔离原生 Claude Code 2.1.311 仅设置地址和个人令牌两个连接变量，未使用旧包或 CA 文件，实际完成 Read 工具回合；本次为本机 HTTP，不冒充可信公网 HTTPS。
 
-用户尚未回复真实上游/域名/证书条件。实现和本地验证继续推进，真实账户与 API 调用、系统直接信任的公网 HTTPS 两项配置联调仍明确未实测。待完成最终全量回归、发布后的浏览器复核、页面目视检查和文档，提交后交回待验收。
+首次实施阶段尚未取得真实材料；之后用户已提供两家 API 中转，且本次整改已完成两家真实调用。首次实施时的本地验证记录保留如下，最新证据见 UPSTREAM-REWORK-VALIDATION.md。真实账户 OAuth 与公网可信 HTTPS 仍未实测。
 
 ## 交付前验证
 
@@ -39,4 +39,4 @@ Razor Pages 已增加上游接入、可信证书导入和连接说明，概览�
 
 完整测试曾暴露同名私有 CA 的证书链歧义，补齐签发者密钥标识及旧实例配套链后通过；失败过程日志保留。最终产物的基础浏览器旅程和新增上游旅程均通过；新增七张截图及基础窄屏已目视核对，HTTP 检测明确显示“未使用 TLS”，没有把本地 HTTP 标为 TLS 成功。
 
-README 和 docs/usability/UPSTREAM-VALIDATION.md 已包含命令、状态合同、网络/证书边界、独立反例和未实测项。全部证据位于 artifacts/usability-upstream/。下一步执行提交门禁、提交本次代码与文档并记录标识，交回待验收；真实上游与公网条件未提供的验收项保留为未实测，不宣称整单外部验收已通过。
+首次实施的命令、状态合同、网络/证书边界、独立反例和证据位于 docs/usability/UPSTREAM-VALIDATION.md 与 artifacts/usability-upstream/。后续整改已更新 README、补充两家真实 API 调用和 39 项回归，最新进度及完整结果分别见 UPSTREAM-REWORK-PROGRESS.md、UPSTREAM-REWORK-VALIDATION.md；真实账户 OAuth 与公网可信 HTTPS 继续列为未关闭项目，不宣称整单外部验收已通过。

@@ -32,7 +32,7 @@ internal static class UpstreamProbe
                         if (body.RootElement.ValueKind == JsonValueKind.Object && body.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
                         {
                             models = data.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object && item.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
-                                .Select(item => item.GetProperty("id").GetString()!).Where(model => SafeModel(model, snapshot.Credential!)).Distinct().Take(100).ToArray();
+                                .Select(item => item.GetProperty("id").GetString()!).Where(model => ProbeMessage.SafeModel(model, snapshot.Credential!)).Distinct().Take(100).ToArray();
                             discovery = "passed"; authentication = "passed";
                         }
                         else discovery = "unsupported";
@@ -41,34 +41,36 @@ internal static class UpstreamProbe
                 }
                 else discovery = "failed";
             }
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(new { model = snapshot.Options.Model, max_tokens = 16, stream = false,
-                messages = new[] { new { role = "user", content = "Reply with OK." } } });
-            using var call = transport.Request("/v1/messages", "", bytes, "POST", "HouseholdRelay/1.0");
-            call.Content!.Headers.ContentType = new("application/json");
-            using var result = await transport.Send(call, timeout.Token);
-            if (result.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            var result = snapshot.Options.Diagnostic == "claude-code" ? await ClaudeCodeProbe.Run(transport, timeout.Token)
+                : await StandardCall(transport, timeout.Token);
+            if (result.Status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             { authentication = "reconnect"; return Result("failed", "最小模型调用的凭据被拒绝，请重新接入。"); }
-            if (result.StatusCode == HttpStatusCode.TooManyRequests) return Result("cooldown", "最小模型调用受到上游限流，请稍后重新测试。");
-            if (!result.IsSuccessStatusCode) return Result("failed", $"最小模型调用返回 HTTP {(int)result.StatusCode}，请检查模型权限和上游配置。");
-            await using var content = await result.Content.ReadAsStreamAsync(timeout.Token);
-            using var message = JsonDocument.Parse(await UpstreamResponses.ReadBounded(content, 1024 * 1024, timeout.Token));
-            var root = message.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String || type.GetString() != "message"
-                || !root.TryGetProperty("role", out var role) || role.ValueKind != JsonValueKind.String || role.GetString() != "assistant"
-                || !root.TryGetProperty("id", out var messageId) || messageId.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(messageId.GetString())
-                || !root.TryGetProperty("content", out var blocks) || blocks.ValueKind != JsonValueKind.Array
-                || !root.TryGetProperty("model", out var returnedModel) || returnedModel.ValueKind != JsonValueKind.String || !SafeModel(returnedModel.GetString()!, snapshot.Credential!))
+            if (result.Status == HttpStatusCode.TooManyRequests) return Result("cooldown", "最小模型调用受到上游限流，请稍后重新测试。");
+            if ((int)result.Status is < 200 or >= 300) return Result("failed", $"最小模型调用返回 HTTP {(int)result.Status}，请检查模型权限和上游配置。若仅 Claude Code 能调用，可选择实际客户端检测；本次未自动重试。");
+            verifiedModel = ProbeMessage.Read(result.Body, result.Streaming, snapshot.Credential!);
+            if (verifiedModel is null)
                 return Result("failed", "上游未返回有效的 Anthropic Messages 回复，不能标记调用成功。");
-            verifiedModel = returnedModel.GetString(); authentication = "passed";
-            return Result("passed", "最小模型调用成功。此检测为管理员诊断，不计入个人业务用量；凭据到期时间未知。");
+            authentication = "passed";
+            return Result("passed", "最小模型调用成功。" + (snapshot.Options.Diagnostic == "claude-code" ? "已验证 Claude Code 实际会话；通用 API 请求是否被接受取决于上游。" : "")
+                + "此检测为管理员诊断，不计入个人业务用量；凭据到期时间未知。");
         }
         catch (OperationCanceledException) { return Result(cancellation.IsCancellationRequested ? "cancelled" : "failed", "检测已取消或超时，候选未激活。"); }
         catch (HttpRequestException) { connection = "failed"; return Result("failed", "连接或 TLS 校验失败，请检查地址、端口、证书及代理范围。"); }
         catch (RelayFailure error) { return Result("failed", error.Status == 502 ? "上游返回跳转、过大或不支持的响应，候选未激活。" : "上游检测失败。"); }
         catch (JsonException) { return Result("failed", "最小调用返回的 JSON 无效，候选未激活。"); }
         catch (IOException) { return Result("failed", "上游响应中断，候选未激活。"); }
+        catch (InvalidOperationException) { return Result("failed", "Claude Code 检测未完成，请确认本机已安装可用的原生客户端；普通 API 可选择标准 Messages 检测。候选未激活。"); }
+        catch (System.ComponentModel.Win32Exception) { return Result("failed", "无法启动本机 Claude Code，候选未激活。"); }
     }
 
-    private static bool SafeModel(string model, string secret) => model.Length is > 0 and <= 200
-        && model.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' or '/' or ':') && UpstreamResponses.Redact(model, secret) == model;
+    private static async Task<ClaudeCodeProbe.Reply> StandardCall(UpstreamConnection transport, CancellationToken cancellation)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new { model = transport.Snapshot.Options.Model, max_tokens = 16, stream = false,
+            messages = new[] { new { role = "user", content = "Reply with OK." } } });
+        using var call = transport.Request("/v1/messages", "", bytes, "POST", "HouseholdRelay/1.0");
+        call.Content!.Headers.ContentType = new("application/json");
+        using var result = await transport.Send(call, cancellation);
+        await using var content = await result.Content.ReadAsStreamAsync(cancellation);
+        return new(result.StatusCode, await UpstreamResponses.ReadBounded(content, 1024 * 1024, cancellation), result.Content.Headers.ContentType?.MediaType == "text/event-stream");
+    }
 }

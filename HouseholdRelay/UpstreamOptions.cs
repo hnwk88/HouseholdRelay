@@ -13,9 +13,11 @@ public sealed record UpstreamOptions
     public bool AllowPrivateNetwork { get; init; }
     public string? ProxyUrl { get; init; }
     public string Model { get; init; } = "";
+    public string Diagnostic { get; init; } = "messages";
 
     public UpstreamOptions Validated()
     {
+        if (Diagnostic is not ("messages" or "claude-code")) throw new InvalidOperationException("请选择支持的调用检测方式。");
         if (Preset is not ("anthropic" or "compatible") || Mode is not ("oauth" or "api-key") || Authentication is not ("bearer" or "x-api-key")
             || Mode == "oauth" && Authentication != "bearer" || Mode == "api-key" && OAuthBeta)
             throw new InvalidOperationException("账户模式使用 Bearer；API 模式不可附加账户 OAuth beta。");

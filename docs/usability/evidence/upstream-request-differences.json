@@ -1,0 +1,308 @@
+﻿[
+    {
+        "client_version":  "claude-cli/2.1.311 (external, sdk-cli)",
+        "native_path":  "/v1/messages?beta=true",
+        "native_header_names":  [
+                                    "Accept",
+                                    "Connection",
+                                    "Host",
+                                    "User-Agent",
+                                    "Accept-Encoding",
+                                    "Content-Type",
+                                    "Content-Length",
+                                    "X-Claude-Code-Session-Id",
+                                    "X-Stainless-Arch",
+                                    "X-Stainless-Lang",
+                                    "X-Stainless-OS",
+                                    "X-Stainless-Package-Version",
+                                    "X-Stainless-Retry-Count",
+                                    "X-Stainless-Runtime",
+                                    "X-Stainless-Runtime-Version",
+                                    "X-Stainless-Timeout",
+                                    "anthropic-beta",
+                                    "anthropic-dangerous-direct-browser-access",
+                                    "anthropic-version",
+                                    "x-app"
+                                ],
+        "native_body_keys":  [
+                                 "model",
+                                 "messages",
+                                 "system",
+                                 "tools",
+                                 "metadata",
+                                 "max_tokens",
+                                 "thinking",
+                                 "context_management",
+                                 "output_config",
+                                 "stream"
+                             ],
+        "native_max_tokens":  128000,
+        "native_stream":  true,
+        "results":  [
+                        {
+                            "name":  "baseline",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "f584ff24-5d03-4388-a67b-1109e96b4e60"
+                        },
+                        {
+                            "name":  "native-agent-only",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "ed07e2c1-d5a7-43b2-a960-d1234b0a34d3"
+                        },
+                        {
+                            "name":  "native-headers-minimal-body",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "f743943a-cfe1-40fa-b21e-b3e7b9d3f8cf"
+                        },
+                        {
+                            "name":  "native-body-and-headers",
+                            "status":  200,
+                            "stream":  true,
+                            "complete":  true,
+                            "type":  null,
+                            "error_type":  null,
+                            "error_code":  null,
+                            "usage":  null,
+                            "request_id":  null
+                        },
+                        {
+                            "name":  "max-tokens-1024",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "6853ea59-0e11-4940-b458-3475cd6caab5"
+                        }
+                    ]
+    },
+    {
+        "client_version":  "claude-cli/2.1.311 (external, sdk-cli)",
+        "native_path":  "/v1/messages?beta=true",
+        "native_header_names":  [
+                                    "Accept",
+                                    "Connection",
+                                    "Host",
+                                    "User-Agent",
+                                    "Accept-Encoding",
+                                    "Content-Type",
+                                    "Content-Length",
+                                    "X-Claude-Code-Session-Id",
+                                    "X-Stainless-Arch",
+                                    "X-Stainless-Lang",
+                                    "X-Stainless-OS",
+                                    "X-Stainless-Package-Version",
+                                    "X-Stainless-Retry-Count",
+                                    "X-Stainless-Runtime",
+                                    "X-Stainless-Runtime-Version",
+                                    "X-Stainless-Timeout",
+                                    "anthropic-beta",
+                                    "anthropic-dangerous-direct-browser-access",
+                                    "anthropic-version",
+                                    "x-app"
+                                ],
+        "native_body_keys":  [
+                                 "model",
+                                 "messages",
+                                 "system",
+                                 "tools",
+                                 "metadata",
+                                 "max_tokens",
+                                 "thinking",
+                                 "context_management",
+                                 "output_config",
+                                 "stream"
+                             ],
+        "native_max_tokens":  128000,
+        "native_stream":  true,
+        "results":  [
+                        {
+                            "name":  "native-body-relay-agent",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "15c3d6a9-e841-4c02-a5ec-fa9c9d1caadc"
+                        },
+                        {
+                            "name":  "native-without-system",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "fb9369c2-e159-4dc5-9f1c-e416b37eaaeb"
+                        },
+                        {
+                            "name":  "native-without-metadata",
+                            "status":  200,
+                            "stream":  true,
+                            "complete":  true,
+                            "type":  null,
+                            "error_type":  null,
+                            "error_code":  null,
+                            "usage":  null,
+                            "request_id":  null
+                        },
+                        {
+                            "name":  "native-json",
+                            "status":  200,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  "message",
+                            "error_type":  null,
+                            "error_code":  null,
+                            "usage":  {
+                                          "input_tokens":  2,
+                                          "cache_creation_input_tokens":  373,
+                                          "cache_read_input_tokens":  1237,
+                                          "cache_creation":  {
+                                                                 "ephemeral_5m_input_tokens":  373,
+                                                                 "ephemeral_1h_input_tokens":  0
+                                                             },
+                                          "output_tokens":  5,
+                                          "output_tokens_details":  {
+                                                                        "thinking_tokens":  0
+                                                                    },
+                                          "service_tier":  "standard",
+                                          "inference_geo":  "global",
+                                          "speed":  "standard"
+                                      },
+                            "request_id":  null
+                        },
+                        {
+                            "name":  "minimal-streaming",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "ab6d91a2-2285-4afb-8460-334fcf21e20b"
+                        },
+                        {
+                            "name":  "minimal-native-system",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "c64c00ca-1dd1-4455-be96-110b2761e5ac"
+                        }
+                    ]
+    },
+    {
+        "client_version":  "claude-cli/2.1.311 (external, sdk-cli)",
+        "native_path":  "/v1/messages?beta=true",
+        "native_header_names":  [
+                                    "Accept",
+                                    "Connection",
+                                    "Host",
+                                    "User-Agent",
+                                    "Accept-Encoding",
+                                    "Content-Type",
+                                    "Content-Length",
+                                    "X-Claude-Code-Session-Id",
+                                    "X-Stainless-Arch",
+                                    "X-Stainless-Lang",
+                                    "X-Stainless-OS",
+                                    "X-Stainless-Package-Version",
+                                    "X-Stainless-Retry-Count",
+                                    "X-Stainless-Runtime",
+                                    "X-Stainless-Runtime-Version",
+                                    "X-Stainless-Timeout",
+                                    "anthropic-beta",
+                                    "anthropic-dangerous-direct-browser-access",
+                                    "anthropic-version",
+                                    "x-app"
+                                ],
+        "native_body_keys":  [
+                                 "model",
+                                 "messages",
+                                 "system",
+                                 "tools",
+                                 "metadata",
+                                 "max_tokens",
+                                 "thinking",
+                                 "context_management",
+                                 "output_config",
+                                 "stream"
+                             ],
+        "native_max_tokens":  128000,
+        "native_stream":  true,
+        "results":  [
+                        {
+                            "name":  "minimal-native-system-agent",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "e7e3f0fa-d785-4579-9c9b-334362468298"
+                        },
+                        {
+                            "name":  "minimal-generic-system-agent",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "18a7be24-e01a-4b29-ad1f-18cf8ef112f9"
+                        },
+                        {
+                            "name":  "native-reduced-json",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "9714fb97-41a9-4138-97c5-9c2d9f27571f"
+                        },
+                        {
+                            "name":  "native-generic-system",
+                            "status":  400,
+                            "stream":  false,
+                            "complete":  false,
+                            "type":  null,
+                            "error_type":  "client_invalid_request",
+                            "error_code":  "client_request_rejected",
+                            "usage":  null,
+                            "request_id":  "2c149306-e059-4f81-bfd9-101197862a63"
+                        }
+                    ]
+    }
+]

@@ -13,10 +13,12 @@ public sealed class ConnectionModel(ConfigurationService settings, UpstreamServi
     public string Variables { get; private set; } = "";
     public string BearerExample { get; private set; } = "";
     public string ApiKeyExample { get; private set; } = "";
+    public bool ClaudeCodeOnly { get; private set; }
     public void OnGet()
     {
         RootUrl = settings.Read().Value.PublicUrl.TrimEnd('/');
         var active = upstreams.ReadActive();
+        ClaudeCodeOnly = active.Options.Diagnostic == "claude-code";
         if (active.Report?.CanActivate == true)
         { VerifiedModel = active.Report.VerifiedModel; RecommendedModel = active.Options.Model; Models = active.Report.Models; }
         var certificate = certificates.ReadInfo();

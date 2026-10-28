@@ -26,6 +26,8 @@
     <small>已有凭据不回填。秘密加密保存，不用于生成下游连接示例。</small>
     <label asp-for="Input.Model">要测试并推荐的模型</label><input asp-for="Input.Model" maxlength="200" required placeholder="填写你有权限调用的模型名称" />
     <small>模型目录不支持时仍可填写名称，以实际调用结果确认权限。</small>
+    <label asp-for="Input.Diagnostic">调用检测方式</label><select asp-for="Input.Diagnostic"><option value="messages">标准 Messages（无需安装客户端）</option><option value="claude-code">Claude Code 实际调用（需本机安装）</option></select>
+    <small>仅接受 Claude Code 请求的上游请选择实际客户端检测。通过后表示该客户端可调用，不代表通用 API 请求也被上游接受；检测禁用工具，仅发送简短测试文本。</small>
     <details><summary>网络与兼容设置</summary>
         <label class="checkbox"><input asp-for="Input.AllowPrivateNetwork" />允许连接本机或私网地址（包括 HTTP）</label>
         <small>HTTP 仅允许回环、RFC1918 私网或 IPv6 唯一本地地址；不接受链路本地地址。</small>

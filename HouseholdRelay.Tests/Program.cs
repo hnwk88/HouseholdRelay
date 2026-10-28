@@ -12,6 +12,8 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
+if (args.FirstOrDefault() == "--real-upstream-browser") return await RealUpstreamValidation.Run(args);
+
 var tests = new (string Name, Func<Task> Test)[]
 {
     ("device normalization preserves sessions and prompt bytes", Tests.Metadata),
@@ -40,6 +42,9 @@ var tests = new (string Name, Func<Task> Test)[]
     ("API key mode isolates account headers", UpstreamIntegrationTests.AuthenticationModes),
     ("upstream JSON and SSE responses redact secrets", UpstreamIntegrationTests.ResponseSanitization),
     ("upstream candidate test and atomic activation", UpstreamIntegrationTests.CandidateLifecycle),
+    ("restricted upstream requires explicit native diagnostic and preserves client requests", ClaudeCodeProbeTests.RestrictedUpstream),
+    ("native diagnostic rejects incomplete and error streams", ClaudeCodeProbeTests.StreamValidation),
+    ("native diagnostic cancellation releases its client and upstream", ClaudeCodeProbeTests.Cancellation),
     ("web directly configures, tests and activates an API upstream", UpstreamIntegrationTests.WebDirectConfiguration),
     ("upstream protocol modes, prefixes, query and restart persistence", UpstreamVersionTests.ProtocolModes),
     ("upstream version switch isolates old authentication failures", () => UpstreamVersionTests.VersionIsolation(401)),
