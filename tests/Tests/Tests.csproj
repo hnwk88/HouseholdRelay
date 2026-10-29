@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Core/Core.csproj" />
+    <ProjectReference Include="../../src/Application/Application.csproj" />
+    <ProjectReference Include="../../src/Infrastructure/Infrastructure.csproj" />
+    <ProjectReference Include="../../src/HouseholdRelay/HouseholdRelay.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Core.Configuration" />
+    <Using Include="Core.Identity" />
+    <Using Include="Core.Relay" />
+    <Using Include="Core.Upstream" />
+    <Using Include="Core.Usage" />
+    <Using Include="Core.Certificates" />
+    <Using Include="Application.Interfaces.Administration" />
+    <Using Include="Application.Interfaces.Certificates" />
+    <Using Include="Application.Interfaces.ClaudeCode" />
+    <Using Include="Application.Interfaces.Configuration" />
+    <Using Include="Application.Interfaces.Identity" />
+    <Using Include="Application.Interfaces.Relay" />
+    <Using Include="Application.Interfaces.Upstream" />
+    <Using Include="Application.Interfaces.Usage" />
+    <Using Include="Application.Services.Usage" />
+    <Using Include="Infrastructure.Persistence" />
+    <Using Include="Infrastructure.Security" />
+    <Using Include="Infrastructure.ExternalSources.Upstream" />
+    <Using Include="HouseholdRelay.Commands" />
+    <Using Include="HouseholdRelay.Management" />
+    <Using Include="HouseholdRelay.Relay" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+</Project>

@@ -9,11 +9,13 @@ tools/.gate-settings.lock
 .githooks/*.gate-engine.lock
 # <<< 门禁引擎
 
-# 本实例数据与可重建验证输出
+# 本实例数据与可重建验证输出（台账 D-006：大体积证据验收后即删，不进仓库）
 .state/
 .relay-instance
-artifacts/usability-foundation/
-artifacts/usability-upstream/
-artifacts/upstream-rework/
-artifacts/usage/
-artifacts/private-deployment/
+artifacts/
+
+# 编辑器与构建输出
+.vs/
+bin/
+obj/
+*.user

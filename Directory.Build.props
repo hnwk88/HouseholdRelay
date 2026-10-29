@@ -1,0 +1,17 @@
+﻿<Project>
+  <!--
+    所有项目统一继承这一份框架、编译开关与署名，避免主程序、各层和测试程序集各写一份后漂移（台账 D-005）。
+    警告一律当错误：门禁与验收都要求构建 0 警告 0 错误。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <Product>HouseholdRelay</Product>
+    <Authors>热心人AI工作室</Authors>
+    <Company>热心人AI工作室</Company>
+    <Copyright>Copyright © 2026 热心人AI工作室</Copyright>
+  </PropertyGroup>
+</Project>

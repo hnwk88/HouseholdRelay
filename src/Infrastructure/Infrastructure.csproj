@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 外部技术实现：SQLite、DPAPI、证书、上游 HTTP、Claude Code 进程（台账 D-005）。 -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.6" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Application/Application.csproj" />
+    <ProjectReference Include="../Core/Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tests" />
+    <!-- 清单资源名沿用迁移前的 HouseholdRelay.ClientTrust.文件名，ClientTrustPackage 按此名读取。 -->
+    <EmbeddedResource Include="Security/ClientTrust/*" LogicalName="HouseholdRelay.ClientTrust.%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

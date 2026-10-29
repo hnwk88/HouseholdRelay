@@ -1,0 +1,6 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 领域类型与纯规则：不引用任何项目和外部包（台账 D-005）。 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tests" />
+  </ItemGroup>
+</Project>

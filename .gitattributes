@@ -1,0 +1,2 @@
+# 这份测试里的原始字符串按 LF 写死了协议载荷，检出成 CRLF 会让断言失败；不论本机 core.autocrlf 怎么设都固定为 LF。
+tests/Tests/ClaudeCodeProbeTests.cs text eol=lf

@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- 网页、命令行入口与组合根；领域、用例与技术实现分别在 Core、Application、Infrastructure（台账 D-005）。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/Core.csproj" />
+    <ProjectReference Include="../Application/Application.csproj" />
+    <ProjectReference Include="../Infrastructure/Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tests" />
+    <Content Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../docs/usability/PRIVATE-DEPLOYMENT.md" Link="PRIVATE-DEPLOYMENT.md" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../docs/usability/PRIVATE-DEPLOYMENT-VALIDATION.md" Link="PRIVATE-DEPLOYMENT-VALIDATION.md" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
