@@ -63,7 +63,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
             return await Email(executable, directory, route, cancellation);
         }
         // 登录没成功就不留半截目录；异常原样交给调用方读出。
-        catch { Remove(directory); throw; }
+        catch { RemoveDirectory(directory); throw; }
     }
 
     /// <summary>读最新凭据；离到期不足 <see cref="RefreshMargin"/> 时在后台让 CLI 刷新，已过期时最多等 <see cref="RefreshWait"/> 后重读，刷新不成仍返回旧令牌，由上游的拒绝触发重新登录提示。</summary>
@@ -77,6 +77,9 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         refresh.Wait(RefreshWait);
         return Read(directory)?.AccessToken ?? credential.AccessToken;
     }
+
+    /// <summary>上游被删除时删掉它的账户目录；主键不合格式时拒绝，删不掉时放弃。</summary>
+    public void Remove(string accountId) => RemoveDirectory(Directory(accountId));
 
     /// <summary>同一账户同时只跑一次刷新，且两次之间至少隔 <see cref="RefreshInterval"/>；否则返回上一次的任务。</summary>
     private Task Refresh(string accountId, string directory)
@@ -170,8 +173,8 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         return Path.Combine(instance.State, "official-accounts", accountId);
     }
 
-    /// <summary>删除登录失败留下的账户目录；删不掉时放弃，残留的只是一个没有凭据或未被任何上游引用的目录。</summary>
-    private static void Remove(string directory)
+    /// <summary>删除登录失败留下的、或所属上游已删除的账户目录；删不掉时放弃，残留的只是一个没有凭据或未被任何上游引用的目录。</summary>
+    private static void RemoveDirectory(string directory)
     {
         try { if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, true); }
         // 文件被占用：放弃清理，不掩盖登录失败的真实原因。

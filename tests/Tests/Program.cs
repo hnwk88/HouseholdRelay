@@ -67,6 +67,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("new instance upstream page defaults to the API supplier", UpstreamDetectionTests.NewInstanceDefaults),
     ("official account login isolates its config, names by email and forwards refreshed tokens", OfficialLoginTests.LoginRefreshAndForwarding),
     ("official account login cancel, missing credentials and missing Claude Code leave nothing behind", OfficialLoginTests.LoginFailures),
+    ("slow official token read waits outside the upstream pool lock", OfficialLoginTests.SlowTokenReadOutsidePoolLock),
+    ("upstream 5xx reads as network exit refusal; rediscover reuses the stored key; delete refuses active and testing", UpstreamDetectionTests.UnavailableRediscoverAndDelete),
     ("global proxy none, manual and auto states; unavailable proxy refuses", ProxySettingsTests.ThreeStates),
     ("enabled but unavailable proxy refuses relay and model discovery without dispatch", ProxySettingsTests.RefusedWhenUnavailable),
     ("child process proxy variables are cleared before writing", ProxySettingsTests.ChildEnvironment),

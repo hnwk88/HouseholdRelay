@@ -1,48 +1,24 @@
 ﻿using System.Diagnostics;
-using System.Text;
 using System.Text.Json;
-using HouseholdRelay;
-using Microsoft.Data.Sqlite;
 
 namespace Tests;
 
-/// <summary>仅显式调用时复用本项目预检 DPAPI 材料，通过管道交给真实浏览器验证，不输出凭据。</summary>
+/// <summary>仅显式调用时，取与真实探测相同的两家上游材料，通过管道交给真实浏览器做私有 HTTPS、原生客户端、用量与重启的完整验证，不输出凭据。</summary>
 static class RealUpstreamValidation
 {
     /// <summary>
-    /// 仅在命令行首参为 --real-upstream-browser 时运行的真实上游验证入口：参数为两份预检清单、发布 DLL 和证据目录，可选 --client-only。
-    /// 只从本项目专用临时目录的预检数据库中按主机名取出候选配置，用 DPAPI 解密凭据，经标准输入交给 Node 浏览器脚本，
-    /// 凭据不写入命令行或输出；返回浏览器脚本的退出码。
+    /// 仅在命令行首参为 --real-upstream-browser 时运行的真实上游验证入口：参数为材料来源（现有实例的 relay.db 或经用户同意的 MyCoAI account-vault.json）、
+    /// 发布 DLL 和证据目录，可选 --client-only。材料按 <see cref="RealDetectionValidation.Providers"/> 只读取出，连同本机 claude.exe 路径经标准输入交给
+    /// real-upstream-browser.cjs，凭据不写入命令行或输出；返回浏览器脚本的退出码。
     /// </summary>
     public static async Task<int> Run(string[] args)
     {
-        if (args.Length is < 5 or > 6 || args.Length == 6 && args[5] != "--client-only")
-            throw new ArgumentException("需要两份预检结果、发布 DLL 和证据目录；可选 --client-only 仅验证客户端文件信任。");
-        object Read(string manifestPath, string host, string diagnostic)
-        {
-            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
-            var directory = Path.GetFullPath(manifest.RootElement.GetProperty("temporary_home").GetString()!);
-            var prefix = Path.Combine(Path.GetFullPath(Path.GetTempPath()), "HouseholdRelay-real-upstream-");
-            if (!directory.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("只复用本项目专用临时目录。");
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(directory, ".state", "relay.db"), Mode = SqliteOpenMode.ReadOnly }.ToString());
-            connection.Open(); using var command = connection.CreateCommand();
-            command.CommandText = "SELECT options_json,credential FROM upstream_candidates ORDER BY created_at DESC";
-            using var rows = command.ExecuteReader();
-            while (rows.Read())
-            {
-                var options = JsonSerializer.Deserialize<UpstreamOptions>(rows.GetString(0), ConfigurationFiles.Json)!;
-                if (new Uri(options.BaseUrl).Host != host) continue;
-                var bytes = WindowsSecrets.Unprotect((byte[])rows[1]);
-                try { return new { options = options with { Diagnostic = diagnostic }, credential = Encoding.UTF8.GetString(bytes) }; }
-                // 解密后的凭据字节转成字符串后立即清零，即使构造结果时出错也不让明文留在内存中。
-                finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes); }
-            }
-            throw new InvalidOperationException("预检目录缺少目标上游。");
-        }
-        var material = new { providers = new[] { Read(args[1], "aitoll.net", "claude-code"), Read(args[2], "api.sftoken.top", "messages") }, claude = TestProcess.ClientLauncher.FindClaude() };
+        if (args.Length is < 4 or > 5 || args.Length == 5 && args[4] != "--client-only")
+            throw new ArgumentException("需要材料来源（relay.db 或 account-vault.json）、发布 DLL 和证据目录；可选 --client-only 仅验证客户端文件信任。");
+        var material = new { providers = RealDetectionValidation.Providers(args[1]), claude = TestProcess.ClientLauncher.FindClaude() };
         var start = new ProcessStartInfo("node") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true };
-        foreach (var argument in new[] { Path.GetFullPath("tests/Tests/real-upstream-browser.cjs"), Path.GetFullPath(args[3]), Path.GetFullPath(args[4]) }) start.ArgumentList.Add(argument);
-        if (args.Length == 6) start.ArgumentList.Add(args[5]);
+        foreach (var argument in new[] { Path.GetFullPath("tests/Tests/real-upstream-browser.cjs"), Path.GetFullPath(args[2]), Path.GetFullPath(args[3]) }) start.ArgumentList.Add(argument);
+        if (args.Length == 5) start.ArgumentList.Add(args[4]);
         using var child = Process.Start(start) ?? throw new InvalidOperationException("无法启动浏览器验证。"); child.PriorityClass = ProcessPriorityClass.BelowNormal;
         await child.StandardInput.WriteAsync(JsonSerializer.Serialize(material, ConfigurationFiles.Json)); child.StandardInput.Close();
         await child.WaitForExitAsync(); return child.ExitCode;

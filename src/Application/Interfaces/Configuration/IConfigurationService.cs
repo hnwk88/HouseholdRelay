@@ -17,9 +17,6 @@ public interface IConfigurationService
     /// <summary>是否已保存服务器证书。</summary>
     bool HasCertificate { get; }
 
-    /// <summary>解密并返回活动上游凭据；未配置时为空。</summary>
-    string? LoadCredential();
-
     /// <summary>解密并返回服务器证书 PFX 字节；调用方用完后须清零。</summary>
     byte[]? LoadCertificate();
 

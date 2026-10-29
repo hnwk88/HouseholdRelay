@@ -1,6 +1,4 @@
-﻿using System.Security.Cryptography;
-using System.Text;
-using Application.Interfaces.Certificates;
+﻿using Application.Interfaces.Certificates;
 using Application.Interfaces.Configuration;
 using Application.Interfaces.Security;
 using Application.Interfaces.Upstream;
@@ -35,16 +33,6 @@ public sealed class ConfigurationService(IConfigurationRepository settings, IUps
 
     /// <summary>是否已保存加密的服务器证书；只检查是否存在，不解密。</summary>
     public bool HasCertificate => certificateStore.ReadProtectedCertificate() is not null;
-
-    /// <summary>解密并返回活动上游凭据明文；未配置时返回 null。解密出的字节缓冲在返回前清零。</summary>
-    public string? LoadCredential()
-    {
-        if (upstreamStore.ReadActiveCredential() is not byte[] encrypted) return null;
-        var bytes = protector.Unprotect(encrypted);
-        try { return Encoding.UTF8.GetString(bytes); }
-        // 无论解码是否成功都清零解密出的凭据字节，避免明文凭据残留在可被回收复用的内存里。
-        finally { CryptographicOperations.ZeroMemory(bytes); }
-    }
 
     /// <summary>解密并返回服务器证书 PFX 字节；未保存时返回 null。返回的是明文私钥材料，调用方用完后必须自行清零。</summary>
     public byte[]? LoadCertificate() => certificateStore.ReadProtectedCertificate() is byte[] encrypted ? protector.Unprotect(encrypted) : null;

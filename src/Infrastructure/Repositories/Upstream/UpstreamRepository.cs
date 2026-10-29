@@ -79,6 +79,19 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
         return 0;
     });
 
+    /// <summary>在一个写事务里核对不是活动上游的来源、不在检测窗口内（与 <see cref="BeginCandidateTest"/> 同一口径），再删除这一行。</summary>
+    public void DeleteCandidate(string id) => database.Write((connection, transaction) =>
+    {
+        if (Scalar(connection, transaction, "SELECT state FROM upstream_candidates WHERE id=$id", ("$id", id)) is null)
+            throw new InvalidOperationException("这个上游不存在，请重新加载页面。");
+        if (Scalar(connection, transaction, "SELECT candidate_id FROM upstream WHERE id=1") as string == id)
+            throw new InvalidOperationException("这个上游正在使用中，不能删除。请先切换到别的上游，再删除它。");
+        if (Execute(connection, transaction, "DELETE FROM upstream_candidates WHERE id=$id AND (state!='testing' OR test_started_at<$expired)",
+            ("$id", id), ("$expired", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 120)) != 1)
+            throw new InvalidOperationException("这个上游正在检测，请等检测结束后再删除。");
+        return 0;
+    });
+
     /// <summary>写回配置与报告并置为未测试。</summary>
     public void SaveUntested(string id, string optionsJson, string? reportJson) => database.Write((connection, transaction) =>
     {

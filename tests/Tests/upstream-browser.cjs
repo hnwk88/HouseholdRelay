@@ -21,7 +21,8 @@ const testsExe = process.argv[4] ? path.resolve(process.argv[4]) : readdirSync(p
     .map(name => path.join(__dirname, 'bin', 'Release', name, 'Tests.exe')).find(existsSync);
 const fakeClaude = path.join(path.dirname(testsExe ?? '.'), 'claude.exe');
 let child, browser, temporary, upstream, scenarioFile;
-let rejectAccount = false;
+let rejectAccount = false, regionBlocked = false;
+const regionSecret = 'fixture-browser-region-secret';
 const calls = [], steps = [];
 async function port() {
     const server = net.createServer(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -127,6 +128,8 @@ async function relay(url, token, stream = false) {
         const account = request.headers.authorization === 'Bearer ' + accountSecret;
         const mode = account ? 'account' : request.headers.authorization === 'Bearer ' + loginToken ? 'login' : 'api';
         calls.push({ path: request.url, mode, beta: request.headers['anthropic-beta'] || '' });
+        // 模拟按地区屏蔽当前网络出口：照 sftoken 现场回 503 和一张说明网页。
+        if (regionBlocked) { response.writeHead(503, { 'content-type': 'text/html; charset=utf-8' }); response.end('<title>该网页在当前地区不可用</title>'); return; }
         if (rejectAccount && account) { response.writeHead(401, { 'content-type': 'application/json' }); response.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: accountSecret } })); return; }
         if (request.url.includes('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'fixture-model' }] })); return; }
         const body = JSON.parse(raw);
@@ -171,6 +174,34 @@ async function relay(url, token, stream = false) {
     await page.goto(url + '/Upstream'); await page.getByText('凭据失效，需重新接入', { exact: true }).waitFor();
     await screenshot(page, '09-account-paused'); rejectAccount = false;
     await candidate(page, url, upstreamUrl, 'oauth', accountSecret, '浏览器账户（新令牌）'); assert.equal((await relay(url, token)).status, 200);
+    // 上游回 503（地区屏蔽）：读句指向代理出口而不是地址；上游恢复后对已保存的上游按「重新获取模型」，不重贴密钥、不新增上游；再删掉它，已保存数量减 1。
+    const savedCount = async () => Number((await page.getByRole('heading', { name: /^已保存的上游（\d+ 个）$/ }).textContent()).match(/\d+/)[0]);
+    regionBlocked = true; await page.goto(url + '/Upstream');
+    const api = page.locator('section', { has: page.getByRole('heading', { name: 'API 供应商', exact: true }) });
+    await api.getByLabel('供应商名称', { exact: true }).fill('顺丰中转');
+    await api.getByLabel('上游地址', { exact: true }).fill(upstreamUrl + '/gateway/v1?tenant=browser');
+    await api.getByLabel('API 密钥', { exact: true }).fill(regionSecret);
+    await api.getByText('高级设置（一般不用改）', { exact: true }).click();
+    await api.getByLabel('允许连接本机或私网地址（包括 HTTP）', { exact: true }).check();
+    await page.getByRole('button', { name: '获取模型（不花额度）', exact: true }).click();
+    const blocked = page.getByRole('status').filter({ hasText: '拒绝了当前网络出口' }); await blocked.waitFor();
+    const blockedText = (await blocked.textContent()).trim();
+    assert.equal(blockedText, '已保存「顺丰中转」。获取模型失败，上游返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：不使用代理，直连上游。请检查代理出口后重试。');
+    assert.equal(blockedText.includes('检查地址'), false); assert.equal((await page.content()).includes(regionSecret), false);
+    await screenshot(page, '19-region-blocked'); const before = await savedCount();
+    regionBlocked = false;
+    await page.getByRole('button', { name: '重新获取「顺丰中转」的模型（不花额度）', exact: true }).click();
+    const again = page.getByRole('status').filter({ hasText: '已重新获取「顺丰中转」的模型。' }); await again.waitFor();
+    const againText = (await again.textContent()).trim();
+    assert.ok(againText.startsWith('已重新获取「顺丰中转」的模型。已获取 1 个模型'), againText);
+    assert.equal(await savedCount(), before, '重新获取模型不得新增上游');
+    assert.equal(await page.getByRole('button', { name: '删除「浏览器账户（新令牌）」', exact: true }).count(), 0, '当前使用中的上游不能出删除按钮');
+    await page.getByLabel('确认删除「顺丰中转」（删除后不能恢复）', { exact: true }).check();
+    await page.getByRole('button', { name: '删除「顺丰中转」', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '已删除「顺丰中转」。' }).waitFor();
+    assert.equal(await savedCount(), before - 1); assert.equal(await page.getByRole('heading', { name: '顺丰中转', exact: true }).count(), 0);
+    await readingOrder(page, '20-upstream-after-delete'); await screenshot(page, '20-upstream-after-delete');
+    steps.push('上游回 503（模拟地区屏蔽）时读出：' + blockedText + ' 恢复后按「重新获取模型」读出：' + againText + ` 已保存数量仍为 ${before}；勾选确认后删除「顺丰中转」，已保存数量变为 ${before - 1}；当前使用中的上游没有删除按钮。`);
     // 登录官方账户（假 Claude Code）：先取消，读出原因、不新增上游、不留账户目录；再成功，名称留空用登录邮箱，测试、切换后转发用登录令牌。
     const accounts = path.join(temporary, '.state', 'official-accounts');
     const cancelled = await officialLogin(page, url, upstreamUrl, 'cancel', '取消的登录');
@@ -204,8 +235,10 @@ async function relay(url, token, stream = false) {
     await page.getByRole('button', { name: '验证并保存证书' }).click(); await page.getByText('无法读取 PFX，请检查文件和证书密码。', { exact: true }).waitFor();
     await screenshot(page, '11-certificate-rejected');
     await page.goto(url + '/Https');
-    await page.getByLabel('私人 HTTPS 根地址', { exact: true }).fill('https://localhost:8787');
-    await page.getByLabel('私人 HTTPS 本机监听端口', { exact: true }).fill('8787');
+    // 私人 HTTPS 用空闲端口：本机正式部署常驻 8787，写死会让后面重启的临时实例监听失败。
+    const privatePort = await port();
+    await page.getByLabel('私人 HTTPS 根地址', { exact: true }).fill(`https://localhost:${privatePort}`);
+    await page.getByLabel('私人 HTTPS 本机监听端口', { exact: true }).fill(String(privatePort));
     await page.getByLabel('私人 HTTPS 根地址', { exact: true }).focus(); await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'private-port', '键盘应进入有标签的端口输入');
     await page.locator('form[action*="handler=Private"]').evaluate(form => form.addEventListener('submit', () => {
@@ -224,7 +257,7 @@ async function relay(url, token, stream = false) {
     await page.getByRole('status').filter({ hasText: '已复制' }).waitFor();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), await page.locator('#trust-command').textContent());
     await page.getByRole('button', { name: '复制根地址', exact: true }).focus(); await page.keyboard.press('Enter');
-    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'https://localhost:8787');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `https://localhost:${privatePort}`);
     assert.ok(!(await page.content()).includes(accountSecret) && !(await page.content()).includes(token));
     await screenshot(page, '15-private-connection');
     await context.close(); await stop(); ({ url, code } = await start(listenPort)); assert.equal(code, undefined);

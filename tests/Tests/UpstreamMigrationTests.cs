@@ -35,7 +35,7 @@ static class UpstreamMigrationTests
         {
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 1);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM pragma_table_info('upstream') WHERE name='options_json'")) == 0);
-            Check(process.Settings.LoadCredential() == "fixture-legacy-upstream-secret");
+            Check(process.ActiveCredential() == "fixture-legacy-upstream-secret");
         }
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TABLE upstream_candidates"));
         var upgraded = new TestProcess(home.Path); var upstream = upgraded.Upstreams.ReadActive();

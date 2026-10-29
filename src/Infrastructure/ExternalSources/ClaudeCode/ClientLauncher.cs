@@ -9,7 +9,10 @@ namespace Infrastructure.ExternalSources.ClaudeCode;
 /// <summary>定位本机原生 Claude Code，并以只对子进程生效的连接变量和信任证书启动它。</summary>
 internal sealed partial class ClientLauncher : IClientLauncher
 {
-    /// <summary>查找 claude.exe。</summary>
+    /// <summary>
+    /// 依次在 PATH 各目录、<c>%USERPROFILE%\.local\bin</c>、<c>%APPDATA%\npm</c> 里找 <c>claude.exe</c>，每个目录同时找 npm 全局安装的
+    /// <c>node_modules\@anthropic-ai\claude-code\bin\claude.exe</c>；找不到时抛出 <see cref="InvalidOperationException"/> 提示安装。
+    /// </summary>
     public string FindClaude()
     {
         var directories = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)
@@ -62,13 +65,11 @@ internal sealed partial class ClientLauncher : IClientLauncher
         start.Environment["ANTHROPIC_AUTH_TOKEN"] = bundle.Token;
         start.Environment["CLAUDE_CONFIG_DIR"] = state;
         start.Environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
-        // The relay itself should be reached directly, even if an old API proxy is configured.
-        start.Environment.TryGetValue("NO_PROXY", out var upperNoProxy);
-        start.Environment.TryGetValue("no_proxy", out var lowerNoProxy);
-        var noProxy = upperNoProxy ?? lowerNoProxy ?? "";
-        start.Environment["NO_PROXY"] = string.Join(',', new[] { noProxy, uri.Host }.Where(s => s.Length > 0));
-        start.Environment["no_proxy"] = start.Environment["NO_PROXY"];
-        // Trust only for this child process. Never disable certificate verification.
+        // 家人客户端跑在家人自己的电脑上，中转的全局代理设置管不到这里；它自己的代理（联网工具可能要用）原样保留，不照 ChildProxyEnvironment 先清后写，
+        // 只把中转主机加进 NO_PROXY 让它直连。Windows 的环境变量名不分大小写，NO_PROXY 与 no_proxy 是同一项。
+        start.Environment.TryGetValue("NO_PROXY", out var noProxy);
+        start.Environment["NO_PROXY"] = string.Join(',', $"{noProxy},{uri.Host}".Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase));
+        // 信任证书只对这个子进程生效，绝不关闭证书校验。
         if (start.Environment.TryGetValue("NODE_EXTRA_CA_CERTS", out var existing) && File.Exists(existing))
         {
             var combined = Path.Combine(state, "combined-ca.pem");

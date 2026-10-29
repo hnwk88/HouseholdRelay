@@ -2,7 +2,7 @@
 
 一个部署实例使用一个上游身份，多名使用者持各自的个人令牌。当前协议为 Anthropic Messages，客户端启动器支持 Claude Code；不提供多账户轮询。
 
-当前版本已提供 **本机网页管理、SQLite 持久化、个人令牌、上游候选测试与激活、网页私有 CA、客户端公共信任包、证书导入、个人用量与金额及滚动 40 天清理**。当前私人部署使用真实 API，每台 Windows 电脑安装一次信任，日常只配置中转地址和个人令牌。完整步骤见[私人部署与恢复](../docs/usability/PRIVATE-DEPLOYMENT.md)。
+当前版本已提供 **本机网页管理、SQLite 持久化、个人令牌、上游候选测试与激活、网页私有 CA、客户端公共信任包、证书导入、个人用量与金额及滚动 40 天清理**。当前私人部署使用真实 API，每台 Windows 电脑安装一次信任，日常只配置中转地址和个人令牌。完整步骤见[私人部署与恢复](../../docs/usability/PRIVATE-DEPLOYMENT.md)。
 
 ## 启动管理页
 
@@ -32,7 +32,7 @@
 
 每条记录显示调用类型、模型、输入/输出及缓存 Token、结果、发送状态和金额。Token 采用上游实际报告；累计 SSE 用量只更新，不反复相加。缺少或中断的用量保留已知部分并标明不完整，全部未知显示“未知”。Count Tokens 是估算请求，Models 不计 Token；管理检测、健康检查和 HEAD 预热不计入个人消耗。
 
-金额优先使用明确返回的上游费用；没有费用时，可在“用量 → 配置模型估算费率”填写当前上游版本与模型每百万 Token 的单价及币种。未配置时金额未知，估算始终标明来源，不等同于实际账单；不同币种和来源分开汇总。未知单价留空，明确免费才填 0。价格在发送时保存快照，改价不影响历史；重新激活上游后须重新核对费率。支持的返回费用字段、单位和实际结果见[用量验证](../docs/usability/USAGE-VALIDATION.md)。
+金额优先使用明确返回的上游费用；没有费用时，可在“用量 → 配置模型估算费率”填写当前上游版本与模型每百万 Token 的单价及币种。未配置时金额未知，估算始终标明来源，不等同于实际账单；不同币种和来源分开汇总。未知单价留空，明确免费才填 0。价格在发送时保存快照，改价不影响历史；重新激活上游后须重新核对费率。支持的返回费用字段、单位和实际结果见[用量验证](../../docs/usability/USAGE-VALIDATION.md)。
 
 记录按 UTC 请求开始时间保留 40 × 24 小时，严格早于截止点才删除；恰在边界保留。启动及每小时按 500 条一批清理，查询始终过滤窗口。显示和小时/天分组使用时区，但不会按本地午夜删除。配置、使用者、令牌和费率不随用量清理。
 
@@ -89,7 +89,7 @@
 
 默认“标准 Messages”检测不需要安装 Claude Code。部分兼容中转只接受原生客户端请求：如果同一配置在 Claude Code 可用，但标准检测返回 400，可显式选择“Claude Code 实际调用”，重新保存候选后测试。这一选项需要服务所在电脑安装原生 Claude Code；它在独立目录禁用工具进行一次真实调用，上游凭据留在中转进程内，出站仍使用候选配置的代理及 TLS 校验。检测失败不会自动改认证或重放生成请求。通过只证明 Claude Code 场景，连接说明会提示普通 curl 请求可能仍被上游拒绝。
 
-已实测 `https://aitoll.net/v1/cc` 使用 API/Bearer/Claude Code 检测，`https://api.sftoken.top` 使用 API/x-api-key/标准检测，模型均为 `claude-opus-5-5`。两家均完成网页接入、JSON/SSE、原生工具会话、切换及重启后调用；适用范围及复现见[兼容性整改验证](../docs/usability/UPSTREAM-REWORK-VALIDATION.md)。
+已实测 `https://aitoll.net/v1/cc` 使用 API/Bearer/Claude Code 检测，`https://api.sftoken.top` 使用 API/x-api-key/标准检测，模型均为 `claude-opus-5-5`。两家均完成网页接入、JSON/SSE、原生工具会话、切换及重启后调用；适用范围及复现见[兼容性整改验证](../../docs/usability/UPSTREAM-REWORK-VALIDATION.md)。
 
 私有 CA 证书验证名称 SAN、有效期、服务器用途及本实例的确切信任根。CA 私钥只在签发期间存在内存；服务器私钥用 DPAPI 保存。证书或地址更新后重启生效，重新创建会生成新 CA，每台客户端必须重新核验并安装。公共信任包只有 CA 公共证书、安装脚本与说明。
 
@@ -107,6 +107,6 @@ dotnet publish src/HouseholdRelay -c Release --self-contained false -o artifacts
 
 源码分四个项目：`src/Core`（领域类型与纯规则，不引用任何项目和外部包）、`src/Application`（服务、仓储与外部来源接口及用例服务，只引用 Core 和依赖注入、宿主抽象包）、`src/Infrastructure`（SQLite、DPAPI、证书、上游 HTTP、Claude Code 进程等实现）、`src/HouseholdRelay`（网页、命令行入口与组合根）。所有服务经 `Microsoft.Extensions.DependencyInjection` 构造函数注入，各层分别提供 `AddApplication()`、`AddInfrastructure(...)` 登记方法，主程序在 `Composition/CompositionRoot.cs` 统一组装。
 
-运行时使用 `Microsoft.Data.Sqlite 10.0.6`；Razor Pages、密码哈希、Cookie 和 CSRF 使用 ASP.NET Core 自带组件，不引入前端构建链。测试为自定义 .NET 测试程序；真实 Claude Code 用例使用本机模拟上游。浏览器测试使用 Playwright 和无窗口 Edge，证据见 [管理与持久化验证](../docs/usability/FOUNDATION-VALIDATION.md) 与 [上游接入验证](../docs/usability/UPSTREAM-VALIDATION.md)。
+运行时使用 `Microsoft.Data.Sqlite 10.0.6`；Razor Pages、密码哈希、Cookie 和 CSRF 使用 ASP.NET Core 自带组件，不引入前端构建链。测试为自定义 .NET 测试程序；真实 Claude Code 用例使用本机模拟上游。浏览器测试使用 Playwright 和无窗口 Edge，证据见 [管理与持久化验证](../../docs/usability/FOUNDATION-VALIDATION.md) 与 [上游接入验证](../../docs/usability/UPSTREAM-VALIDATION.md)。
 
-用量实现已有 54 项基线回归；私人部署新增证书与信任验证，最新实际结果、失败记录和未执行项见[私人部署验证](../docs/usability/PRIVATE-DEPLOYMENT-VALIDATION.md)。真实账户与公网部署仍是用户试运行后按需安排的事项。
+用量实现已有 54 项基线回归；私人部署新增证书与信任验证，最新实际结果、失败记录和未执行项见[私人部署验证](../../docs/usability/PRIVATE-DEPLOYMENT-VALIDATION.md)。真实账户与公网部署仍是用户试运行后按需安排的事项。

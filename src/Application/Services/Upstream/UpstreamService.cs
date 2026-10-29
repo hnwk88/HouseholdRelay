@@ -85,6 +85,17 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     public void Rename(string id, string name) => repository.Rename(id, ValidName(name));
 
     /// <summary>
+    /// 删除一个已保存上游：当前使用中或正在检测时由仓储在写事务里拒绝；删掉的是官方登录上游时再删它的账户目录。
+    /// 用量按活动版本号记录、不按这个主键关联，删除不影响历史用量。
+    /// </summary>
+    public void Delete(string id)
+    {
+        var candidate = ReadCandidate(id);
+        repository.DeleteCandidate(id);
+        if (candidate.Options.OfficialLogin) officialAccounts.Remove(id);
+    }
+
+    /// <summary>
     /// 获取模型目录：先把该上游标记为检测中（正在检测时拒绝），按认证顺序读 <c>/v1/models</c>，不发模型调用、不花额度；
     /// 自动探测时把被接受的认证方式写回配置，手动指定时保持原值；目录与读句存为未测试报告，供页面列出下拉框。
     /// </summary>

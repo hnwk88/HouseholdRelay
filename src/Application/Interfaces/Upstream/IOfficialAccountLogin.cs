@@ -15,4 +15,7 @@ public interface IOfficialAccountLogin
 
     /// <summary>读取 <paramref name="accountId"/> 目录里最新的访问令牌；快到期时让 CLI 刷新，已过期时等刷新结束（有上限）再读。没有凭据时返回 null。</summary>
     string? ReadAccessToken(string accountId);
+
+    /// <summary>删除 <paramref name="accountId"/> 的配置目录（上游被删除时调用）；目录不存在或删不掉时不抛出，残留的只是一个不再被引用的目录。</summary>
+    void Remove(string accountId);
 }

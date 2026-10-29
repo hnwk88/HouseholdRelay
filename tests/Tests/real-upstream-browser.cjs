@@ -11,6 +11,8 @@ const assert = require('node:assert/strict');
 const { secureFetch, trustFixture, nativeSession, redact } = require('./real-validation-support.cjs');
 const dll = path.resolve(process.argv[2]), output = path.resolve(process.argv[3]);
 const clientOnly = process.argv[4] === '--client-only';
+// 两家真实上游都用这个模型验证（与 real-detection-browser.cjs 相同）。
+const model = 'claude-opus-5-5';
 let server, browser, interceptor, instance, material, token, authorityPem, caPath, relayUrl, fingerprint, secondUser;
 const evidence = { started_at: new Date().toISOString(), providers: [], server_stopped: false };
 const password = crypto.randomBytes(24).toString('hex');
@@ -44,27 +46,30 @@ async function login(page, url) {
     await page.goto(url + '/Login'); await page.getByLabel('管理密码', { exact: true }).fill(password);
     await page.getByRole('button', { name: '登录', exact: true }).click(); await page.waitForURL(url + '/');
 }
+// 新上游表单：只填名称、地址、密钥 → 获取模型 → 选模型 → 按写明费用的按钮测试 → 按名称切换；认证方式和检测方式由程序探测，返回测试读句。
 async function candidate(page, url, provider) {
-    const options = provider.options;
-    await page.goto(url + '/Upstream'); await page.getByLabel('接入模式', { exact: true }).selectOption(options.mode);
-    await page.getByLabel('提供商预设', { exact: true }).selectOption('compatible');
-    await page.getByLabel('上游 API 根地址', { exact: true }).fill(options.baseUrl);
-    await page.getByLabel('API 模式认证方式', { exact: true }).selectOption(options.authentication);
-    await page.getByLabel('上游凭据（账户访问令牌或 API 密钥）', { exact: true }).fill(provider.credential);
-    await page.getByLabel('要测试并推荐的模型', { exact: true }).fill(options.model);
-    await page.getByLabel('调用检测方式', { exact: true }).selectOption(options.diagnostic);
-    await page.getByText('网络与兼容设置', { exact: true }).click();
-    await page.getByLabel('出站 HTTP CONNECT 代理（可选）', { exact: true }).fill(options.proxyUrl || '');
-    await page.getByRole('button', { name: '保存候选配置', exact: true }).click();
-    await page.getByText('候选已保存，尚未改变活动上游。请确认后测试最小调用。', { exact: true }).waitFor();
-    assert.ok(!(await page.content()).includes(provider.credential), '候选页面不得回显凭据');
-    await page.getByLabel('我同意发起一次最小模型调用，可能消耗少量上游额度').check();
-    await page.getByRole('button', { name: '测试候选', exact: true }).click();
-    const activate = page.getByRole('button', { name: '激活此候选', exact: true });
-    await activate.waitFor({ timeout: 60000 });
-    assert.ok(!(await page.content()).includes(provider.credential), '检测页面不得回显凭据');
-    await page.screenshot({ path: path.join(output, new URL(options.baseUrl).host + '-tested.png'), fullPage: true });
-    await activate.click(); await page.getByText('新上游已激活，后续请求使用新配置；个人令牌和中转地址无需更换。', { exact: true }).waitFor();
+    await page.goto(url + '/Upstream');
+    const form = page.locator('section', { has: page.getByRole('heading', { name: 'API 供应商', exact: true }) });
+    await form.getByLabel('供应商名称', { exact: true }).fill(provider.name);
+    await form.getByLabel('上游地址', { exact: true }).fill(provider.baseUrl);
+    await form.getByLabel('API 密钥', { exact: true }).fill(provider.credential);
+    await page.getByRole('button', { name: '获取模型（不花额度）', exact: true }).click();
+    await page.getByText(`已保存「${provider.name}」。`, { exact: false }).first().waitFor({ timeout: 60000 });
+    assert.ok(!(await page.content()).includes(provider.credential), '获取模型后的页面不得回显凭据');
+    await page.getByLabel('模型', { exact: true }).selectOption(model);
+    await page.getByRole('button', { name: '测试（会消耗少量上游额度）', exact: true }).click();
+    const activate = page.getByRole('button', { name: `切换到「${provider.name}」`, exact: true });
+    await activate.waitFor({ timeout: 120000 });
+    const tested = (await page.getByRole('status').first().textContent()).trim();
+    assert.ok(!(await page.content()).includes(provider.credential), '测试后的页面不得回显凭据');
+    await page.screenshot({ path: path.join(output, provider.name + '-tested.png'), fullPage: true });
+    await switchTo(page, url, provider); return tested;
+}
+// 按已保存上游列表里的「切换到」按钮切换；切回先前测过的上游不用重新接入。
+async function switchTo(page, url, provider) {
+    await page.goto(url + '/Upstream');
+    await page.getByRole('button', { name: `切换到「${provider.name}」`, exact: true }).click();
+    await page.getByText(`已切换到「${provider.name}」。后续请求使用它；个人令牌和中转地址不用换。`, { exact: true }).waitFor();
 }
 async function native(url, model, tool = false) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'HouseholdRelay-rework-client-'));
@@ -183,35 +188,40 @@ async function configureTls(page, url, port) {
         } catch { response.destroy(); }
     });
     await new Promise(resolve => interceptor.listen(0, '127.0.0.1', resolve)); const clientUrl = `http://127.0.0.1:${interceptor.address().port}`;
+    // 代理照全局设置：真实上游按地区屏蔽时只有经代理出口才能连上，与 real-detection-browser.cjs 一样选自动检测并记下读数。
+    evidence.stage = 'proxy-settings'; await page.goto(url + '/Settings');
+    await page.getByLabel('自动检测系统代理（推荐）', { exact: true }).check();
+    await page.getByRole('button', { name: '保存设置', exact: true }).click(); await page.getByText(/设置已保存/).waitFor();
+    evidence.proxy_status = (await page.locator('#proxy-status').textContent()).trim();
     for (const provider of material.providers) {
-        const options = provider.options; const item = { base_url: options.baseUrl, authentication: options.authentication, model: options.model, proxy: options.proxyUrl, diagnostic: options.diagnostic };
-        evidence.stage = new URL(options.baseUrl).host + ':candidate'; evidence.providers.push(item); const beforeProbe = await personalUsage(relayUrl);
-        await candidate(page, url, provider); item.web_test_and_activation = true;
+        const item = { name: provider.name, base_url: provider.baseUrl, model };
+        evidence.stage = provider.name + ':candidate'; evidence.providers.push(item); const beforeProbe = await personalUsage(relayUrl);
+        item.test = redact(await candidate(page, url, provider), [provider.credential]); item.web_test_and_activation = true;
         assert.equal((await personalUsage(relayUrl)).total, beforeProbe.total, '管理员检测不能进入个人用量');
-        evidence.stage = new URL(options.baseUrl).host + ':offline-request-shape'; await native(clientUrl, options.model); const simple = captured;
-        evidence.stage = new URL(options.baseUrl).host + ':native-https'; item.native = await native(relayUrl, options.model);
+        evidence.stage = provider.name + ':offline-request-shape'; await native(clientUrl, model); const simple = captured;
+        evidence.stage = provider.name + ':native-https'; item.native = await native(relayUrl, model);
         item.client_version = simple.headers['user-agent'];
-        evidence.stage = new URL(options.baseUrl).host + ':json-sse-two-users';
+        evidence.stage = provider.name + ':json-sse-two-users';
         [item.json, item.sse] = await Promise.all([call(relayUrl, simple.body, simple.headers, false), call(relayUrl, simple.body, simple.headers, true, secondUser.token)]);
         item.json.persisted_usage = await verifyUsage(relayUrl, item.json); item.sse.persisted_usage = await verifyUsage(relayUrl, item.sse, secondUser.token);
         assert.equal(item.json.persisted_usage.user_id, firstUser.id); assert.equal(item.sse.persisted_usage.user_id, secondUser.id);
         assert.ok(!(await personalUsage(relayUrl)).rows.some(row => row.userId === secondUser.id));
-        evidence.stage = new URL(options.baseUrl).host + ':tool-https'; item.tool_session = await native(relayUrl, options.model, true); item.tool_roundtrip = true;
+        evidence.stage = provider.name + ':tool-https'; item.tool_session = await native(relayUrl, model, true); item.tool_roundtrip = true;
         await page.goto(url + '/Connection'); assert.ok(!(await page.content()).includes(provider.credential) && !(await page.content()).includes(token), '连接说明不能包含秘密');
-        if (options.diagnostic === 'claude-code') await page.getByText(/当前上游已用 Claude Code 实际调用验证/).waitFor();
-        await page.screenshot({ path: path.join(output, new URL(options.baseUrl).host + '-connection.png'), fullPage: true });
+        if (item.test.includes('按 Claude Code 方式通过')) await page.getByText(/当前上游已用 Claude Code 实际调用验证/).waitFor();
+        await page.screenshot({ path: path.join(output, provider.name + '-connection.png'), fullPage: true });
         await stop(server); ({ url } = await start(port)); await page.context().clearCookies(); await login(page, url);
-        evidence.stage = new URL(options.baseUrl).host + ':restart-https';
+        evidence.stage = provider.name + ':restart-https';
         item.after_restart = await call(relayUrl, simple.body, simple.headers, false);
         item.after_restart.persisted_usage = await verifyUsage(relayUrl, item.after_restart);
         const retained = await personalUsage(relayUrl); assert.ok(retained.rows.some(row => row.requestId === item.json.request_id), '重启必须保留旧调用');
         item.personal_summary = retained.summary;
         await page.goto(url + '/Usage'); await page.getByRole('heading', { name: '个人用量', exact: true }).waitFor();
-        await page.screenshot({ path: path.join(output, new URL(options.baseUrl).host + '-usage.png'), fullPage: true });
+        await page.screenshot({ path: path.join(output, provider.name + '-usage.png'), fullPage: true });
         await fs.writeFile(path.join(output, 'real-upstream-results.json'), JSON.stringify(evidence, null, 2));
-        console.log('真实上游完成：' + new URL(options.baseUrl).host + '，网页/JSON/SSE/工具/重启通过');
+        console.log('真实上游完成：' + provider.name + '，网页/JSON/SSE/工具/重启通过');
     }
-    evidence.stage = 'switch-back-https'; await candidate(page, url, material.providers[0]); evidence.switch_back = await native(relayUrl, material.providers[0].options.model);
+    evidence.stage = 'switch-back-https'; await switchTo(page, url, material.providers[0]); evidence.switch_back = await native(relayUrl, model);
     evidence.stage = 'rotate-disable-private-usage'; await page.goto(url + '/Users');
     await page.locator(`[data-user-id="${firstUser.id}"]`).getByRole('button', { name: '轮换令牌', exact: true }).click();
     const oldToken = token; token = (await page.locator('#issued-token').textContent()).trim();

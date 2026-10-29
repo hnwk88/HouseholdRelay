@@ -61,7 +61,7 @@ static partial class FoundationTests
         var first = identities.Clients.Authenticate("legacy-study-token"); Check(first is not null && first.UserId is not null);
         Check(identities.Clients.Authenticate("legacy-office-token") is null);
         Check(settings.Read().Value.DeviceId == legacy.DeviceId && settings.Read().Value.UpstreamUserAgent == legacy.UpstreamUserAgent);
-        Check(settings.LoadCredential() == "fixture-legacy-upstream-secret");
+        Check(process.ActiveCredential() == "fixture-legacy-upstream-secret");
         using (var certificate = TestProcess.CertificateFactory.LoadServerCertificate(settings.LoadCertificate()!)) Check(certificate.HasPrivateKey);
         var backup = Directory.GetDirectories(System.IO.Path.Combine(database.State, "legacy-backups")).Single();
         foreach (var name in new[] { "server.json", "account.dpapi", "tls.dpapi", "relay-ca.pem" })

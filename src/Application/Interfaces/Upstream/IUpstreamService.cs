@@ -26,6 +26,9 @@ public interface IUpstreamService : IActiveUpstreamSource
     /// <summary>修改供应商名称；只影响显示，切换和用量都按主键关联。</summary>
     void Rename(string id, string name);
 
+    /// <summary>删除一个已保存上游（官方登录的连同它的账户目录）；当前使用中或正在检测时拒绝，读出原因与下一步。</summary>
+    void Delete(string id);
+
     /// <summary>获取模型目录（不花额度），自动探测的认证方式写回该上游；手动指定的认证方式不被覆盖。</summary>
     Task<ModelCatalog> DiscoverModels(string id, CancellationToken cancellation);
 

@@ -116,6 +116,66 @@ static class UpstreamDetectionTests
     }
 
     /// <summary>
+    /// 验证上游 5xx、重新获取模型与删除：获取模型和测试遇到 503 时读成「上游暂时不可用，或者拒绝了当前网络出口」并读出当前代理设置，不再叫人检查地址；
+    /// 上游恢复后对已保存的上游按「重新获取模型」成功，不新增上游；删除须勾选确认，当前使用中的不出删除按钮、提交也被拒，正在检测的被拒，
+    /// 其余删除后列表少一个，活动上游和历史用量不变。
+    /// </summary>
+    public static async Task UnavailableRediscoverAndDelete()
+    {
+        await using var mock = await UpstreamFixture.Create(); await using var used = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
+        var service = web.Upstreams; var person = web.Identities.Create("删除测试");
+        var active = await Passed(service, used, "在用的"); await Switch(web, active, "在用的");
+        using (var call = await UpstreamFixture.RelayRequest(web, person.Token)) Check(call.IsSuccessStatusCode);
+        var history = web.App.Services.GetRequiredService<IUsageService>().Query(new()).Rows.Select(row => (row.RequestId, row.UpstreamVersion)).ToArray();
+
+        mock.Handler = context => Status(context, 503);
+        var values = new Dictionary<string, string>
+        {
+            ["Api.Name"] = "顺丰中转", ["Api.BaseUrl"] = mock.Url, ["Api.Credential"] = "fixture-region-secret", ["Api.AllowPrivateNetwork"] = "true",
+            ["Version"] = service.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+        };
+        string blocked;
+        using (var discovered = await web.Post("/Upstream?handler=DiscoverApi", values)) blocked = WebUtility.HtmlDecode(await discovered.Content.ReadAsStringAsync());
+        Check(blocked.Contains("获取模型失败，上游返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：不使用代理，直连上游。请检查代理出口后重试。")
+            && !blocked.Contains("请检查地址是否填对"), blocked);
+        var failed = service.ListCandidates().Single(item => item.Name == "顺丰中转").Id; var count = service.ListCandidates().Count;
+
+        mock.Handler = context => context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal) ? UpstreamFixture.Success(context) : Status(context, 503);
+        var manual = service.SaveCandidate(service.ReadActive().Version, mock.Options(), "fixture-manual-region-secret", "手动标准");
+        var refused = await service.TestCandidate(manual, true, CancellationToken.None);
+        Check(!refused.CanActivate && refused.Message.StartsWith("最小模型调用返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口", StringComparison.Ordinal) && refused.Message.Contains("当前代理设置："), refused.Message);
+        count++;
+
+        mock.Handler = null;
+        var again = new Dictionary<string, string> { ["candidateId"] = failed, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        using (var rediscovered = await web.Post("/Upstream?handler=Rediscover", again))
+        {
+            var html = WebUtility.HtmlDecode(await rediscovered.Content.ReadAsStringAsync());
+            Check(html.Contains("已重新获取「顺丰中转」的模型。已获取 1 个模型") && html.Contains("<option value=\"fixture-model\""), html);
+        }
+        Check(service.ListCandidates().Count == count && mock.Calls.Last().Headers["x-api-key"] == "fixture-region-secret", "Rediscovering must reuse the stored key without adding an upstream");
+
+        string listing;
+        using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
+        Check(listing.Contains("删除「顺丰中转」") && listing.Contains("重新获取「在用的」的模型（不花额度）") && !listing.Contains("删除「在用的」"), "Only idle upstreams offer deletion");
+        foreach (var (id, confirmed, expected) in new[] { (active, "true", "正在使用中，不能删除"), (failed, "false", "请先勾选删除按钮前面的确认框") })
+        {
+            var form = new Dictionary<string, string> { ["candidateId"] = id, ["deleteConfirmed"] = confirmed, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+            using var response = await web.Post("/Upstream?handler=Delete", form);
+            Check(WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync()).Contains(expected) && service.ListCandidates().Count == count, expected);
+        }
+        web.App.Services.GetRequiredService<IUpstreamRepository>().BeginCandidateTest(manual);
+        try { service.Delete(manual); Check(false, "A candidate under test must not be deleted"); }
+        // 预期的拒绝：检测中的上游不能删除。
+        catch (InvalidOperationException error) { Check(error.Message.Contains("正在检测"), error.Message); }
+        var delete = new Dictionary<string, string> { ["candidateId"] = failed, ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        using (var deleted = await web.Post("/Upstream?handler=Delete", delete))
+            Check(WebUtility.HtmlDecode(await deleted.Content.ReadAsStringAsync()).Contains("已删除「顺丰中转」") && service.ListCandidates().Count == count - 1);
+        Check(service.ReadActive().CandidateId == active && service.ListCandidates().All(item => item.Id != failed));
+        Check(web.App.Services.GetRequiredService<IUsageService>().Query(new()).Rows.Select(row => (row.RequestId, row.UpstreamVersion)).SequenceEqual(history), "Deleting must not touch usage history");
+    }
+
+    /// <summary>
     /// 验证秘密不出现在页面与错误里：上游在 401 正文和响应头里回显密钥，获取模型、测试、列表页面、报告 JSON 和读句都不含它；
     /// 把密钥写进名称时拒绝，错误文字也不复述密钥。
     /// </summary>

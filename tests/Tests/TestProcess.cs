@@ -40,6 +40,9 @@ sealed class TestProcess
     public IUsageService Usage => Get<IUsageService>();
     /// <summary>费率服务。</summary>
     public IUsagePricingService Pricing => Get<IUsagePricingService>();
+    /// <summary>直接解密活动行里的凭据（不经上游服务，库还没升级完时也能读）；未配置时为 null。</summary>
+    public string? ActiveCredential() => Get<IUpstreamRepository>().ReadActiveCredential() is { } encrypted
+        ? System.Text.Encoding.UTF8.GetString(Get<Application.Interfaces.Security.ISecretProtector>().Unprotect(encrypted)) : null;
 
     /// <summary>不连数据库的独立中转容器：固定凭据、可选模拟上游、可选鉴权名单、事件日志与代理解析器（给出时取代按启动配置解析的默认实现）。</summary>
     public static ServiceProvider StandaloneRelay(RelayConfiguration config, string? credential, Uri? testUpstream = null, ClientRegistry? clients = null, IRelayEventLog? log = null, IUpstreamProxy? proxy = null)

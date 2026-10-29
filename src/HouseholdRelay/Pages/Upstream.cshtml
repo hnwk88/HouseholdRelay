@@ -59,10 +59,20 @@
                 @if (item.State == "passed" && item.Id != Model.Active.CandidateId && item.Id != Model.Working?.Id)
                 { <form method="post" asp-page-handler="Activate"><input type="hidden" asp-for="Version" /><input type="hidden" name="candidateId" value="@item.Id" /><button type="submit">切换到「@item.Name」</button></form> }
                 <a asp-page="/Upstream" asp-route-candidateId="@item.Id" asp-fragment="test">选择模型并测试「@item.Name」</a>
+                <form method="post" asp-page-handler="Rediscover"><input type="hidden" name="candidateId" value="@item.Id" />
+                    <button type="submit" class="secondary">重新获取「@item.Name」的模型（不花额度）</button>
+                </form>
                 <form method="post" asp-page-handler="Rename"><input type="hidden" name="candidateId" value="@item.Id" />
                     <label for="rename-@item.Id">「@item.Name」的新名称</label><input id="rename-@item.Id" name="newName" maxlength="40" required />
                     <button type="submit" class="secondary">改名</button>
                 </form>
+                @if (item.Id != Model.Active.CandidateId && item.State != "testing")
+                {
+                    <form method="post" asp-page-handler="Delete"><input type="hidden" name="candidateId" value="@item.Id" />
+                        <label class="checkbox"><input type="checkbox" name="deleteConfirmed" value="true" required />确认删除「@item.Name」（删除后不能恢复）</label>
+                        <button type="submit" class="secondary">删除「@item.Name」</button>
+                    </form>
+                }
             </article>
         }
     </section>
@@ -83,8 +93,9 @@
     </form>
 </section>
 <section class="card" aria-labelledby="account-heading"><h2 id="account-heading">官方账户</h2>
+    <h3 id="account-login-heading">登录官方账户</h3>
     <p>按「登录官方账户」后，程序会让本机的 Claude Code 打开浏览器登录页（任务栏里会多一个最小化的 Claude Code 窗口，不用管它）。在浏览器里登录完，这一页会自动显示结果并读取模型目录。登录凭据只存在中转自己的数据目录里，不碰本机 Claude Code 自己的登录；到期前自动刷新，不用重新粘贴。</p>
-    <form method="post" asp-page-handler="LoginAccount" class="settings"><input type="hidden" asp-for="Version" />
+    <form method="post" asp-page-handler="LoginAccount" class="settings" aria-labelledby="account-login-heading"><input type="hidden" asp-for="Version" />
         <label asp-for="Login.Name">账户名称（可不填，不填就用登录邮箱）</label><input asp-for="Login.Name" maxlength="40" placeholder="例如 我的 Claude 账户" />
         <details><summary>登录的高级设置（一般不用改）</summary>
             <label asp-for="Login.BaseUrl">登录用的上游地址</label><input asp-for="Login.BaseUrl" type="url" maxlength="2048" required />

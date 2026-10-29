@@ -97,6 +97,39 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         Load(null); return Page();
     }
 
+    /// <summary>
+    /// 重新获取模型（需已登录且通过防 CSRF 校验）：对已保存的上游用库里加密的密钥（官方登录的用账户目录里的令牌）再读一次模型目录，不花额度、不新增上游；
+    /// 完成后把它作为正在设置的上游。浏览器断开时经 RequestAborted 取消。
+    /// </summary>
+    public async Task<IActionResult> OnPostRediscoverAsync(string candidateId)
+    {
+        ModelState.Clear();
+        try
+        {
+            var catalog = await upstreams.DiscoverModels(candidateId, HttpContext.RequestAborted);
+            Notice = $"已重新获取「{upstreams.ReadCandidate(candidateId).Name}」的模型。{catalog.Message}";
+        }
+        // 上游不存在、正在检测或官方登录凭据已不在：读出原因；上游自己的拒绝由目录读句说明，不走这里。
+        catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        Load(candidateId); return Page();
+    }
+
+    /// <summary>删除（需已登录且通过防 CSRF 校验）：须勾选确认；当前使用中或正在检测的上游由服务拒绝。</summary>
+    public IActionResult OnPostDelete(string candidateId, bool deleteConfirmed)
+    {
+        ModelState.Clear();
+        try
+        {
+            var name = upstreams.ReadCandidate(candidateId).Name;
+            if (!deleteConfirmed) throw new InvalidOperationException($"要删除「{name}」，请先勾选删除按钮前面的确认框，再按删除。");
+            upstreams.Delete(candidateId);
+            Notice = $"已删除「{name}」。";
+        }
+        // 未勾选确认、当前使用中、正在检测或上游不存在：读出原因，什么都不删。
+        catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        Load(null); return Page();
+    }
+
     /// <summary>两张表单共用的保存加获取模型：成功后清空表单并把它作为正在设置的上游；任一步拒绝都读出原因。密钥无论成败都清空。</summary>
     private async Task<IActionResult> Discover(UpstreamInput input, UpstreamOptions options)
     {

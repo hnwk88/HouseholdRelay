@@ -76,7 +76,7 @@ static class OfficialLoginTests
 
     /// <summary>
     /// 登录在浏览器里被取消（退出码非零）、结束后没有凭据、本机没装 Claude Code：网页各读出原因与下一步，不新增上游、不留账户目录；
-    /// 名称不合规则时在登录前就拒绝；贴令牌的入口不接受官方登录标记。
+    /// 名称不合规则时在登录前就拒绝；贴令牌的入口不接受官方登录标记；删除登录得到的上游时连同它的账户目录一起删掉。
     /// </summary>
     public static async Task LoginFailures()
     {
@@ -106,6 +106,46 @@ static class OfficialLoginTests
         try { service.SaveCandidate(service.ReadActive().Version, options with { Mode = "oauth", Authentication = "bearer", OfficialLogin = true }, "fixture-pasted-token", "贴令牌"); Check(false, "Pasted tokens must not claim a login"); }
         // 预期的拒绝：官方登录只能经登录入口建立。
         catch (InvalidOperationException error) { Check(error.Message.Contains("登录官方账户"), error.Message); }
+
+        var removed = await service.LoginOfficial(service.ReadActive().Version, options, "将删除的账户", CancellationToken.None);
+        Check(Directory.Exists(Path.Combine(host.Home.Path, ".state", "official-accounts", removed)));
+        service.Delete(removed);
+        Check(NoAccountDirectories(host) && service.ListCandidates().Count == 0, "Deleting an official login upstream must remove its account directory");
+    }
+
+    /// <summary>
+    /// 官方登录令牌已过期、刷新又卡住时，读活动上游要等（最多 30 秒）；这段等待在连接池的锁外，其他请求不排在它后面。
+    /// 慢的那次读完时拿到的是旧凭据，它开始得比已换上的新连接早，不能把新连接换回去。
+    /// </summary>
+    public static async Task SlowTokenReadOutsidePoolLock()
+    {
+        using var gate = new ManualResetEventSlim(); using var waiting = new ManualResetEventSlim();
+        var source = new GatedSource(gate, waiting);
+        using var pool = new UpstreamPool(source, new RelayConfiguration(), new Infrastructure.ExternalSources.Network.SystemUpstreamProxy(() => new RelayConfiguration()));
+        // 两次取租约放到线程池上并行：第一次卡在读快照里，第二次若还排在锁后面就会超时，正好量出等待是否在锁外。
+        var slow = Task.Run(pool.Acquire);
+        Check(waiting.Wait(TimeSpan.FromSeconds(5)), "The slow read never started");
+        var fast = Task.Run(pool.Acquire);
+        // 第二次与 2 秒计时赛跑：先完成说明没在等锁；计时先到即判失败，卡住的任务由后面 gate.Set() 放行收场。
+        Check(await Task.WhenAny(fast, Task.Delay(TimeSpan.FromSeconds(2))) == fast, "A second request must not wait behind a slow token read");
+        using var current = await fast; Check(current.Snapshot.Credential == "fixture-pool-new");
+        gate.Set();
+        using var late = await slow; Check(late.Snapshot.Credential == "fixture-pool-new", "A read that started earlier must not replace the newer connection");
+        using var next = pool.Acquire(); Check(next.Snapshot.Credential == "fixture-pool-new");
+    }
+
+    /// <summary>第一次读卡在 <paramref name="gate"/> 上并返回旧凭据（模拟等刷新），之后每次立即返回新凭据。</summary>
+    private sealed class GatedSource(ManualResetEventSlim gate, ManualResetEventSlim waiting) : IActiveUpstreamSource
+    {
+        private int reads;
+        /// <summary>按读的先后返回旧或新凭据的同一版本快照。</summary>
+        public UpstreamSnapshot ReadActive()
+        {
+            var options = new UpstreamOptions { BaseUrl = "http://127.0.0.1:9", AllowPrivateNetwork = true };
+            if (Interlocked.Increment(ref reads) > 1) return new(1, options, "fixture-pool-new");
+            waiting.Set(); gate.Wait(TimeSpan.FromSeconds(10));
+            return new(1, options, "fixture-pool-old");
+        }
     }
 
     /// <summary>数据目录下没有任何官方账户目录（目录本身不存在或为空）。</summary>

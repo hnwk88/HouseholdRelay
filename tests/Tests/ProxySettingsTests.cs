@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Net;
+using System.Text.Json;
 using Infrastructure.ExternalSources.ClaudeCode;
 using Infrastructure.ExternalSources.Network;
 using Microsoft.AspNetCore.Http;
@@ -43,10 +44,23 @@ static class ProxySettingsTests
 
     /// <summary>
     /// 验证启用代理却取不到地址时拒绝发出请求：中转转发返回 502 并说明代理不可用、模拟上游一次都没被访问；
-    /// 获取模型读出代理原因、同样不访问上游。
+    /// 获取模型读出代理原因、同样不访问上游；完整服务上那次被拒的请求在用量里记成未发出的失败（未派发、上游状态为空、金额不适用）。
     /// </summary>
     public static async Task RefusedWhenUnavailable()
     {
+        var switchable = new RelayConfiguration();
+        await using (var target = await UpstreamFixture.Create())
+        await using (var web = await WebFixture.Create(overrides: services => services.AddSingleton<IUpstreamProxy>(
+            new SystemUpstreamProxy(() => switchable, new FakeProxy("http://127.0.0.1:7897") { Bypass = true }))))
+        {
+            await target.Activate(web.Upstreams); var calls = target.Calls.Count; var person = web.Identities.Create("代理用量");
+            switchable.ProxyMode = "auto";
+            using (var refused = await UpstreamFixture.RelayRequest(web, person.Token)) Check((int)refused.StatusCode == 502 && target.Calls.Count == calls);
+            var usage = web.App.Services.GetRequiredService<IUsageService>(); UsageRow? row = null;
+            await Until(() => (row = usage.Query(new()).Rows.SingleOrDefault()) is { Outcome: not "started" });
+            Check(row is { Outcome: "failed", Dispatched: false, UpstreamStatus: null, StatusCode: 502 } && row.Money.Source == "not_applicable", JsonSerializer.Serialize(row));
+        }
+
         var config = new RelayConfiguration { ProxyMode = "auto" };
         var unavailable = new SystemUpstreamProxy(() => config, new FakeProxy("http://127.0.0.1:7897") { Bypass = true });
         await using var fixture = await Fixture.Create(context => context.Response.WriteAsync("{}"), proxy: unavailable);

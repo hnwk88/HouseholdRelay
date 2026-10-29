@@ -26,6 +26,9 @@ public interface IUpstreamRepository
     /// <summary>只改名称，不动配置、凭据、检测状态和任何按主键关联的记录；不存在时提示重新加载。</summary>
     void Rename(string id, string name);
 
+    /// <summary>删除一个已保存上游；它是活动上游的来源（当前使用中）或正在检测（两分钟内）时拒绝，不存在时提示重新加载。</summary>
+    void DeleteCandidate(string id);
+
     /// <summary>写回获取模型或改选模型后的配置与报告（报告可为空），并把状态置为未测试；不存在时提示重新加载。</summary>
     void SaveUntested(string id, string optionsJson, string? reportJson);
 

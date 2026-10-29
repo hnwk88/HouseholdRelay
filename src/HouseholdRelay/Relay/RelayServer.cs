@@ -148,9 +148,10 @@ public sealed class RelayServer : IDisposable
             // 客户端仍在连接却被取消，只能是总超时触发，转成 504；客户端自己断开的情况留给外层按 cancelled 处理。
             catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
             { throw new RelayFailure(504, "Upstream request timed out."); }
-            // 代理已启用却取不到地址：建连前就拒绝，请求没有发出；固定提示让使用者知道去找管理员查代理，不透出代理地址。
+            // 代理已启用却取不到地址：建连前就拒绝，请求没有发出，用量记成未发出的失败（发送标记在此之前已写，结束记录会按这里改回）；
+            // 固定提示让使用者知道去找管理员查代理，不透出代理地址。
             catch (HttpRequestException error) when (ProxyUnavailable(error))
-            { throw new RelayFailure(502, "Upstream proxy is enabled but unavailable; the request was not sent. Ask the administrator to check proxy settings in local management."); }
+            { dispatched = false; throw new RelayFailure(502, "Upstream proxy is enabled but unavailable; the request was not sent. Ask the administrator to check proxy settings in local management."); }
             // 连不上上游时只回固定的 502 提示，不透出上游地址或底层网络错误细节。
             catch (HttpRequestException) { throw new RelayFailure(502, "Upstream connection failed. Check host connectivity."); }
         }

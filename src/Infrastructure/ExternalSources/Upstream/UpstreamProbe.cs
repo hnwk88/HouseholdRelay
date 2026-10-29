@@ -26,6 +26,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
                 "unsupported" => catalog with { Message = "上游不提供模型目录，请手填模型名。" },
                 "rejected" => catalog with { Message = UpstreamDetection.Rejected(options) },
                 "cooldown" => catalog with { Message = "上游请求过多，请稍后再获取模型。" },
+                _ when catalog.Message.StartsWith('5') => catalog with { Message = $"获取模型失败，上游返回 HTTP {catalog.Message}。{Unavailable()}" },
                 _ => catalog with { Message = $"获取模型失败，上游返回 HTTP {catalog.Message}。请检查地址是否填对。" }
             };
         }
@@ -155,9 +156,13 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         catch (JsonException) { return false; }
     }
 
-    /// <summary>调用被拒（非 2xx、非 401/429）时读出的原因与下一步，区分手动标准、手动 Claude Code、自动但本机没装 Claude Code、两种都试过。</summary>
+    /// <summary>
+    /// 调用被拒（非 2xx、非 401/429）时读出的原因与下一步，区分手动标准、手动 Claude Code、自动但本机没装 Claude Code、两种都试过；
+    /// 5xx 不是模型或权限问题，一律读成上游暂时不可用或拒绝了当前网络出口，并读出当前代理方式。
+    /// </summary>
     private string Refused(int status, UpstreamOptions attempt, string diagnostic, bool triedClaude) =>
-        attempt.DiagnosticManual && diagnostic == "messages" ? $"最小模型调用返回 HTTP {status}，请检查模型权限和上游配置。若这家只接受 Claude Code，可在高级设置把检测方式改回自动判断。"
+        status >= 500 ? (triedClaude ? $"标准 Messages 和 Claude Code 实际调用都没有通过（最后一次 HTTP {status}）。" : $"最小模型调用返回 HTTP {status}。") + Unavailable()
+        : attempt.DiagnosticManual && diagnostic == "messages" ? $"最小模型调用返回 HTTP {status}，请检查模型权限和上游配置。若这家只接受 Claude Code，可在高级设置把检测方式改回自动判断。"
         : attempt.DiagnosticManual ? $"Claude Code 实际调用返回 HTTP {status}，请检查模型名称和权限。"
         : triedClaude ? $"标准 Messages 和 Claude Code 实际调用都没有通过（最后一次 HTTP {status}），请检查模型名称和权限。"
         : claudeCode.IsAvailable ? $"最小模型调用返回 HTTP {status}，请检查模型名称和权限。"
@@ -182,6 +187,9 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
             if (inner is UpstreamProxyUnavailableException proxyError) return proxyError.Message;
         return "连接或 TLS 校验失败，请检查地址、端口、证书及项目设置里的代理。";
     }
+
+    /// <summary>上游回 5xx 时的原因与下一步：可能是上游暂时故障，也可能是按地区屏蔽了当前网络出口；附上当前代理方式，指向「查代理出口」而不是「查地址」。</summary>
+    private string Unavailable() => $"上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：{proxy.Describe()}请检查代理出口后重试。";
 
     /// <summary>获取模型失败时的结果：认证方式未确定，目录为空。</summary>
     private static ModelCatalog Failed(string message) => new("failed", null, [], message);
