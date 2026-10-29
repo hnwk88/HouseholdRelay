@@ -16,6 +16,7 @@ using Tests;
 if (args.FirstOrDefault() == "--real-upstream-browser") return await RealUpstreamValidation.Run(args);
 if (args.FirstOrDefault() == "--real-detection-browser") return await RealDetectionValidation.Run(args);
 if (args.FirstOrDefault() == "--fake-claude") return FakeClaude.Run(args);
+if (Path.GetFileNameWithoutExtension(Environment.ProcessPath)?.Equals("claude", StringComparison.OrdinalIgnoreCase) == true) return FakeClaude.RunAsClaude(args);
 
 var tests = new (string Name, Func<Task> Test)[]
 {

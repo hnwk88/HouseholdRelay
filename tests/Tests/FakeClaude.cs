@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Application.Interfaces.ClaudeCode;
 using Infrastructure.ExternalSources.ClaudeCode;
@@ -32,6 +33,9 @@ static class FakeClaude
             .Where(key => key.StartsWith("ANTHROPIC_", StringComparison.OrdinalIgnoreCase)
                 || key.StartsWith("CLAUDE_", StringComparison.OrdinalIgnoreCase) && key is not ("CLAUDE_CONFIG_DIR" or "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")).ToArray();
         File.WriteAllText(Path.Combine(directory, "fake-env.json"), JsonSerializer.Serialize(new { inherited, directory, noProxy = Environment.GetEnvironmentVariable("NO_PROXY") }));
+        // 每次调用各记一行有没有可见的控制台窗口，浏览器旅程据此核对登录子进程没有在用户屏幕上出窗口。
+        var window = GetConsoleWindow();
+        File.AppendAllText(Path.Combine(directory, "fake-windows.log"), $"{command}\t{window != IntPtr.Zero && IsWindowVisible(window)}\n");
         if (command == "auth login")
         {
             if (scenario == "cancel") return 1;
@@ -42,6 +46,28 @@ static class FakeClaude
         if (command.StartsWith("-p /usage", StringComparison.Ordinal)) { Write(directory, RefreshedToken, 60); Console.WriteLine("{}"); return 0; }
         return 2;
     }
+
+    /// <summary>
+    /// 以 claude.exe 之名运行时的入口：浏览器旅程把测试程序复制成 claude.exe 放进子服务的 PATH，真定位器就会找到它。
+    /// 场景从 <see cref="ScenarioFileVariable"/> 指向的文件读，旅程改写这个文件就能在同一个子服务里先后走取消与成功；没有这个变量时拒绝扮演。
+    /// </summary>
+    public static int RunAsClaude(string[] args)
+    {
+        if (Environment.GetEnvironmentVariable(ScenarioFileVariable) is not { Length: > 0 } file) { Console.Error.WriteLine(ScenarioFileVariable + " missing"); return 2; }
+        return Run(["--fake-claude", File.ReadAllText(file).Trim(), .. args]);
+    }
+
+    /// <summary>浏览器旅程用来告诉假 claude.exe 场景文件位置的环境变量；不以 CLAUDE_ 或 ANTHROPIC_ 开头，隔离环境不会清掉它。</summary>
+    public const string ScenarioFileVariable = "HOUSEHOLD_FAKE_CLAUDE_SCENARIO_FILE";
+
+    /// <summary>取本进程所属控制台的窗口；没有窗口（以不建窗口方式启动）时返回零。</summary>
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetConsoleWindow();
+
+    /// <summary>窗口是否可见；用来核对登录子进程没有在用户屏幕上出窗口。</summary>
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(IntPtr window);
 
     /// <summary>按 Claude Code 的格式写凭据文件：<c>claudeAiOauth</c> 下的访问令牌、刷新令牌和 <paramref name="minutes"/> 分钟后到期的毫秒时间戳。</summary>
     public static void Write(string directory, string token, int minutes) => File.WriteAllText(Path.Combine(directory, OfficialCredential.FileName), JsonSerializer.Serialize(new

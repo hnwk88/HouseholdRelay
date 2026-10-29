@@ -86,20 +86,20 @@
     <p>按「登录官方账户」后，程序会让本机的 Claude Code 打开浏览器登录页（任务栏里会多一个最小化的 Claude Code 窗口，不用管它）。在浏览器里登录完，这一页会自动显示结果并读取模型目录。登录凭据只存在中转自己的数据目录里，不碰本机 Claude Code 自己的登录；到期前自动刷新，不用重新粘贴。</p>
     <form method="post" asp-page-handler="LoginAccount" class="settings"><input type="hidden" asp-for="Version" />
         <label asp-for="Login.Name">账户名称（可不填，不填就用登录邮箱）</label><input asp-for="Login.Name" maxlength="40" placeholder="例如 我的 Claude 账户" />
-        <details><summary>高级设置（一般不用改）</summary>
-            <label asp-for="Login.BaseUrl">上游地址</label><input asp-for="Login.BaseUrl" type="url" maxlength="2048" required />
-            <label class="checkbox"><input asp-for="Login.AllowPrivateNetwork" />允许连接本机或私网地址（包括 HTTP）</label>
+        <details><summary>登录的高级设置（一般不用改）</summary>
+            <label asp-for="Login.BaseUrl">登录用的上游地址</label><input asp-for="Login.BaseUrl" type="url" maxlength="2048" required />
+            <label class="checkbox"><input asp-for="Login.AllowPrivateNetwork" />允许登录用的上游是本机或私网地址（包括 HTTP）</label>
         </details>
         <button type="submit">登录官方账户</button>
     </form>
     <h3 id="account-token-heading">或者贴已有的账户访问令牌</h3>
     <form method="post" asp-page-handler="DiscoverAccount" class="settings" aria-labelledby="account-token-heading"><input type="hidden" asp-for="Version" />
         <label asp-for="Account.Name">账户名称</label><input asp-for="Account.Name" maxlength="40" required placeholder="例如 我的 Claude 账户" />
-        <label asp-for="Account.BaseUrl">上游地址</label><input asp-for="Account.BaseUrl" type="url" maxlength="2048" required />
+        <label asp-for="Account.BaseUrl">贴令牌用的上游地址</label><input asp-for="Account.BaseUrl" type="url" maxlength="2048" required />
         <label asp-for="Account.Credential">账户访问令牌</label><input asp-for="Account.Credential" type="password" autocomplete="new-password" maxlength="8192" required />
-        <details><summary>高级设置（一般不用改）</summary>
+        <details><summary>贴令牌的高级设置（一般不用改）</summary>
             <label class="checkbox"><input asp-for="Account.OAuthBeta" />兼容中转的账户模式也需要 OAuth beta（官方地址总会附加）</label>
-            <label class="checkbox"><input asp-for="Account.AllowPrivateNetwork" />允许连接本机或私网地址（包括 HTTP）</label>
+            <label class="checkbox"><input asp-for="Account.AllowPrivateNetwork" />允许贴令牌用的上游是本机或私网地址（包括 HTTP）</label>
         </details>
         <button type="submit">用账户令牌获取模型（不花额度）</button>
     </form>
