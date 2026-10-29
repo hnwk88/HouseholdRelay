@@ -49,11 +49,11 @@ public sealed class ConfigurationService(IConfigurationRepository settings, IUps
     /// <summary>解密并返回服务器证书 PFX 字节；未保存时返回 null。返回的是明文私钥材料，调用方用完后必须自行清零。</summary>
     public byte[]? LoadCertificate() => certificateStore.ReadProtectedCertificate() is byte[] encrypted ? protector.Unprotect(encrypted) : null;
 
-    /// <summary>以当前活动版本的配置加上新凭据保存为待测试候选，不直接替换活动上游；须经检测通过后才能激活。</summary>
+    /// <summary>以当前活动版本的配置加上新凭据保存为待测试候选，不直接替换活动上游；须经检测通过后才能激活。当前是官方登录上游时，新候选改为贴入的账户令牌。</summary>
     public void SaveCredential(string credential)
     {
         var active = upstreams.ReadActive();
-        upstreams.SaveCandidate(active.Version, active.Options, credential, active.Name);
+        upstreams.SaveCandidate(active.Version, active.Options with { OfficialLogin = false }, credential, active.Name);
     }
 
     /// <summary>

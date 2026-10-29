@@ -119,12 +119,8 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     {
         var start = new ProcessStartInfo(executable) { WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var key in start.Environment.Keys.Where(key => key.StartsWith("ANTHROPIC_", StringComparison.OrdinalIgnoreCase)
-            || key.StartsWith("CLAUDE_", StringComparison.OrdinalIgnoreCase)
-            || key is "NODE_EXTRA_CA_CERTS" or "SSL_CERT_FILE" or "NODE_TLS_REJECT_UNAUTHORIZED").ToArray()) start.Environment.Remove(key);
-        ChildProxyEnvironment.Apply(start, route);
+        IsolatedClaudeEnvironment.Apply(start, Path.Combine(directory, "config"), route);
         start.Environment["ANTHROPIC_BASE_URL"] = url; start.Environment["ANTHROPIC_AUTH_TOKEN"] = token;
-        start.Environment["CLAUDE_CONFIG_DIR"] = Path.Combine(directory, "config"); start.Environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
         foreach (var argument in new[] { "--safe-mode", "--no-session-persistence", "--strict-mcp-config", "--no-chrome", "--tools", "",
             "--setting-sources", "", "--model", model, "--max-turns", "1", "--output-format", "json", "--print", "Reply with OK." }) start.ArgumentList.Add(argument);
         return start;

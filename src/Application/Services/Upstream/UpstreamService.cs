@@ -10,14 +10,19 @@ using Core.Upstream;
 namespace Application.Services.Upstream;
 
 /// <summary>网页和 CLI 共用的上游保存、获取模型、诊断、改名和原子切换服务。</summary>
-public sealed class UpstreamService(IUpstreamRepository repository, ISecretProtector protector, IUpstreamProbe probe) : IUpstreamService
+public sealed class UpstreamService(IUpstreamRepository repository, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts) : IUpstreamService
 {
-    /// <summary>读取活动上游并解密其凭据组成快照（含关联的已保存上游主键与名称）；活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>，未配置凭据时快照的凭据为 null。</summary>
+    /// <summary>
+    /// 读取活动上游组成快照（含关联的已保存上游主键与名称）：官方登录上游读它配置目录里的最新令牌，其余解密库中凭据；
+    /// 活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>，未配置凭据（或登录凭据已不在）时快照的凭据为 null。
+    /// </summary>
     public UpstreamSnapshot ReadActive()
     {
         var row = repository.ReadActive() ?? throw new InvalidOperationException("上游配置缺失。");
-        return new(row.Version, Parse<UpstreamOptions>(row.OptionsJson), row.ProtectedCredential is null ? null : Decrypt(row.ProtectedCredential),
-            row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson), row.CandidateId, row.Name);
+        var options = Parse<UpstreamOptions>(row.OptionsJson);
+        var credential = row.ProtectedCredential is null ? null
+            : options.OfficialLogin ? row.CandidateId is { } account ? officialAccounts.ReadAccessToken(account) : null : Decrypt(row.ProtectedCredential);
+        return new(row.Version, options, credential, row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson), row.CandidateId, row.Name);
     }
 
     /// <summary>读取最近创建的上游（不含凭据）；一个都没有时返回 null。</summary>
@@ -41,6 +46,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     public string SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name = null)
     {
         options = options.Validated();
+        if (options.OfficialLogin) throw new InvalidOperationException("官方账户请按「登录官方账户」接入，不用贴令牌。");
         name = name is null ? new Uri(options.BaseUrl).Host : ValidName(name);
         if (credential.Length is < 1 or > 8192 || credential.Any(char.IsControl) || credential.Any(char.IsWhiteSpace))
             throw new InvalidOperationException("请填写有效的上游凭据，不能含空白或控制字符。");
@@ -59,6 +65,22 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
         finally { CryptographicOperations.ZeroMemory(plain); }
     }
 
+    /// <summary>
+    /// 先生成主键，委托 <see cref="IOfficialAccountLogin.Login"/> 在以它命名的配置目录里登录，再保存为账户模式（Bearer、官方登录）的未测试上游；
+    /// 名称为空时用登录邮箱（超过 40 字截断），邮箱也取不到时叫「官方账户」。库里只存加密的空凭据占位，令牌留在登录目录里由 CLI 维护。
+    /// 名称不合规则在登录前就拒绝，免得白登录一次。
+    /// </summary>
+    public async Task<string> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation)
+    {
+        options = (options with { Mode = "oauth", Authentication = "bearer", AuthenticationManual = false, OfficialLogin = true }).Validated();
+        var chosen = string.IsNullOrWhiteSpace(name) ? null : ValidName(name);
+        var id = Guid.NewGuid().ToString("N");
+        var email = await officialAccounts.Login(id, cancellation);
+        chosen ??= ValidName(email is { Length: > 0 } ? email.Length > 40 ? email[..40] : email : "官方账户");
+        repository.InsertCandidate(id, expectedVersion, chosen, Serialize(options), protector.Protect([]));
+        return id;
+    }
+
     /// <summary>校验后改名；名称只做显示，切换、检测记录和用量都按主键关联，改名不影响它们。</summary>
     public void Rename(string id, string name) => repository.Rename(id, ValidName(name));
 
@@ -68,9 +90,9 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     /// </summary>
     public async Task<ModelCatalog> DiscoverModels(string id, CancellationToken cancellation)
     {
-        var candidate = ReadCandidate(id);
+        var candidate = ReadCandidate(id); var token = LoginToken(candidate);
         var secret = repository.BeginCandidateTest(id);
-        var catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, Decrypt(secret)), cancellation);
+        var catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret)), cancellation);
         var options = catalog.Authentication is { } accepted && !candidate.Options.AuthenticationManual ? candidate.Options with { Authentication = accepted } : candidate.Options;
         var report = new UpstreamReport(DateTimeOffset.UtcNow, catalog.Status == "failed" ? "failed" : "passed",
             catalog.Status switch { "passed" => "passed", "rejected" => "reconnect", _ => "unverified" },
@@ -101,9 +123,10 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
         if (!confirmed) throw new InvalidOperationException("请先确认最小模型测试可能消耗少量上游额度。");
         var candidate = ReadCandidate(id);
         if (candidate.Options.Model.Length == 0) throw new InvalidOperationException("请先选择或填写要测试的模型，再测试。");
+        var token = LoginToken(candidate);
         var secret = repository.BeginCandidateTest(id);
         // 网络等待不占用写事务，也不接触当前服务的暂停和冷却状态。
-        var result = await probe.Run(new(candidate.ExpectedVersion, candidate.Options, Decrypt(secret)), cancellation);
+        var result = await probe.Run(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret)), cancellation);
         repository.FinishCandidateTest(id, result.Report.CanActivate ? "passed" : "failed", Serialize(result.Report), Serialize(result.Used));
         return result.Report;
     }
@@ -129,6 +152,13 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
 
     /// <summary>按统一 JSON 选项反序列化存储的配置或报告；内容为 JSON null 时抛出 <see cref="InvalidOperationException"/>。</summary>
     private static T Parse<T>(string json) => JsonSerializer.Deserialize<T>(json, ConfigurationFiles.Json) ?? throw new InvalidOperationException("上游配置损坏。");
+
+    /// <summary>
+    /// 官方登录上游在标记检测开始之前先读它配置目录里的最新令牌，取不到时抛出 <see cref="InvalidOperationException"/> 提示重新登录，上游状态不变；
+    /// 其余上游返回 null，由调用方解密库中凭据。
+    /// </summary>
+    private string? LoginToken(UpstreamCandidate candidate) => !candidate.Options.OfficialLogin ? null
+        : officialAccounts.ReadAccessToken(candidate.Id) ?? throw new InvalidOperationException("这个官方账户的登录凭据已经不在了，请重新按「登录官方账户」。");
 
     /// <summary>解密凭据并返回 UTF-8 字符串，解密出的字节缓冲在返回前清零。</summary>
     private string Decrypt(byte[] encrypted)

@@ -32,7 +32,8 @@ public static class UpstreamDetection
 
     /// <summary>所有可试的认证方式都被拒绝时读出的原因与下一步；账户令牌、手动指定和自动探测三种情况分别说明。</summary>
     public static string Rejected(UpstreamOptions options) =>
-        options.Mode == "oauth" ? "账户令牌被上游拒绝。请重新取得账户令牌后再填写。"
+        options.OfficialLogin ? "官方账户的登录已失效，被上游拒绝。请在「官方账户」里重新按「登录官方账户」。"
+        : options.Mode == "oauth" ? "账户令牌被上游拒绝。请重新取得账户令牌后再填写。"
         : options.AuthenticationManual ? $"密钥被上游拒绝（认证方式手动指定为 {AuthenticationLabel(options.Authentication)}）。请核对密钥，或在高级设置里改回自动判断。"
         : "密钥被上游拒绝，两种认证方式（x-api-key、Bearer）都试过。请核对密钥后重新填写。";
 

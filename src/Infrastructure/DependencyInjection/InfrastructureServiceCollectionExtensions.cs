@@ -64,6 +64,8 @@ public static class InfrastructureServiceCollectionExtensions
         });
         services.AddSingleton<IClientLauncher, ClientLauncher>();
         services.AddSingleton<IClaudeCodeProbe, ClaudeCodeProbe>();
+        services.AddSingleton(new OfficialLoginOptions());
+        services.AddSingleton<IOfficialAccountLogin, OfficialAccountLogin>();
         services.AddSingleton<IUpstreamProbe, UpstreamProbe>();
         return services.AddUpstreamConnections();
     }

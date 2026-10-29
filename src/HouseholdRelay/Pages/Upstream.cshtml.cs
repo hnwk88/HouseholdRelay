@@ -10,8 +10,10 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
 {
     /// <summary>「API 供应商」表单。</summary>
     [BindProperty] public UpstreamInput Api { get; set; } = new();
-    /// <summary>「官方账户」表单；地址默认官方接口。</summary>
+    /// <summary>「官方账户」里贴账户访问令牌的表单；地址默认官方接口。</summary>
     [BindProperty] public UpstreamInput Account { get; set; } = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
+    /// <summary>「官方账户」里「登录官方账户」的表单：名称可空（用登录邮箱），地址默认官方接口。</summary>
+    [BindProperty] public UpstreamInput Login { get; set; } = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
     /// <summary>打开页面时的活动上游版本号；保存与切换时若活动版本已变化则拒绝，防止基于过期页面操作。</summary>
     [BindProperty] public long Version { get; set; }
     /// <summary>当前活动上游的不可变快照；页面只使用其中的非秘密字段。</summary>
@@ -33,6 +35,26 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
 
     /// <summary>官方账户：加密保存名称、地址、账户令牌后立刻获取模型（不花额度）。</summary>
     public Task<IActionResult> OnPostDiscoverAccountAsync() => Discover(Account, Account.ToAccountOptions());
+
+    /// <summary>
+    /// 登录官方账户（需已登录且通过防 CSRF 校验）：委托本机 Claude Code 打开浏览器登录，等登录完成后保存为具名上游并立刻获取模型（不花额度）；
+    /// 浏览器断开时经 RequestAborted 结束登录进程。未安装、取消、超时等原因作为表单错误读出。
+    /// </summary>
+    public async Task<IActionResult> OnPostLoginAccountAsync()
+    {
+        ModelState.Clear();
+        string? working = null;
+        try
+        {
+            working = await upstreams.LoginOfficial(Version, Login.ToLoginOptions(), Login.Name, HttpContext.RequestAborted);
+            var catalog = await upstreams.DiscoverModels(working, HttpContext.RequestAborted);
+            Notice = $"官方账户登录成功，已保存为「{upstreams.ReadCandidate(working).Name}」。{catalog.Message}";
+            Login = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
+        }
+        // 未安装、登录取消或超时、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
+        catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        Load(working); return Page();
+    }
 
     /// <summary>
     /// 测试（需已登录且通过防 CSRF 校验）：按钮文字已写明会消耗少量上游额度，按下即视为同意；先按需改选模型，再对已保存的上游做一次最小调用。
@@ -105,11 +127,15 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         Active = upstreams.ReadActive(); Saved = upstreams.ListCandidates(); Version = Active.Version; ModelState.Remove(nameof(Version));
         // 其他按钮的提交不带官方账户表单字段，绑定会给出空地址；补回官方地址，避免读屏读到一个空的必填框。
         if (string.IsNullOrWhiteSpace(Account.BaseUrl)) Account.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
+        if (string.IsNullOrWhiteSpace(Login.BaseUrl)) Login.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         Working = workingId is null ? Saved.LastOrDefault(item => item.State != "passed") : Saved.FirstOrDefault(item => item.Id == workingId);
         var state = upstreamPool.Status(Active.Version);
         RuntimeStatus = !Active.Configured ? "未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0
             ? $"上游冷却中，约 {state.CooldownSeconds} 秒后重试" : Active.Report?.CanActivate == true ? "已通过最小调用检测" : "已迁移凭据，调用尚未检测";
     }
+
+    /// <summary>「接入方式」的读法：官方账户登录、官方账户令牌或 API 密钥。</summary>
+    public static string AccessText(UpstreamOptions options) => options.OfficialLogin ? "官方账户登录" : options.Mode == "oauth" ? "官方账户令牌" : "API 密钥";
 
     /// <summary>列表与第二步里「认证方式」的读法：手动指定或已被上游确认时读出方式，否则读「尚未确认」。</summary>
     public static string AuthenticationText(UpstreamCandidate item) =>

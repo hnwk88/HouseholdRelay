@@ -151,7 +151,7 @@ static class UpstreamDetectionTests
 
     /// <summary>
     /// 验证新实例的上游页（含命令行 init 生成证书之后）：库里的活动行是旧默认的账户模式，但页面读出「还没有上游」，第一张表单是「API 供应商」、排在「官方账户」之前，
-    /// 官方账户块直接写明登录功能下一版加入；全局代理默认不使用，测试按钮写明费用、没有单独的同意复选框。
+    /// 官方账户块直接给出「登录官方账户」按钮；全局代理默认不使用，测试按钮写明费用、没有单独的同意复选框。
     /// </summary>
     public static async Task NewInstanceDefaults()
     {
@@ -160,7 +160,8 @@ static class UpstreamDetectionTests
         using var page = await web.Http.GetAsync(web.Url + "/Upstream");
         var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
         var api = html.IndexOf("id=\"api-heading\"", StringComparison.Ordinal); var account = html.IndexOf("id=\"account-heading\"", StringComparison.Ordinal);
-        Check(api > 0 && account > api && html.Contains("还没有上游") && html.Contains("登录功能将在下一版加入"));
+        var login = html.IndexOf("handler=LoginAccount", StringComparison.Ordinal);
+        Check(api > 0 && account > api && html.Contains("还没有上游") && login > account && html.Contains("登录官方账户</button>") && !html.Contains("登录功能将在下一版加入"));
         var discoverApi = html.IndexOf("handler=DiscoverApi", StringComparison.Ordinal);
         Check(discoverApi > api && discoverApi < html.IndexOf("handler=DiscoverAccount", StringComparison.Ordinal) && !html.Contains("handler=Test"), "The first upstream form must be the API supplier");
         Check(!html.Contains("name=\"confirmed\"") && web.Settings.Read().Value.ProxyMode == "none");

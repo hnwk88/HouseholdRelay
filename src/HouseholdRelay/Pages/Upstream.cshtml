@@ -10,9 +10,9 @@
     {
         <p>名称：@(Model.Active.Name ?? "未命名")</p>
         <p class="status">@Model.RuntimeStatus</p>
-        <p>@(Model.Active.Options.Mode == "oauth" ? "官方账户令牌" : "API 密钥") · 认证用 @UpstreamDetection.AuthenticationLabel(Model.Active.Options.Authentication) · 按 @UpstreamDetection.DiagnosticLabel(Model.Active.Options.Diagnostic) 方式检测 · 模型 @(Model.Active.Options.Model.Length == 0 ? "未填写" : Model.Active.Options.Model)</p>
+        <p>@UpstreamModel.AccessText(Model.Active.Options) · 认证用 @UpstreamDetection.AuthenticationLabel(Model.Active.Options.Authentication) · 按 @UpstreamDetection.DiagnosticLabel(Model.Active.Options.Diagnostic) 方式检测 · 模型 @(Model.Active.Options.Model.Length == 0 ? "未填写" : Model.Active.Options.Model)</p>
         <p>Messages 地址：<code>@UpstreamAddress.Endpoint(Model.Active.Options, "/v1/messages")</code></p>
-        <p>凭据：已配置；到期时间未知。</p>
+        <p>@(Model.Active.Options.OfficialLogin ? "凭据：由登录得到，Claude Code 到期前自动刷新，不用重新粘贴。" : "凭据：已配置；到期时间未知。")</p>
     }
     else
     {
@@ -52,7 +52,7 @@
         {
             <article class="saved-upstream" aria-labelledby="saved-@item.Id"><h3 id="saved-@item.Id">@item.Name@(item.Id == Model.Active.CandidateId ? "（当前使用中）" : "")</h3>
                 <dl><dt>地址</dt><dd><code>@item.Options.BaseUrl</code></dd>
-                    <dt>接入方式</dt><dd>@(item.Options.Mode == "oauth" ? "官方账户令牌" : "API 密钥")</dd>
+                    <dt>接入方式</dt><dd>@UpstreamModel.AccessText(item.Options)</dd>
                     <dt>认证方式</dt><dd>@UpstreamModel.AuthenticationText(item)</dd>
                     <dt>模型</dt><dd>@(item.Options.Model.Length == 0 ? "尚未选择" : item.Options.Model)</dd>
                     <dt>最近一次检测</dt><dd>@UpstreamModel.ResultText(item)</dd></dl>
@@ -83,8 +83,17 @@
     </form>
 </section>
 <section class="card" aria-labelledby="account-heading"><h2 id="account-heading">官方账户</h2>
-    <p>登录功能将在下一版加入。现在可以把已有的账户访问令牌贴进来接入。</p>
-    <form method="post" asp-page-handler="DiscoverAccount" class="settings"><input type="hidden" asp-for="Version" />
+    <p>按「登录官方账户」后，程序会让本机的 Claude Code 打开浏览器登录页（任务栏里会多一个最小化的 Claude Code 窗口，不用管它）。在浏览器里登录完，这一页会自动显示结果并读取模型目录。登录凭据只存在中转自己的数据目录里，不碰本机 Claude Code 自己的登录；到期前自动刷新，不用重新粘贴。</p>
+    <form method="post" asp-page-handler="LoginAccount" class="settings"><input type="hidden" asp-for="Version" />
+        <label asp-for="Login.Name">账户名称（可不填，不填就用登录邮箱）</label><input asp-for="Login.Name" maxlength="40" placeholder="例如 我的 Claude 账户" />
+        <details><summary>高级设置（一般不用改）</summary>
+            <label asp-for="Login.BaseUrl">上游地址</label><input asp-for="Login.BaseUrl" type="url" maxlength="2048" required />
+            <label class="checkbox"><input asp-for="Login.AllowPrivateNetwork" />允许连接本机或私网地址（包括 HTTP）</label>
+        </details>
+        <button type="submit">登录官方账户</button>
+    </form>
+    <h3 id="account-token-heading">或者贴已有的账户访问令牌</h3>
+    <form method="post" asp-page-handler="DiscoverAccount" class="settings" aria-labelledby="account-token-heading"><input type="hidden" asp-for="Version" />
         <label asp-for="Account.Name">账户名称</label><input asp-for="Account.Name" maxlength="40" required placeholder="例如 我的 Claude 账户" />
         <label asp-for="Account.BaseUrl">上游地址</label><input asp-for="Account.BaseUrl" type="url" maxlength="2048" required />
         <label asp-for="Account.Credential">账户访问令牌</label><input asp-for="Account.Credential" type="password" autocomplete="new-password" maxlength="8192" required />

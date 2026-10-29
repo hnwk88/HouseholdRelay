@@ -17,6 +17,12 @@ public interface IUpstreamService : IActiveUpstreamSource
     /// <summary>校验并加密保存一个带名称的上游，返回主键；<paramref name="name"/> 为空时用地址主机名（命令行用），空白名称拒绝；活动版本已变化时拒绝。</summary>
     string SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name = null);
 
+    /// <summary>
+    /// 登录官方账户并保存为一个账户模式的未测试上游，返回主键：<paramref name="options"/> 给出地址与私网开关，凭据由 <c>claude auth login</c> 写进这个上游自己的配置目录；
+    /// <paramref name="name"/> 为空时用登录邮箱。登录失败或活动版本已变化时抛出 <see cref="InvalidOperationException"/> 读出原因。
+    /// </summary>
+    Task<string> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation);
+
     /// <summary>修改供应商名称；只影响显示，切换和用量都按主键关联。</summary>
     void Rename(string id, string name);
 

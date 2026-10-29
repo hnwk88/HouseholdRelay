@@ -2,7 +2,7 @@
 
 namespace HouseholdRelay.Pages;
 
-/// <summary>上游页「API 供应商」与「官方账户」两张表单的输入：管理员只填名称、地址、密钥，高级设置默认自动判断。</summary>
+/// <summary>上游页「API 供应商」「登录官方账户」「贴账户访问令牌」三张表单的输入：管理员只填名称、地址、密钥（登录时连密钥也不填），高级设置默认自动判断。</summary>
 public sealed class UpstreamInput
 {
     /// <summary>供应商名称，只做显示，例如「aitoll」「公司 sftoken」；必填，由服务校验。</summary>
@@ -27,6 +27,9 @@ public sealed class UpstreamInput
         Authentication = Authentication == "auto" ? "x-api-key" : Authentication, AuthenticationManual = Authentication != "auto",
         Diagnostic = Diagnostic == "auto" ? "messages" : Diagnostic, DiagnosticManual = Diagnostic != "auto"
     };
+
+    /// <summary>按「登录官方账户」表单生成上游配置：只取地址与私网开关，凭据来自登录，账户模式与 Bearer 由服务定死。</summary>
+    public UpstreamOptions ToLoginOptions() => new() { Mode = "oauth", Authentication = "bearer", BaseUrl = BaseUrl?.Trim() ?? "", AllowPrivateNetwork = AllowPrivateNetwork, OfficialLogin = true };
 
     /// <summary>按官方账户表单生成上游配置：账户令牌固定用 Bearer，检测方式自动判断。</summary>
     public UpstreamOptions ToAccountOptions() => new()

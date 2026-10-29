@@ -72,11 +72,15 @@ sealed class WebFixture : IAsyncDisposable
     public string Url => App.Urls.Single();
     /// <summary>测试专用的管理员密码，仅用于本机临时数据库。</summary>
     public const string Password = "fixture-only-password-abc123";
-    /// <summary>在临时目录上构建管理网页主机（尚未启动）；传入 configure 时在读取配置后再按测试需要改写。</summary>
-    private WebFixture(Action<RelayConfiguration>? configure = null)
+    /// <summary>在临时目录上构建管理网页主机（尚未启动）；传入 configure 时在读取配置后再按测试需要改写，传入 overrides 时追加或覆盖服务登记（例如假的 Claude Code）。</summary>
+    private WebFixture(Action<RelayConfiguration>? configure = null, Action<IServiceCollection>? overrides = null)
     {
-        App = ManagementWeb.Build(Home.Path, 0, configure is null ? null : services => services.AddSingleton(provider =>
-        { var configuration = provider.GetRequiredService<IConfigurationService>().Read().Value; configure(configuration); return configuration; }));
+        App = ManagementWeb.Build(Home.Path, 0, services =>
+        {
+            if (configure is not null) services.AddSingleton(provider =>
+            { var configuration = provider.GetRequiredService<IConfigurationService>().Read().Value; configure(configuration); return configuration; });
+            overrides?.Invoke(services);
+        });
         Database = App.Services.GetRequiredService<RelayDatabase>(); Identities = App.Services.GetRequiredService<IIdentityService>();
         Administrators = App.Services.GetRequiredService<IAdministratorService>(); Relay = App.Services.GetRequiredService<RelayServer>();
         Http = NewClient();
@@ -84,8 +88,8 @@ sealed class WebFixture : IAsyncDisposable
     /// <summary>新建一个独立的浏览器会话（单独 Cookie），关闭自动重定向和系统代理，用于模拟另一位访问者或未登录者。</summary>
     public static HttpClient NewClient() => new(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false });
     /// <summary>构建并启动管理网页主机，返回可直接发请求的夹具。</summary>
-    public static async Task<WebFixture> Create(Action<RelayConfiguration>? configure = null)
-    { var fixture = new WebFixture(configure); await fixture.App.StartAsync(); return fixture; }
+    public static async Task<WebFixture> Create(Action<RelayConfiguration>? configure = null, Action<IServiceCollection>? overrides = null)
+    { var fixture = new WebFixture(configure, overrides); await fixture.App.StartAsync(); return fixture; }
     /// <summary>打开指定表单页（要求 200），从页面中取出防伪令牌字段的值并解码返回；找不到该字段即判失败。</summary>
     public async Task<string> Csrf(string path, HttpClient? client = null)
     {

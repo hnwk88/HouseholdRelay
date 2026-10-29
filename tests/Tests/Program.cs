@@ -15,6 +15,7 @@ using Tests;
 
 if (args.FirstOrDefault() == "--real-upstream-browser") return await RealUpstreamValidation.Run(args);
 if (args.FirstOrDefault() == "--real-detection-browser") return await RealDetectionValidation.Run(args);
+if (args.FirstOrDefault() == "--fake-claude") return FakeClaude.Run(args);
 
 var tests = new (string Name, Func<Task> Test)[]
 {
@@ -63,6 +64,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("upstream names: switch by page, stale version refused, rename keeps id-linked history", UpstreamDetectionTests.NamesAndSwitching),
     ("upstream secrets never appear in pages, reports or error text", UpstreamDetectionTests.SecretsNeverShown),
     ("new instance upstream page defaults to the API supplier", UpstreamDetectionTests.NewInstanceDefaults),
+    ("official account login isolates its config, names by email and forwards refreshed tokens", OfficialLoginTests.LoginRefreshAndForwarding),
+    ("official account login cancel, missing credentials and missing Claude Code leave nothing behind", OfficialLoginTests.LoginFailures),
     ("global proxy none, manual and auto states; unavailable proxy refuses", ProxySettingsTests.ThreeStates),
     ("enabled but unavailable proxy refuses relay and model discovery without dispatch", ProxySettingsTests.RefusedWhenUnavailable),
     ("child process proxy variables are cleared before writing", ProxySettingsTests.ChildEnvironment),

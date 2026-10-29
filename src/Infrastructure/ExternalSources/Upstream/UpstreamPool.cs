@@ -10,14 +10,14 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     private readonly int maxConnections = config.MaxConcurrent;
     private UpstreamConnection? current;
 
-    /// <summary>取得当前活动版本的连接租约。</summary>
+    /// <summary>取得当前活动版本的连接租约；版本不变但凭据换了（官方登录账户的令牌被 CLI 刷新）时也换新连接，新连接不带旧令牌的认证暂停。</summary>
     public IUpstreamLease Acquire()
     {
         // 读取活动版本、替换连接和增加引用必须在同一把锁里完成，否则并发请求可能拿到刚被释放的旧连接或各自建出重复连接。
         lock (sync)
         {
             var snapshot = source.ReadActive();
-            if (current is null || current.Snapshot.Version != snapshot.Version)
+            if (current is null || current.Snapshot.Version != snapshot.Version || !string.Equals(current.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal))
             {
                 var replacement = new UpstreamConnection(snapshot, proxy, maxConnections);
                 var previous = current; current = replacement; previous?.Dispose();

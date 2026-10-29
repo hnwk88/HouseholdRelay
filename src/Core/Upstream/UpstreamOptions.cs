@@ -14,6 +14,9 @@ public sealed record UpstreamOptions
     /// <summary>为 true 表示认证方式由管理员在高级设置里手动指定：探测只用这一种，结果不覆盖它。</summary>
     public bool AuthenticationManual { get; init; }
 
+    /// <summary>为 true 表示凭据来自「登录官方账户」：令牌由 <c>claude auth login</c> 写进这个上游自己的 Claude 配置目录、由 CLI 刷新，转发时读最新值；库里不存令牌。仅账户模式可用。</summary>
+    public bool OfficialLogin { get; init; }
+
     /// <summary>上游 API 根地址；经 <see cref="Validated"/> 规范化后去掉末尾的 <c>/</c> 和 <c>/v1</c>。</summary>
     public string BaseUrl { get; init; } = "https://api.anthropic.com";
 
@@ -37,14 +40,14 @@ public sealed record UpstreamOptions
 
     /// <summary>
     /// 校验各枚举取值、凭据组合与模型名（最多 200 字符，仅字母数字和 <c>- _ . / :</c>），规范化地址并按地址主机推出预设，返回新的副本；原对象不变。
-    /// 账户模式在官方预设下强制附加 OAuth beta，API 密钥模式不允许附加。任一不合法时抛出 <see cref="InvalidOperationException"/>。
+    /// 账户模式在官方预设下强制附加 OAuth beta，API 密钥模式不允许附加，也不允许 <see cref="OfficialLogin"/>。任一不合法时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
     public UpstreamOptions Validated()
     {
         if (Diagnostic is not ("messages" or "claude-code")) throw new InvalidOperationException("请选择支持的调用检测方式。");
         if (Mode is not ("oauth" or "api-key") || Authentication is not ("bearer" or "x-api-key")
-            || Mode == "oauth" && Authentication != "bearer" || Mode == "api-key" && OAuthBeta)
-            throw new InvalidOperationException("账户模式使用 Bearer；API 模式不可附加账户 OAuth beta。");
+            || Mode == "oauth" && Authentication != "bearer" || Mode == "api-key" && (OAuthBeta || OfficialLogin))
+            throw new InvalidOperationException("账户模式使用 Bearer；API 模式不可附加账户 OAuth beta，也不能用官方账户登录。");
         if (Model.Length > 200 || Model.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_' or '.' or '/' or ':')))
             throw new InvalidOperationException("模型名称只能包含字母、数字和 - _ . / :，最多 200 字符。");
         var address = UpstreamAddress.Normalize(BaseUrl, AllowPrivateNetwork);
