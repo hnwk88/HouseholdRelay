@@ -27,6 +27,10 @@ public sealed class SettingsInput
     public bool NormalizeDeviceMetadata { get; set; } = true;
     /// <summary>发往上游时使用的 User-Agent；不能为空白、不超过 256 字符且不含控制字符。</summary>
     public string UpstreamUserAgent { get; set; } = "HouseholdRelay/1.0";
+    /// <summary>全局代理方式：<c>none</c>、<c>auto</c> 或 <c>manual</c>；保存后新建立的上游连接立即按新方式走，不用重启。</summary>
+    public string ProxyMode { get; set; } = "none";
+    /// <summary>手动指定的代理地址；可以省略 http://，写回时补齐；其余方式下原样保存。</summary>
+    public string? ProxyUrl { get; set; }
     /// <summary>由当前实例设置生成表单初值，只复制设置页可编辑的字段。</summary>
     public static SettingsInput From(RelayConfiguration config) => new()
     {
@@ -34,7 +38,7 @@ public sealed class SettingsInput
         MaxPerClient = config.MaxPerClient, MaxQueued = config.MaxQueued, RequestsPerMinute = config.RequestsPerMinute,
         QueueTimeoutSeconds = config.QueueTimeoutSeconds, UploadTimeoutSeconds = config.UploadTimeoutSeconds,
         RequestTimeoutSeconds = config.RequestTimeoutSeconds, NormalizeDeviceMetadata = config.NormalizeDeviceMetadata,
-        UpstreamUserAgent = config.UpstreamUserAgent
+        UpstreamUserAgent = config.UpstreamUserAgent, ProxyMode = config.ProxyMode, ProxyUrl = config.ProxyUrl
     };
     /// <summary>把表单字段写回传入的设置对象，只覆盖本类列出的字段，其余设置（证书、设备标识等）原样保留；不做校验，校验在配置服务保存时进行。</summary>
     public void Apply(RelayConfiguration config)
@@ -44,6 +48,8 @@ public sealed class SettingsInput
         config.MaxQueued = MaxQueued; config.RequestsPerMinute = RequestsPerMinute;
         config.QueueTimeoutSeconds = QueueTimeoutSeconds; config.UploadTimeoutSeconds = UploadTimeoutSeconds;
         config.RequestTimeoutSeconds = RequestTimeoutSeconds; config.NormalizeDeviceMetadata = NormalizeDeviceMetadata;
-        config.UpstreamUserAgent = UpstreamUserAgent;
+        config.UpstreamUserAgent = UpstreamUserAgent; config.ProxyMode = ProxyMode;
+        var proxy = ProxyUrl?.Trim();
+        config.ProxyUrl = string.IsNullOrEmpty(proxy) ? null : proxy.Contains("://", StringComparison.Ordinal) ? proxy : "http://" + proxy;
     }
 }

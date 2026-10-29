@@ -24,6 +24,7 @@ static class UpstreamMigrationTests
             DROP TABLE usage_prices;
             ALTER TABLE upstream DROP COLUMN options_json;
             ALTER TABLE upstream DROP COLUMN report_json;
+            ALTER TABLE upstream DROP COLUMN candidate_id;
             PRAGMA user_version=1;
             CREATE TABLE upstream_candidates (unexpected TEXT);
             """));

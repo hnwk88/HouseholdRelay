@@ -6,7 +6,9 @@ using Application.Interfaces.Identity;
 using Application.Interfaces.Security;
 using Application.Interfaces.Upstream;
 using Application.Interfaces.Usage;
+using Core.Configuration;
 using Infrastructure.ExternalSources.ClaudeCode;
+using Infrastructure.ExternalSources.Network;
 using Infrastructure.ExternalSources.Upstream;
 using Infrastructure.Persistence;
 using Infrastructure.Repositories.Administration;
@@ -17,6 +19,7 @@ using Infrastructure.Repositories.Upstream;
 using Infrastructure.Repositories.Usage;
 using Infrastructure.Security;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Infrastructure.DependencyInjection;
 
@@ -30,10 +33,11 @@ public static class InfrastructureServiceCollectionExtensions
         configure(options);
         services.AddSingleton(options);
 
-        // 数据库构造时依次执行这些步骤；登记顺序与 Order 一致：旧数据导入、上游架构、用量架构。
+        // 数据库构造时依次执行这些步骤；登记顺序与 Order 一致：旧数据导入、上游架构、用量架构、上游命名与全局代理。
         services.AddSingleton<IDatabaseMigration, LegacyImport>();
         services.AddSingleton<IDatabaseMigration, UpstreamSchema>();
         services.AddSingleton<IDatabaseMigration, UsageSchema>();
+        services.AddSingleton<IDatabaseMigration, UpstreamNamingSchema>();
         services.AddSingleton<RelayDatabase>();
         services.AddSingleton<IRelayInstance>(provider => provider.GetRequiredService<RelayDatabase>());
         services.AddSingleton<IServingLock, ServingLockFile>();
@@ -52,15 +56,22 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IClientTrustPackage, ClientTrustPackage>();
         services.AddSingleton<IAdministratorPasswordHasher, AdministratorPasswordHasher>();
 
+        // 代理每次解析都重读设置库，项目设置里改完代理，新建立的上游连接立即按新方式走。
+        services.AddSingleton<IUpstreamProxy>(provider =>
+        {
+            var settings = provider.GetRequiredService<IConfigurationRepository>();
+            return new SystemUpstreamProxy(() => settings.Read().Value);
+        });
         services.AddSingleton<IClientLauncher, ClientLauncher>();
         services.AddSingleton<IClaudeCodeProbe, ClaudeCodeProbe>();
         services.AddSingleton<IUpstreamProbe, UpstreamProbe>();
         return services.AddUpstreamConnections();
     }
 
-    /// <summary>只登记上游连接池；独立中转模式（不连数据库）也用它，活动上游来源与启动配置由调用方登记。</summary>
+    /// <summary>只登记上游连接池；独立中转模式（不连数据库）也用它，活动上游来源与启动配置由调用方登记，此时代理按启动配置解析。</summary>
     public static IServiceCollection AddUpstreamConnections(this IServiceCollection services)
     {
+        services.TryAddSingleton<IUpstreamProxy>(provider => new SystemUpstreamProxy(provider.GetRequiredService<RelayConfiguration>));
         services.AddSingleton<IUpstreamPool, UpstreamPool>();
         return services;
     }

@@ -1,12 +1,15 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Application.Interfaces.Configuration;
+using Application.Interfaces.Upstream;
 
 namespace HouseholdRelay.Pages;
 
-/// <summary>中转限制、对外地址与上游请求特征设置。</summary>
-public sealed class SettingsModel(IConfigurationService settings) : PageModel
+/// <summary>中转限制、对外地址、全局代理与上游请求特征设置。</summary>
+public sealed class SettingsModel(IConfigurationService settings, IUpstreamProxy proxy) : PageModel
 {
+    /// <summary>当前生效的代理读句，例如「自动检测到 http://127.0.0.1:7897。」；取不到时是原因与下一步。</summary>
+    public string ProxyStatus { get; private set; } = "";
     /// <summary>打开页面时的设置版本号，用于乐观并发：保存时版本不一致即拒绝，防止覆盖别处刚保存的设置；保存成功后在页面上加一。</summary>
     [BindProperty] public long Version { get; set; }
     /// <summary>表单回传的全部可编辑设置字段。</summary>
@@ -17,7 +20,7 @@ public sealed class SettingsModel(IConfigurationService settings) : PageModel
     public void OnGet()
     {
         var snapshot = settings.Read(); Version = snapshot.Version;
-        Input = SettingsInput.From(snapshot.Value);
+        Input = SettingsInput.From(snapshot.Value); ProxyStatus = proxy.Describe();
     }
     /// <summary>保存设置（需已登录且通过防 CSRF 校验）：在最新设置上覆盖表单字段后按版本号保存，不触碰表单之外的配置项；监听端口和转发限制须重启服务才生效，保存地址也不会自动建立公网映射。</summary>
     public IActionResult OnPost()
@@ -27,12 +30,13 @@ public sealed class SettingsModel(IConfigurationService settings) : PageModel
             try
             {
                 var config = settings.Read().Value; Input.Apply(config); settings.Save(Version, config);
-                Notice = "设置已保存。监听端口和转发限制在重启服务后生效；保存地址不会自动建立公网连接。";
+                Notice = "设置已保存。代理立即用于新的上游连接；监听端口和转发限制在重启服务后生效；保存地址不会自动建立公网连接。";
                 Version++; ModelState.Remove(nameof(Version));
             }
-            // 版本冲突或校验不通过（如对外地址与已导入证书的域名不符）都抛 InvalidOperationException；只作表单错误显示，设置保持原样，由管理员重新加载后决定。
+            // 版本冲突或校验不通过（如对外地址与已导入证书的域名不符、手动代理没填地址）都抛 InvalidOperationException；只作表单错误显示，设置保持原样，由管理员重新加载后决定。
             catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         }
+        ProxyStatus = proxy.Describe();
         return Page();
     }
 }

@@ -4,7 +4,7 @@ using Core.Configuration;
 namespace Infrastructure.ExternalSources.Upstream;
 
 /// <summary>按数据库活动版本更换连接，旧请求的租约继续使用原地址、凭据和状态。</summary>
-internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfiguration config) : IUpstreamPool
+internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfiguration config, IUpstreamProxy proxy) : IUpstreamPool
 {
     private readonly object sync = new();
     private readonly int maxConnections = config.MaxConcurrent;
@@ -19,7 +19,7 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
             var snapshot = source.ReadActive();
             if (current is null || current.Snapshot.Version != snapshot.Version)
             {
-                var replacement = new UpstreamConnection(snapshot, maxConnections);
+                var replacement = new UpstreamConnection(snapshot, proxy, maxConnections);
                 var previous = current; current = replacement; previous?.Dispose();
             }
             return current.Retain();

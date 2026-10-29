@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Application.Interfaces.Upstream;
 using Core.Upstream;
 
 namespace Infrastructure.ExternalSources.Upstream;
@@ -17,13 +18,18 @@ public static class UpstreamDialer
         return addresses;
     }
 
-    /// <summary>作为 <see cref="SocketsHttpHandler.ConnectCallback"/> 为上游建立底层连接：先校验目标地址；未配置代理时直连已校验的 IP，配置了代理时连到同样校验过的内网代理，再用 CONNECT 指向已校验的目标 IP 并检查代理回复 200。返回的流由 HTTP 处理器持有并释放。</summary>
-    public static async ValueTask<Stream> Connect(SocketsHttpConnectionContext context, UpstreamOptions options, CancellationToken cancellation)
+    /// <summary>
+    /// 作为 <see cref="SocketsHttpHandler.ConnectCallback"/> 为上游建立底层连接：先按全局设置解析代理（启用却取不到时抛出 <see cref="UpstreamProxyUnavailableException"/>，不发任何连接），
+    /// 再校验目标地址；直连时连已校验的 IP，走代理时连到同样校验过的内网代理，再用 CONNECT 指向已校验的目标 IP 并检查代理回复 200。返回的流由 HTTP 处理器持有并释放。
+    /// </summary>
+    public static async ValueTask<Stream> Connect(SocketsHttpConnectionContext context, UpstreamOptions options, IUpstreamProxy proxySettings, CancellationToken cancellation)
     {
         var target = context.DnsEndPoint;
-        var addresses = await Resolve(target.Host, options.AllowPrivateNetwork, options.BaseUrl.StartsWith("http://", StringComparison.Ordinal), cancellation);
-        if (options.ProxyUrl is null) return await Open(addresses, target.Port, cancellation);
-        var proxy = UpstreamAddress.Proxy(options.ProxyUrl);
+        var plain = options.BaseUrl.StartsWith("http://", StringComparison.Ordinal);
+        var route = proxySettings.Resolve(new UriBuilder(plain ? "http" : "https", target.Host, target.Port).Uri);
+        var addresses = await Resolve(target.Host, options.AllowPrivateNetwork, plain, cancellation);
+        if (route.Address is null) return await Open(addresses, target.Port, cancellation);
+        var proxy = UpstreamAddress.Proxy(route.Address.AbsoluteUri);
         var proxyAddresses = await Resolve(proxy.DnsSafeHost, true, true, cancellation);
         var stream = await Open(proxyAddresses, proxy.Port, cancellation);
         try

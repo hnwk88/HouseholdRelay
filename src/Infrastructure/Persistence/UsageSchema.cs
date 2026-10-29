@@ -8,11 +8,11 @@ internal sealed class UsageSchema : IDatabaseMigration
     /// <summary>排在最后（30）：依赖上游架构升级已把库带到版本 2。</summary>
     public int Order => 30;
 
-    /// <summary>把库升级到版本 3：已是 3 时直接返回；否则在一个事务里建立逐请求用量表、按上游版本和模型的价格表及按时间、用户、类型、模型、结果查询的索引，并写入新版本号。</summary>
+    /// <summary>把库升级到版本 3：已是 3 及以上时直接返回；否则在一个事务里建立逐请求用量表、按上游版本和模型的价格表及按时间、用户、类型、模型、结果查询的索引，并写入新版本号。</summary>
     public void Apply(RelayDatabase database)
     {
         using var connection = database.Open();
-        if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) == 3) return;
+        if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) >= 3) return;
         using var transaction = connection.BeginTransaction();
         Execute(connection, transaction, """
             CREATE TABLE usage_requests (

@@ -104,7 +104,8 @@ static class UsageStorageTests
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities; var user = identities.Create("迁移");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
-            DROP TABLE usage_requests; DROP TABLE usage_prices; PRAGMA user_version=2;
+            DROP TABLE usage_requests; DROP TABLE usage_prices;
+            ALTER TABLE upstream_candidates DROP COLUMN name; ALTER TABLE upstream DROP COLUMN candidate_id; PRAGMA user_version=2;
             CREATE TABLE usage_requests(unexpected TEXT);
             """));
         var rejected = false; try { _ = new TestProcess(home.Path).Database; } catch (SqliteException) { /* 冲突的表结构让升级中途失败，预期以 SQLite 异常整体回滚；随后核对版本号和索引未变。 */ rejected = true; }

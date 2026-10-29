@@ -3,8 +3,14 @@
 namespace Core.Upstream;
 
 /// <summary>请求持有的不可变活动版本；用普通类而非记录类型，避免自动输出凭据。</summary>
-public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null)
+public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, string? candidateId = null, string? name = null)
 {
+    /// <summary>当前生效的已保存上游主键；尚未从任何已保存上游激活（新实例或独立中转）时为 null。</summary>
+    public string? CandidateId { get; } = candidateId;
+
+    /// <summary>当前生效上游的供应商名称，只做显示；改名立即反映在这里，不改变 <see cref="Version"/>。</summary>
+    public string? Name { get; } = name;
+
     /// <summary>该上游版本的编号，用于区分新旧活动版本、按版本回收连接。</summary>
     public long Version { get; } = version;
 

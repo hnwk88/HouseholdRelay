@@ -42,28 +42,35 @@ async function login(page, url) {
 async function screenshot(page, name) {
     await page.screenshot({ path: path.join(output, name + '.png'), fullPage: true });
 }
-async function candidate(page, url, upstreamUrl, mode, secret) {
+// 读屏顺序：主内容区的无障碍树（角色、名称、层级）按页面顺序写成文本，供验收逐行核对。
+async function readingOrder(page, name) {
+    await fs.writeFile(path.join(output, name + '.aria.yml'), await page.locator('main').ariaSnapshot(), 'utf8');
+}
+async function candidate(page, url, upstreamUrl, mode, secret, name) {
     await page.goto(url + '/Upstream');
-    await page.getByLabel('接入模式', { exact: true }).selectOption(mode);
-    await page.getByLabel('提供商预设', { exact: true }).selectOption('compatible');
-    await page.getByLabel('上游 API 根地址', { exact: true }).fill(upstreamUrl + '/gateway/v1?tenant=browser');
-    await page.getByLabel('API 模式认证方式', { exact: true }).selectOption(mode === 'oauth' ? 'bearer' : 'x-api-key');
-    await page.getByLabel('兼容中转的账户模式需要 OAuth beta', { exact: true }).setChecked(mode === 'oauth');
-    await page.getByLabel('上游凭据（账户访问令牌或 API 密钥）', { exact: true }).fill(secret);
-    await page.getByLabel('要测试并推荐的模型', { exact: true }).fill('fixture-model');
-    await page.getByText('网络与兼容设置', { exact: true }).click();
-    await page.getByLabel('允许连接本机或私网地址（包括 HTTP）', { exact: true }).check();
-    await page.getByRole('button', { name: '保存候选配置', exact: true }).click();
-    await page.getByText('候选已保存，尚未改变活动上游。请确认后测试最小调用。', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('上游凭据（账户访问令牌或 API 密钥）', { exact: true }).inputValue(), '');
+    const account = mode === 'oauth';
+    const form = page.locator('section', { has: page.getByRole('heading', { name: account ? '官方账户' : 'API 供应商', exact: true }) });
+    await form.getByLabel(account ? '账户名称' : '供应商名称', { exact: true }).fill(name);
+    await form.getByLabel('上游地址', { exact: true }).fill(upstreamUrl + '/gateway/v1?tenant=browser');
+    await form.getByLabel(account ? '账户访问令牌' : 'API 密钥', { exact: true }).fill(secret);
+    await form.getByText('高级设置（一般不用改）', { exact: true }).click();
+    if (account) await form.getByLabel('兼容中转的账户模式也需要 OAuth beta（官方地址总会附加）', { exact: true }).check();
+    await form.getByLabel('允许连接本机或私网地址（包括 HTTP）', { exact: true }).check();
+    await page.getByRole('button', { name: account ? '用账户令牌获取模型（不花额度）' : '获取模型（不花额度）', exact: true }).click();
+    await page.getByText(`已保存「${name}」。已获取 1 个模型，认证用 ${account ? 'Bearer' : 'x-api-key'}。请在下面选择模型，再按测试。`, { exact: true }).waitFor();
+    assert.equal(await page.getByLabel(account ? '账户访问令牌' : 'API 密钥', { exact: true }).inputValue(), '');
     assert.equal((await page.content()).includes(secret), false);
-    await page.getByLabel('我同意发起一次最小模型调用，可能消耗少量上游额度').check();
-    await page.getByRole('button', { name: '测试候选', exact: true }).click();
-    await page.getByRole('button', { name: '激活此候选', exact: true }).waitFor();
+    if (!account) await readingOrder(page, '06-upstream-after-discovery');
+    await page.getByLabel('模型', { exact: true }).selectOption('fixture-model');
+    await page.getByRole('button', { name: '测试（会消耗少量上游额度）', exact: true }).click();
+    await page.getByText(`认证用 ${account ? 'Bearer' : 'x-api-key'}，按标准 Messages 方式通过，模型 fixture-model。`, { exact: false }).first().waitFor();
+    const switchButton = page.getByRole('button', { name: `切换到「${name}」`, exact: true });
+    await switchButton.waitFor();
     assert.equal((await page.content()).includes(secret), false);
-    await screenshot(page, mode === 'oauth' ? '08-account-tested' : '07-api-tested');
-    await page.getByRole('button', { name: '激活此候选', exact: true }).click();
-    await page.getByText('新上游已激活，后续请求使用新配置；个人令牌和中转地址无需更换。', { exact: true }).waitFor();
+    await screenshot(page, account ? '08-account-tested' : '07-api-tested');
+    if (!account) await readingOrder(page, '07-upstream-after-test');
+    await switchButton.click();
+    await page.getByText(`已切换到「${name}」。后续请求使用它；个人令牌和中转地址不用换。`, { exact: true }).waitFor();
 }
 async function relay(url, token, stream = false) {
     return fetch(url + '/v1/messages?beta=true', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'content-type': 'application/json', 'anthropic-beta': 'future-beta' },
@@ -95,18 +102,27 @@ async function relay(url, token, stream = false) {
     await page.goto(url + '/Setup'); await page.getByLabel('本机引导码').fill(code);
     await page.getByLabel('管理密码', { exact: true }).fill(password); await page.getByLabel('再次输入密码').fill(password);
     await page.getByRole('button', { name: '完成首次设置' }).click(); await page.waitForURL(/\/Login/); await login(page, url);
+    // 全局代理：选自动检测并读出本机实际取到的代理（读数随机器而定，只记录不断言），再改回不使用代理，后续只连本机模拟上游。
+    await page.goto(url + '/Settings'); await page.getByLabel('自动检测系统代理（推荐）', { exact: true }).check();
+    await page.getByRole('button', { name: '保存设置', exact: true }).click(); await page.getByText(/设置已保存/).waitFor();
+    const proxyStatus = (await page.locator('#proxy-status').textContent()).trim(); await readingOrder(page, '04-settings-proxy');
+    await fs.writeFile(path.join(output, 'proxy-status.txt'), proxyStatus, 'utf8');
+    await page.getByLabel('不使用代理', { exact: true }).check(); await page.getByRole('button', { name: '保存设置', exact: true }).click();
+    await page.getByText('当前：不使用代理，直连上游。', { exact: true }).waitFor();
+    steps.push('项目设置选「自动检测系统代理」后读出：' + proxyStatus + ' 随后改回不使用代理。');
     await page.goto(url + '/Users'); await page.locator('#new-name').fill('上游切换测试'); await page.getByRole('button', { name: '创建并生成令牌' }).click();
     const token = await page.locator('#issued-token').textContent();
-    await candidate(page, url, upstreamUrl, 'api-key', apiSecret);
+    await page.goto(url + '/Upstream'); await readingOrder(page, '05-upstream-new-instance');
+    await candidate(page, url, upstreamUrl, 'api-key', apiSecret, '浏览器 API');
     assert.equal((await relay(url, token)).status, 200);
     assert.equal((await relay(url, token, true)).status, 200);
-    await candidate(page, url, upstreamUrl, 'oauth', accountSecret);
+    await candidate(page, url, upstreamUrl, 'oauth', accountSecret, '浏览器账户');
     assert.equal((await relay(url, token)).status, 200);
     rejectAccount = true; const denied = await relay(url, token); assert.equal(denied.status, 401); assert.equal((await denied.text()).includes(accountSecret), false);
     assert.equal((await relay(url, token)).status, 503);
     await page.goto(url + '/Upstream'); await page.getByText('凭据失效，需重新接入', { exact: true }).waitFor();
     await screenshot(page, '09-account-paused'); rejectAccount = false;
-    await candidate(page, url, upstreamUrl, 'oauth', accountSecret); assert.equal((await relay(url, token)).status, 200);
+    await candidate(page, url, upstreamUrl, 'oauth', accountSecret, '浏览器账户（新令牌）'); assert.equal((await relay(url, token)).status, 200);
     await page.goto(url + '/Connection'); assert.equal(await page.getByText('fixture-model', { exact: false }).count() > 0, true);
     assert.equal((await page.content()).includes(accountSecret), false); assert.equal((await page.content()).includes(token), false);
     await screenshot(page, '10-connection');
@@ -148,7 +164,7 @@ async function relay(url, token, stream = false) {
     assert.ok(calls.some(call => call.mode === 'account' && call.beta.includes('oauth-')));
     assert.ok(calls.filter(call => call.mode === 'api').every(call => !call.beta.includes('oauth-')));
     assert.ok(calls.every(call => call.path.startsWith('/gateway/v1/') && call.path.includes('tenant=browser')));
-    steps.push('真实网页录入 API 密钥和账户令牌，保存候选、确认费用、检测并激活；既有个人令牌保持可用。');
+    steps.push('真实网页只填名称、地址、密钥接入 API 与账户令牌：获取模型、下拉选模型、按写明费用的按钮测试、按名称切换；既有个人令牌保持可用。读屏顺序见 *.aria.yml。');
     steps.push('实际 JSON/SSE 请求与路径前缀/查询参数通过；账户 401 后暂停，网页重新保存和激活后恢复。');
     steps.push('连接说明无上游或个人令牌回填；无效 PFX 在网页被拒绝；重启后活动配置、检测结果及调用仍有效。');
     steps.push('390px 上游和连接说明页面无水平溢出。所有模型请求仅发往本机模拟上游。');

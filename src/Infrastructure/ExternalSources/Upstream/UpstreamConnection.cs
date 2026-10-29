@@ -23,15 +23,15 @@ internal sealed class UpstreamConnection : IUpstreamLease
     /// <summary>距离上游 429 冷却结束还剩多少秒（向上取整，最小为 0）；按原子读取的截止毫秒数与当前时间计算。</summary>
     public int CooldownSeconds => (int)Math.Max(0, Math.Ceiling((Interlocked.Read(ref cooldownUntil) - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) / 1000d));
 
-    /// <summary>为一个上游版本建立专用 HTTP 客户端：不跟随重定向、不用 Cookie 和系统代理、不自动解压，限制每服务器连接数，建连交给 <see cref="UpstreamDialer"/> 做地址校验；客户端总超时关闭，由调用方的取消令牌控制请求时长。初始引用计数为 1，归连接池持有。</summary>
-    public UpstreamConnection(UpstreamSnapshot snapshot, int maxConnections = 2)
+    /// <summary>为一个上游版本建立专用 HTTP 客户端：不跟随重定向、不用 Cookie、不自动解压，限制每服务器连接数；处理器自身不用系统代理，建连交给 <see cref="UpstreamDialer"/> 按全局代理设置与地址规则完成；客户端总超时关闭，由调用方的取消令牌控制请求时长。初始引用计数为 1，归连接池持有。</summary>
+    public UpstreamConnection(UpstreamSnapshot snapshot, IUpstreamProxy proxy, int maxConnections = 2)
     {
         Snapshot = snapshot;
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false, AutomaticDecompression = DecompressionMethods.None,
             MaxConnectionsPerServer = maxConnections, PooledConnectionLifetime = TimeSpan.FromMinutes(2), ConnectTimeout = TimeSpan.FromSeconds(15),
-            ConnectCallback = (context, cancellation) => UpstreamDialer.Connect(context, snapshot.Options, cancellation)
+            ConnectCallback = (context, cancellation) => UpstreamDialer.Connect(context, snapshot.Options, proxy, cancellation)
         };
         http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }

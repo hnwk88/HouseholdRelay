@@ -14,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Tests;
 
 if (args.FirstOrDefault() == "--real-upstream-browser") return await RealUpstreamValidation.Run(args);
+if (args.FirstOrDefault() == "--real-detection-browser") return await RealDetectionValidation.Run(args);
 
 var tests = new (string Name, Func<Task> Test)[]
 {
@@ -56,6 +57,17 @@ var tests = new (string Name, Func<Task> Test)[]
     ("clean native client uses two connection variables and completes a tool conversation", CleanClientTests.ToolConversation),
     ("upstream HTTP CONNECT proxy uses validated destination addresses", UpstreamProxyTests.ConnectProxy),
     ("upstream schema upgrade rolls back and preserves existing identities", UpstreamMigrationTests.UpgradeRollback),
+    ("upstream authentication detection: x-api-key only, Bearer only, 400 fallback, both rejected, no catalog", UpstreamDetectionTests.AuthenticationDetection),
+    ("upstream manual authentication overrides automatic detection", UpstreamDetectionTests.ManualOverride),
+    ("upstream automatic diagnostic falls back to Claude Code after a rejected standard call", ClaudeCodeProbeTests.AutomaticFallback),
+    ("upstream names: switch by page, stale version refused, rename keeps id-linked history", UpstreamDetectionTests.NamesAndSwitching),
+    ("upstream secrets never appear in pages, reports or error text", UpstreamDetectionTests.SecretsNeverShown),
+    ("new instance upstream page defaults to the API supplier", UpstreamDetectionTests.NewInstanceDefaults),
+    ("global proxy none, manual and auto states; unavailable proxy refuses", ProxySettingsTests.ThreeStates),
+    ("enabled but unavailable proxy refuses relay and model discovery without dispatch", ProxySettingsTests.RefusedWhenUnavailable),
+    ("child process proxy variables are cleared before writing", ProxySettingsTests.ChildEnvironment),
+    ("schema v4 moves candidate proxy to global settings and rolls back on failure", UpstreamNamingMigrationTests.ProxyMigrationAndRollback),
+    ("schema v4 adopts an orphan active upstream as a named candidate without proxy", UpstreamNamingMigrationTests.OrphanActiveWithoutProxy),
     ("usage identity, rotation, rename and private queries in both upstream modes", UsageIntegrationTests.IdentityAndModes),
     ("usage categories, null totals, partial JSON and idempotent completion", UsageIntegrationTests.CategoriesAndUnknown),
     ("usage authenticated rejections persist without dispatch", UsageIntegrationTests.Rejections),
@@ -408,7 +420,7 @@ sealed class Fixture : IAsyncDisposable
     /// 创建一套完整夹具：先在本机随机端口启动记录请求的模拟上游，再用三个测试客户端的配置启动中转（可选 TLS 证书与证书链），
     /// 中转的上游指向该模拟上游，所有模型流量都不离开本机。
     /// </summary>
-    public static async Task<Fixture> Create(RequestDelegate handler, Action<RelayConfiguration>? configure = null, X509Certificate2? certificate = null, ClientRegistry? clients = null, X509Certificate2Collection? certificateChain = null)
+    public static async Task<Fixture> Create(RequestDelegate handler, Action<RelayConfiguration>? configure = null, X509Certificate2? certificate = null, ClientRegistry? clients = null, X509Certificate2Collection? certificateChain = null, IUpstreamProxy? proxy = null)
     {
         var calls = new ConcurrentQueue<Call>(); var logs = new ConcurrentQueue<string>();
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] }); builder.Logging.ClearProviders();
@@ -423,7 +435,7 @@ sealed class Fixture : IAsyncDisposable
         var config = new RelayConfiguration { UpstreamUserAgent = "claude-cli/fixture (external, cli)", Clients =
             [new("study", ConfigurationFiles.Hash("study-test-token")), new("bedroom", ConfigurationFiles.Hash("bedroom-test-token")), new("office", ConfigurationFiles.Hash("office-test-token"))] };
         configure?.Invoke(config);
-        var services = TestProcess.StandaloneRelay(config, "fixture-upstream-secret", new Uri(upstream.Urls.Single()), clients, new FixtureLog(logs));
+        var services = TestProcess.StandaloneRelay(config, "fixture-upstream-secret", new Uri(upstream.Urls.Single()), clients, new FixtureLog(logs), proxy);
         var relay = services.GetRequiredService<RelayServer>();
         var app = relay.Build(certificate, 0, certificateChain); await app.StartAsync();
         return new Fixture { Config = config, Relay = relay, App = app, Upstream = upstream, Url = app.Urls.Single(), Calls = calls, Logs = logs,

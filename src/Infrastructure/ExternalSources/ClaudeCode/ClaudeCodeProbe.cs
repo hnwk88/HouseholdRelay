@@ -16,12 +16,24 @@ using Microsoft.Extensions.Logging;
 namespace Infrastructure.ExternalSources.ClaudeCode;
 
 /// <summary>可选的隔离原生客户端诊断；只允许一次候选生成请求，真实凭据只留在中转进程。</summary>
-internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector protector) : IClaudeCodeProbe
+internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector protector, IUpstreamProxy proxy) : IClaudeCodeProbe
 {
-    /// <summary>经本机临时端点让隔离的 Claude Code 发出唯一一次候选请求并转发给上游。</summary>
+    /// <summary>本机能否找到原生 claude.exe；找不到时返回 false，不抛异常。</summary>
+    public bool IsAvailable
+    {
+        get
+        {
+            try { launcher.FindClaude(); return true; }
+            // 定位失败只说明本机没装，交给调用方决定是否改用实际客户端测试。
+            catch (InvalidOperationException) { return false; }
+        }
+    }
+
+    /// <summary>经本机临时端点让隔离的 Claude Code 发出唯一一次候选请求并转发给上游；代理已启用却取不到地址时在启动子进程前抛出 <see cref="Core.Upstream.UpstreamProxyUnavailableException"/>。</summary>
     public async Task<ProbeReply> Run(IUpstreamLease transport, CancellationToken cancellation)
     {
         var executable = launcher.FindClaude();
+        var route = proxy.Resolve(new Uri(transport.Snapshot.Options.BaseUrl));
         var parent = Path.GetFullPath(Path.GetTempPath());
         var directory = Path.GetFullPath(Path.Combine(parent, "HouseholdRelay-diagnostic-" + Guid.NewGuid().ToString("N")));
         protector.ProtectDirectory(directory);
@@ -61,7 +73,7 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
         try
         {
             await app.StartAsync(cancellation);
-            var start = Start(executable, directory, app.Urls.Single(), localToken, transport.Snapshot.Options.Model);
+            var start = Start(executable, directory, app.Urls.Single(), localToken, transport.Snapshot.Options.Model, route);
             child = Process.Start(start) ?? throw new InvalidOperationException("无法启动隔离的 Claude Code 检测。");
             child.PriorityClass = ProcessPriorityClass.BelowNormal; child.StandardInput.Close();
             var output = child.StandardOutput.BaseStream.CopyToAsync(Stream.Null, cancellation);
@@ -102,14 +114,15 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
         }
     }
 
-    /// <summary>组装隔离检测用的子进程启动参数：清掉继承的 Anthropic、Claude、代理和证书相关环境变量，只指向本机临时端点和一次性本地令牌，并以安全模式、单轮、无工具方式运行。</summary>
-    private static ProcessStartInfo Start(string executable, string directory, string url, string token, string model)
+    /// <summary>组装隔离检测用的子进程启动参数：清掉继承的 Anthropic、Claude 和证书相关环境变量，代理变量先清后按全局设置写入，只指向本机临时端点和一次性本地令牌，并以安全模式、单轮、无工具方式运行。</summary>
+    internal static ProcessStartInfo Start(string executable, string directory, string url, string token, string model, Core.Upstream.ProxyRoute route)
     {
         var start = new ProcessStartInfo(executable) { WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var key in start.Environment.Keys.Where(key => key.StartsWith("ANTHROPIC_", StringComparison.OrdinalIgnoreCase)
-            || key.StartsWith("CLAUDE_", StringComparison.OrdinalIgnoreCase) || key.Contains("PROXY", StringComparison.OrdinalIgnoreCase)
+            || key.StartsWith("CLAUDE_", StringComparison.OrdinalIgnoreCase)
             || key is "NODE_EXTRA_CA_CERTS" or "SSL_CERT_FILE" or "NODE_TLS_REJECT_UNAUTHORIZED").ToArray()) start.Environment.Remove(key);
+        ChildProxyEnvironment.Apply(start, route);
         start.Environment["ANTHROPIC_BASE_URL"] = url; start.Environment["ANTHROPIC_AUTH_TOKEN"] = token;
         start.Environment["CLAUDE_CONFIG_DIR"] = Path.Combine(directory, "config"); start.Environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
         foreach (var argument in new[] { "--safe-mode", "--no-session-persistence", "--strict-mcp-config", "--no-chrome", "--tools", "",

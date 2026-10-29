@@ -22,6 +22,11 @@ public static class WindowsSecrets
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CryptUnprotectData(ref Blob input, IntPtr description, IntPtr entropy,
         IntPtr reserved, IntPtr prompt, int flags, out Blob output);
+    /// <summary>crypt32 的 CryptUnprotectData 带附加熵的形式：解密时须提供与加密时相同的熵。</summary>
+    [DllImport("crypt32.dll", SetLastError = true, EntryPoint = "CryptUnprotectData")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CryptUnprotectDataWithEntropy(ref Blob input, IntPtr description, ref Blob entropy,
+        IntPtr reserved, IntPtr prompt, int flags, out Blob output);
     /// <summary>kernel32 的 LocalFree：释放 DPAPI 输出缓冲区。</summary>
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr memory);
@@ -30,17 +35,22 @@ public static class WindowsSecrets
     public static byte[] Protect(byte[] value) => Transform(value, true);
     /// <summary>解密由当前 Windows 用户在本机加密的 DPAPI 密文；换用户、换机器或数据损坏时抛 <see cref="Win32Exception"/>。返回的明文由调用方负责用完清零。</summary>
     public static byte[] Unprotect(byte[] value) => Transform(value, false);
-    /// <summary>加解密的共同实现：把输入复制到非托管内存后调用 DPAPI（标志 1 即禁止界面），失败时抛出带系统错误码的 <see cref="Win32Exception"/>；结束时清零并释放输入与输出两块非托管内存。</summary>
-    private static byte[] Transform(byte[] value, bool protect)
+    /// <summary>解密由当前 Windows 用户在本机加密、并带附加熵 <paramref name="entropy"/> 的 DPAPI 密文（其他本机程序常用这种形式）；熵不符时同样抛 <see cref="Win32Exception"/>。返回的明文由调用方负责用完清零。</summary>
+    public static byte[] Unprotect(byte[] value, byte[] entropy) => Transform(value, false, entropy);
+    /// <summary>加解密的共同实现：把输入（和可选的附加熵）复制到非托管内存后调用 DPAPI（标志 1 即禁止界面），失败时抛出带系统错误码的 <see cref="Win32Exception"/>；结束时清零并释放各块非托管内存。</summary>
+    private static byte[] Transform(byte[] value, bool protect, byte[]? entropy = null)
     {
         var input = new Blob { Length = value.Length, Data = Marshal.AllocHGlobal(value.Length) };
+        var extra = new Blob { Length = entropy?.Length ?? 0, Data = entropy is null ? IntPtr.Zero : Marshal.AllocHGlobal(entropy.Length) };
         Blob output = default;
         try
         {
             Marshal.Copy(value, 0, input.Data, value.Length);
+            if (entropy is not null) Marshal.Copy(entropy, 0, extra.Data, entropy.Length);
             var success = protect
                 ? CryptProtectData(ref input, null, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 1, out output)
-                : CryptUnprotectData(ref input, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 1, out output);
+                : entropy is null ? CryptUnprotectData(ref input, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 1, out output)
+                : CryptUnprotectDataWithEntropy(ref input, IntPtr.Zero, ref extra, IntPtr.Zero, IntPtr.Zero, 1, out output);
             if (!success) throw new Win32Exception(Marshal.GetLastWin32Error());
             var result = new byte[output.Length]; Marshal.Copy(output.Data, result, 0, result.Length); return result;
         }
@@ -49,6 +59,7 @@ public static class WindowsSecrets
         {
             for (var i = 0; i < input.Length; i++) Marshal.WriteByte(input.Data, i, 0);
             Marshal.FreeHGlobal(input.Data);
+            if (extra.Data != IntPtr.Zero) Marshal.FreeHGlobal(extra.Data);
             if (output.Data != IntPtr.Zero)
             {
                 for (var i = 0; i < output.Length; i++) Marshal.WriteByte(output.Data, i, 0);

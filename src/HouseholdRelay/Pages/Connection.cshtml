@@ -8,6 +8,7 @@
 <p class="notice">@Model.HttpsStatus 保存地址不会自动建立网络映射，请从实际客户端验证连接。</p>
 <section class="card"><h2>连接信息</h2><p>根地址：<code id="relay-root">@(Model.RootUrl.Length == 0 ? "尚未填写" : Model.RootUrl)</code></p>
     @if (Model.RootUrl.Length > 0) { <button type="button" data-copy="relay-root">复制根地址</button><span class="copy-status" role="status"></span> }
+    <p>当前上游：@Model.UpstreamName（切换上游不用更换地址和个人令牌）</p>
     <p>推荐模型：@(Model.RecommendedModel.Length == 0 ? "尚无通过调用验证的模型" : Model.RecommendedModel)</p>
     <p>最小调用实际返回的模型：@(Model.VerifiedModel ?? "尚未取得")</p>
     @if (Model.Models.Length > 0) { <p>上游目录返回：@string.Join("、", Model.Models)</p> }

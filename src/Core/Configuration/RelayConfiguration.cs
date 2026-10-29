@@ -24,8 +24,14 @@ public sealed class RelayConfiguration
     /// <summary>为 true 时，OAuth 模式下把请求体中的设备元数据统一改写为 <see cref="DeviceId"/>；API 密钥模式不改写。</summary>
     public bool NormalizeDeviceMetadata { get; set; } = true;
 
-    /// <summary>访问上游时使用的 HTTP/HTTPS 代理绝对地址；null 表示直连。</summary>
+    /// <summary>旧版 server.json 里的上游代理地址，只在旧版导入时读入；v4 迁移把它改成 <see cref="ProxyMode"/> 与 <see cref="ProxyUrl"/>，运行时不再使用。</summary>
     public string? UpstreamProxy { get; set; }
+
+    /// <summary>全局出站代理方式：<c>none</c>（不使用代理）、<c>auto</c>（自动检测 Windows 系统代理）或 <c>manual</c>（使用 <see cref="ProxyUrl"/>）；上游转发、获取模型、测试和 Claude Code 检测子进程共用这一份。</summary>
+    public string ProxyMode { get; set; } = "none";
+
+    /// <summary>手动指定的代理根地址（如 <c>http://127.0.0.1:7897</c>）；只在 <see cref="ProxyMode"/> 为 <c>manual</c> 时生效，其余方式下原样保存，切回手动不必重填。</summary>
+    public string? ProxyUrl { get; set; }
 
     /// <summary>全家同时进行中的上游请求上限（1–8），由准入器的全局信号量执行。</summary>
     public int MaxConcurrent { get; set; } = 2;
@@ -67,6 +73,9 @@ public sealed class RelayConfiguration
             throw new InvalidOperationException("中转配置格式或范围错误。");
         if (UpstreamProxy is not null && (!Uri.TryCreate(UpstreamProxy, UriKind.Absolute, out var proxy)
             || proxy.Scheme is not ("http" or "https"))) throw new InvalidOperationException("上游代理必须是 HTTP/HTTPS 地址。");
+        if (ProxyMode is not ("none" or "auto" or "manual")) throw new InvalidOperationException("请选择不使用代理、自动检测系统代理或手动指定地址。");
+        if (ProxyMode == "manual" && string.IsNullOrWhiteSpace(ProxyUrl)) throw new InvalidOperationException("已选择手动指定代理，请填写代理地址，例如 http://127.0.0.1:7897。");
+        if (!string.IsNullOrWhiteSpace(ProxyUrl)) Upstream.UpstreamAddress.Proxy(ProxyUrl);
         ValidateClients(Clients);
     }
 

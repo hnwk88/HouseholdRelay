@@ -11,6 +11,14 @@
     <small>证书请在“HTTPS 入口”页导入；公网可达性需从实际客户端验证，保存地址不会建立公网映射。</small>
     <label asp-for="Input.ListenPort">中转监听端口</label><input asp-for="Input.ListenPort" type="number" min="1024" max="65535" required />
     <small>此端口用于已配置证书的中转入口；本机管理端口独立设置。</small>
+    <fieldset aria-describedby="proxy-status"><legend>上游代理</legend>
+        <p id="proxy-status">当前：@Model.ProxyStatus</p>
+        <label class="checkbox"><input type="radio" id="proxy-none" asp-for="Input.ProxyMode" value="none" />不使用代理</label>
+        <label class="checkbox"><input type="radio" id="proxy-auto" asp-for="Input.ProxyMode" value="auto" />自动检测系统代理（推荐）</label>
+        <label class="checkbox"><input type="radio" id="proxy-manual" asp-for="Input.ProxyMode" value="manual" />手动指定地址</label>
+        <label asp-for="Input.ProxyUrl">代理地址（手动指定时使用）</label><input asp-for="Input.ProxyUrl" maxlength="2048" placeholder="http://127.0.0.1:7897" />
+        <small>上游转发、获取模型、测试和 Claude Code 检测都用这一份。已启用代理却取不到地址时，请求会被拒绝，不会悄悄直连。</small>
+    </fieldset>
     <details><summary>转发与限流设置</summary>
         <label asp-for="Input.MaxConcurrent">上游最大并发</label><input asp-for="Input.MaxConcurrent" type="number" min="1" max="8" required />
         <label asp-for="Input.MaxPerClient">每人最大并发</label><input asp-for="Input.MaxPerClient" type="number" min="1" max="8" required />

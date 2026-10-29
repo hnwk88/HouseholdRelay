@@ -41,10 +41,12 @@ sealed class TestProcess
     /// <summary>费率服务。</summary>
     public IUsagePricingService Pricing => Get<IUsagePricingService>();
 
-    /// <summary>不连数据库的独立中转容器：固定凭据、可选模拟上游、可选鉴权名单与事件日志。</summary>
-    public static ServiceProvider StandaloneRelay(RelayConfiguration config, string? credential, Uri? testUpstream = null, ClientRegistry? clients = null, IRelayEventLog? log = null)
+    /// <summary>不连数据库的独立中转容器：固定凭据、可选模拟上游、可选鉴权名单、事件日志与代理解析器（给出时取代按启动配置解析的默认实现）。</summary>
+    public static ServiceProvider StandaloneRelay(RelayConfiguration config, string? credential, Uri? testUpstream = null, ClientRegistry? clients = null, IRelayEventLog? log = null, IUpstreamProxy? proxy = null)
     {
-        var services = new ServiceCollection().AddStandaloneRelay(config, credential, testUpstream, clients);
+        var services = new ServiceCollection();
+        if (proxy is not null) services.AddSingleton(proxy);
+        services.AddStandaloneRelay(config, credential, testUpstream, clients);
         if (log is not null) services.AddSingleton(log);
         return services.BuildServiceProvider();
     }

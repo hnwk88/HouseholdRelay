@@ -94,6 +94,38 @@ static class ClaudeCodeProbeTests
     }
 
     /// <summary>
+    /// 验证检测方式自动判断：只接受原生请求特征、只认 Bearer 的上游，标准调用先被拒（x-api-key 401、Bearer 400），本机装有 Claude Code 时自动改用实际客户端并通过；
+    /// 读句说明「认证用 Bearer，按 Claude Code 方式通过」，探测结果写回该上游（认证 bearer、检测 claude-code、都不是手动指定），切换后活动上游沿用这个组合。
+    /// </summary>
+    public static async Task AutomaticFallback()
+    {
+        await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
+        var service = web.Upstreams;
+        mock.Handler = async context =>
+        {
+            var call = mock.Calls.Last();
+            if (!call.Headers.TryGetValue("Authorization", out var bearer) || bearer != "Bearer fixture-auto-secret") { context.Response.StatusCode = 401; return; }
+            if (context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal)) { await UpstreamFixture.Success(context); return; }
+            using var body = JsonDocument.Parse(call.Body);
+            if (!call.Headers["User-Agent"].StartsWith("claude-cli/", StringComparison.Ordinal) || !body.RootElement.TryGetProperty("system", out _))
+            { context.Response.StatusCode = 400; await context.Response.WriteAsJsonAsync(new { error = new { type = "client_invalid_request", code = "client_request_rejected" } }); return; }
+            context.Response.ContentType = "text/event-stream";
+            foreach (var frame in Events.Split("\n\n")) { await context.Response.WriteAsync(frame + "\n\n"); await context.Response.Body.FlushAsync(); }
+        };
+        var id = service.SaveCandidate(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url + "/v1/cc", AllowPrivateNetwork = true }, "fixture-auto-secret", "自动探测");
+        var catalog = await service.DiscoverModels(id, CancellationToken.None);
+        Check(catalog.Status == "passed" && catalog.Authentication == "bearer", catalog.Message);
+        service.ChooseModel(id, "claude-opus-5-5");
+        var report = await service.TestCandidate(id, true, CancellationToken.None);
+        Check(report.CanActivate && report.Message.StartsWith("认证用 Bearer，按 Claude Code 方式通过，模型 claude-opus-5-5。", StringComparison.Ordinal), report.Message);
+        var detected = service.ReadCandidate(id).Options;
+        Check(detected.Authentication == "bearer" && detected.Diagnostic == "claude-code" && !detected.AuthenticationManual && !detected.DiagnosticManual);
+        Check(mock.Calls.Count(call => call.Path.Contains("/messages")) == 2, "Automatic detection sends one standard call, then one native call");
+        service.Activate(id); var active = service.ReadActive();
+        Check(active.Options.Diagnostic == "claude-code" && active.Options.Authentication == "bearer" && active.Name == "自动探测");
+    }
+
+    /// <summary>
     /// 验证原生诊断被取消时释放客户端和上游：上游挂起不应答，诊断开始后取消，报告为已取消且不可激活，当前版本不变；
     /// 模拟上游必须在 3 秒内收到中止，且消息接口只被调用一次。
     /// </summary>

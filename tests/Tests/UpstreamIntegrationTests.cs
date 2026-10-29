@@ -114,8 +114,8 @@ static class UpstreamIntegrationTests
     }
 
     /// <summary>
-    /// 验证管理网页直接配置 API 上游：登录后经带防伪令牌的表单保存候选，页面提示已保存且不回显密钥；
-    /// 确认后测试候选，页面提示最小模型调用成功且不回显密钥；激活后当前上游变为已配置。
+    /// 验证管理网页只填名称、地址、密钥接入 API 上游：空名称被拒且不保存；「获取模型」保存并读出目录与自动探测的认证方式，页面不回显密钥；
+    /// 从下拉框选模型后按写明费用的测试按钮，读句说明认证方式、检测方式和模型；按名称切换后当前上游带上该名称。
     /// </summary>
     public static async Task WebDirectConfiguration()
     {
@@ -131,22 +131,32 @@ static class UpstreamIntegrationTests
         try
         {
             await using var fixture = await WebFixture.Create(); await fixture.Login();
-            var csrf = await fixture.Csrf("/Upstream"); var values = new Dictionary<string, string>
+            Dictionary<string, string> Form(string name) => new()
             {
-                ["Input.Mode"] = "api-key", ["Input.Preset"] = "compatible", ["Input.BaseUrl"] = mock.Urls.Single(),
-                ["Input.Authentication"] = "x-api-key", ["Input.AllowPrivateNetwork"] = "true", ["Input.Model"] = "fixture-model",
-                ["Credential"] = "fixture-page-secret", ["Version"] = fixture.Upstreams.ReadActive().Version.ToString(),
-                ["__RequestVerificationToken"] = csrf
+                ["Api.Name"] = name, ["Api.BaseUrl"] = mock.Urls.Single(), ["Api.Credential"] = "fixture-page-secret", ["Api.AllowPrivateNetwork"] = "true",
+                ["Version"] = fixture.Upstreams.ReadActive().Version.ToString()
             };
-            using var saved = await fixture.Post("/Upstream?handler=Save", values);
-            var html = WebUtility.HtmlDecode(await saved.Content.ReadAsStringAsync()); Check(saved.IsSuccessStatusCode && html.Contains("候选已保存") && !html.Contains("fixture-page-secret"));
+            var unnamed = Form(""); unnamed["__RequestVerificationToken"] = await fixture.Csrf("/Upstream");
+            using (var refused = await fixture.Post("/Upstream?handler=DiscoverApi", unnamed))
+            {
+                var page = WebUtility.HtmlDecode(await refused.Content.ReadAsStringAsync());
+                Check(refused.IsSuccessStatusCode && page.Contains("请填写供应商名称") && !page.Contains("fixture-page-secret") && fixture.Upstreams.LatestCandidate() is null);
+            }
+            var values = Form("页面测试"); values["__RequestVerificationToken"] = await fixture.Csrf("/Upstream");
+            using var saved = await fixture.Post("/Upstream?handler=DiscoverApi", values);
+            var html = WebUtility.HtmlDecode(await saved.Content.ReadAsStringAsync());
+            Check(saved.IsSuccessStatusCode && html.Contains("已保存「页面测试」。已获取 1 个模型，认证用 x-api-key") && html.Contains("<option value=\"fixture-model\"") && !html.Contains("fixture-page-secret"), html);
             var candidate = fixture.Upstreams.LatestCandidate()!;
-            values = new() { ["candidateId"] = candidate.Id, ["confirmed"] = "true", ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
+            Check(candidate.Name == "页面测试" && candidate.Options.Authentication == "x-api-key" && !candidate.Options.AuthenticationManual && candidate.State == "untested");
+            values = new() { ["candidateId"] = candidate.Id, ["model"] = "fixture-model", ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
             using var tested = await fixture.Post("/Upstream?handler=Test", values); html = WebUtility.HtmlDecode(await tested.Content.ReadAsStringAsync());
-            Check(tested.IsSuccessStatusCode && html.Contains("最小模型调用成功") && !html.Contains("fixture-page-secret"));
-            values = new() { ["candidateId"] = candidate.Id, ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
-            using var activated = await fixture.Post("/Upstream?handler=Activate", values); Check(activated.IsSuccessStatusCode);
-            Check((fixture.Upstreams.ReadActive()).Configured);
+            Check(tested.IsSuccessStatusCode && html.Contains("认证用 x-api-key，按标准 Messages 方式通过，模型 fixture-model。") && !html.Contains("fixture-page-secret"));
+            Check(html.Contains("测试（会消耗少量上游额度）") && !html.Contains("type=\"checkbox\" name=\"confirmed\""));
+            values = new() { ["candidateId"] = candidate.Id, ["Version"] = fixture.Upstreams.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
+            using var activated = await fixture.Post("/Upstream?handler=Activate", values); html = WebUtility.HtmlDecode(await activated.Content.ReadAsStringAsync());
+            Check(activated.IsSuccessStatusCode && html.Contains("已切换到「页面测试」"));
+            var active = fixture.Upstreams.ReadActive();
+            Check(active.Configured && active.CandidateId == candidate.Id && active.Name == "页面测试" && active.Options.Model == "fixture-model");
         }
         // 无论断言成败都停止模拟上游，释放端口，避免影响后续测试。
         finally { await mock.StopAsync(); await mock.DisposeAsync(); }

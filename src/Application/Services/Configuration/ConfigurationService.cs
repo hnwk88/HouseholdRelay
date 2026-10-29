@@ -53,7 +53,7 @@ public sealed class ConfigurationService(IConfigurationRepository settings, IUps
     public void SaveCredential(string credential)
     {
         var active = upstreams.ReadActive();
-        upstreams.SaveCandidate(active.Version, active.Options, credential);
+        upstreams.SaveCandidate(active.Version, active.Options, credential, active.Name);
     }
 
     /// <summary>

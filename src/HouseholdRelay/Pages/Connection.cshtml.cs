@@ -11,6 +11,8 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
 {
     /// <summary>设置里的对外公开地址，去掉末尾斜杠后用于拼接示例；未配置时为空串，示例改用 https://YOUR_RELAY_HOST 占位。</summary>
     public string RootUrl { get; private set; } = "";
+    /// <summary>当前生效上游的供应商名称；没有生效上游时为「尚未选择」，旧版迁移来的未命名上游为「未命名」。</summary>
+    public string UpstreamName { get; private set; } = "尚未选择";
     /// <summary>活动上游测试报告里实际验证通过的模型；只有报告允许激活时才填，否则为空，页面据此提示尚未验证。</summary>
     public string? VerifiedModel { get; private set; }
     /// <summary>推荐家人填写的模型名，取活动上游选项中配置的模型；仅在测试报告允许激活时给出，否则示例使用 YOUR_MODEL 占位。</summary>
@@ -36,6 +38,7 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
     {
         RootUrl = settings.Read().Value.PublicUrl.TrimEnd('/');
         var active = upstreams.ReadActive();
+        UpstreamName = !active.Configured ? "尚未选择" : active.Name ?? "未命名";
         ClaudeCodeOnly = active.Options.Diagnostic == "claude-code";
         if (active.Report?.CanActivate == true)
         { VerifiedModel = active.Report.VerifiedModel; RecommendedModel = active.Options.Model; Models = active.Report.Models; }

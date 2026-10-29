@@ -11,20 +11,28 @@ namespace Tests;
 static class UpstreamProxyTests
 {
     /// <summary>
-    /// 验证上游 HTTP CONNECT 代理：候选上游经代理测试成功，代理收到的 CONNECT 目标是已解析校验过的 IP 而非主机名，且不含上游密钥；
-    /// 上游收到的两次诊断请求保留 /prefix/v1/ 路径和 x-api-key；代理地址指向云元数据地址 169.254.169.254 时候选不可激活。
+    /// 验证全局手动代理走 HTTP CONNECT：项目设置填好代理后，上游经代理测试成功，代理收到的 CONNECT 目标是已解析校验过的 IP 而非主机名，且不含上游密钥；
+    /// 上游收到的两次诊断请求保留 /prefix/v1/ 路径和 x-api-key；把全局代理改成云元数据地址 169.254.169.254 后，同一个上游再测不可激活。
     /// </summary>
     public static async Task ConnectProxy()
     {
         await using var mock = await UpstreamFixture.Create(); await using var proxy = new ProxyFixture(new Uri(mock.Url).Port);
-        using var home = new TestHome(); var service = new TestProcess(home.Path).Upstreams;
-        var id = service.SaveCandidate(service.ReadActive().Version, mock.Options("/prefix") with { ProxyUrl = proxy.Url }, "fixture-proxy-secret");
+        using var home = new TestHome(); var process = new TestProcess(home.Path); var service = process.Upstreams;
+        UseProxy(process, "manual", proxy.Url);
+        var id = service.SaveCandidate(service.ReadActive().Version, mock.Options("/prefix"), "fixture-proxy-secret");
         var report = await service.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate && proxy.Requests.Count > 0 && mock.Calls.Count == 2);
         Check(proxy.Requests.All(value => value.StartsWith("CONNECT 127.0.0.1:", StringComparison.Ordinal) && !value.Contains("fixture-proxy-secret")));
         Check(mock.Calls.All(call => call.Path.StartsWith("/prefix/v1/", StringComparison.Ordinal) && call.Headers["x-api-key"] == "fixture-proxy-secret"));
-        var denied = service.SaveCandidate(service.ReadActive().Version, mock.Options() with { ProxyUrl = "http://169.254.169.254:8080" }, "fixture-proxy-secret");
-        Check(!(await service.TestCandidate(denied, true, CancellationToken.None)).CanActivate);
+        UseProxy(process, "manual", "http://169.254.169.254:8080");
+        Check(!(await service.TestCandidate(id, true, CancellationToken.None)).CanActivate);
+    }
+
+    /// <summary>经配置服务按版本保存全局代理方式与地址，与项目设置页走同一条写入路径。</summary>
+    public static void UseProxy(TestProcess process, string mode, string? url)
+    {
+        var snapshot = process.Settings.Read(); snapshot.Value.ProxyMode = mode; snapshot.Value.ProxyUrl = url;
+        process.Settings.Save(snapshot.Version, snapshot.Value);
     }
 }
 

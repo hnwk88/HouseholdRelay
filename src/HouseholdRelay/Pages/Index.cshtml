@@ -5,7 +5,7 @@
 <p>先为每位使用者建立独立身份，再发放个人令牌。</p>
 <div class="grid">
     <section class="card"><h2>使用者</h2><p class="metric">@Model.UserCount <small>/ 8 人</small></p><a class="button" asp-page="/Users">管理使用者与令牌</a></section>
-    <section class="card"><h2>上游凭据</h2><p class="status">@Model.UpstreamStatus</p><p>账户令牌或 API 密钥直接填写；候选通过最小调用检测后激活。</p><a asp-page="/Upstream">配置和测试上游</a></section>
+    <section class="card"><h2>上游</h2><p>当前上游：@Model.UpstreamName</p><p class="status">@Model.UpstreamStatus</p><p>起名字、填地址、贴密钥即可接入；测试通过后按名称切换。</p><a asp-page="/Upstream">上游接入与切换</a></section>
     <section class="card"><h2>对外连接</h2><p class="status">@Model.CertificateStatus</p><p>@(Model.PublicUrl.Length == 0 ? "尚未填写对外地址。" : Model.PublicUrl)</p><a asp-page="/Https">管理 HTTPS 证书</a> · <a asp-page="/Connection">连接说明</a></section>
     <section class="card"><h2>个人用量</h2><p class="status">尚未提供</p><p>个人请求与 Token 用量统计将在后续版本提供。</p></section>
 </div>
