@@ -133,6 +133,16 @@ async function duplicateNames(page) {
         duplicates: sections.flatMap(item => [...repeated(item.inputs), ...repeated(item.summaries)].map(name => item.section + '：' + name)), sections
     };
 }
+// 在上游页勾选或取消「自动切换」并保存；返回页面读出的那句提示。
+async function failover(page, url, enabled) {
+    await page.goto(url + '/Upstream');
+    const box = page.getByLabel('在用的上游失败时自动换到其他上游', { exact: true });
+    assert.equal(await box.isChecked(), !enabled);
+    await box.setChecked(enabled);
+    await page.getByRole('button', { name: '保存自动切换设置', exact: true }).click();
+    const said = page.getByRole('status').filter({ hasText: enabled ? '自动切换已打开' : '自动切换已关闭' }); await said.waitFor();
+    return (await said.textContent()).trim();
+}
 async function relay(url, token, stream = false) {
     return fetch(url + '/v1/messages?beta=true', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'content-type': 'application/json', 'anthropic-beta': 'future-beta' },
         body: JSON.stringify({ model: 'fixture-model', stream, messages: [{ role: 'user', content: 'fixture-browser-call' }] }) });
@@ -185,10 +195,22 @@ async function relay(url, token, stream = false) {
     assert.equal((await relay(url, token, true)).status, 200);
     await candidate(page, url, upstreamUrl, 'oauth', accountSecret, '浏览器账户');
     assert.equal((await relay(url, token)).status, 200);
+    // 先经页面关掉自动切换：账户回 401 原样交给客户端，随后认证暂停回 503，与没有自动切换时相同。
+    const switchedOff = await failover(page, url, false);
     rejectAccount = true; const denied = await relay(url, token); assert.equal(denied.status, 401); assert.equal((await denied.text()).includes(accountSecret), false);
     assert.equal((await relay(url, token)).status, 503);
     await page.goto(url + '/Upstream'); await page.getByText('凭据失效，需重新接入', { exact: true }).waitFor();
-    await screenshot(page, '09-account-paused'); rejectAccount = false;
+    await screenshot(page, '09-account-paused');
+    // 再打开：在用的账户已暂停，同一个请求由测试通过的「浏览器 API」接住；上游页读出此刻走的是哪家、哪家为什么排不上。
+    const switchedOn = await failover(page, url, true);
+    assert.equal((await relay(url, token)).status, 200);
+    await page.goto(url + '/Upstream');
+    const routing = (await page.locator('section', { has: page.getByRole('heading', { name: '自动切换', exact: true }) }).locator('p.status').textContent()).trim();
+    assert.ok(routing.startsWith('此刻走的是「浏览器 API」，') && routing.includes('「浏览器账户」认证失败已暂停，重新测试并切换后恢复。'), routing);
+    assert.equal((await page.content()).includes(accountSecret), false);
+    await readingOrder(page, '23-upstream-failover'); await screenshot(page, '23-upstream-failover'); rejectAccount = false;
+    steps.push('关掉自动切换时读出：' + switchedOff + ' 账户回 401 原样交给客户端，随后暂停回 503。');
+    steps.push('打开自动切换时读出：' + switchedOn + ' 同一个请求由备用的「浏览器 API」接住（200），上游页读出：' + routing);
     await candidate(page, url, upstreamUrl, 'oauth', accountSecret, '浏览器账户（新令牌）'); assert.equal((await relay(url, token)).status, 200);
     // 上游回 503（地区屏蔽）：读句指向代理出口而不是地址；上游恢复后对已保存的上游按「重新获取模型」，不重贴密钥、不新增上游；再删掉它，已保存数量减 1。
     const savedCount = async () => Number((await page.getByRole('heading', { name: /^已保存的上游（\d+ 个）$/ }).textContent()).match(/\d+/)[0]);

@@ -20,6 +20,16 @@
         <p>还没有上游。请在下面的「API 供应商」里起名字、填地址、贴密钥，然后按「获取模型」。</p>
     }
 </section>
+<section class="card" aria-labelledby="failover-heading"><h2 id="failover-heading">自动切换</h2>
+    @if (Model.Active.Configured) { <p class="status">@Model.RoutingText</p> }
+    <p>打开后，在用的上游连不上、回 5xx、429、401 或 403 时，按下面「已保存的上游」的顺序换到其他测试通过的上游接住这次请求。连不上或回 5xx 的那家暂避 5 分钟后自动回来；回 429 的等冷却结束；回 401、403 的要重新测试并切换才恢复。数据库里「在用」的那一家不变。关闭后只用在用的那一家。</p>
+    <form method="post" asp-page-handler="Failover">
+        <input type="checkbox" id="failover" name="failover" value="true" checked="@Model.Active.Failover" />
+        <label for="failover">在用的上游失败时自动换到其他上游</label>
+        <input type="hidden" name="failover" value="false" />
+        <button type="submit">保存自动切换设置</button>
+    </form>
+</section>
 @if (Model.Working is { } working)
 {
     <section class="card" aria-labelledby="test-heading" id="test"><h2 id="test-heading">选择模型并测试：@working.Name</h2>

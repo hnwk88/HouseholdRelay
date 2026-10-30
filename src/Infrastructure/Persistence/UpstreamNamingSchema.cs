@@ -22,7 +22,7 @@ internal sealed class UpstreamNamingSchema(RelayDataOptions options) : IDatabase
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version is 4 or 5) return;
+        if (version is 4 or 5 or 6) return;
         if (version != 3) throw new InvalidOperationException("数据库版本不支持。");
         using var transaction = connection.BeginTransaction();
         Execute(connection, transaction, """

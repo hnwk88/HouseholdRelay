@@ -3,7 +3,7 @@
 namespace Core.Upstream;
 
 /// <summary>请求持有的不可变活动版本；用普通类而非记录类型，避免自动输出凭据。</summary>
-public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, string? candidateId = null, string? name = null)
+public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, string? candidateId = null, string? name = null, bool failover = false)
 {
     /// <summary>当前生效的已保存上游主键；尚未从任何已保存上游激活（新实例或独立中转）时为 null。</summary>
     public string? CandidateId { get; } = candidateId;
@@ -11,7 +11,10 @@ public sealed class UpstreamSnapshot(long version, UpstreamOptions options, stri
     /// <summary>当前生效上游的供应商名称，只做显示；改名立即反映在这里，不改变 <see cref="Version"/>。</summary>
     public string? Name { get; } = name;
 
-    /// <summary>该上游版本的编号，用于区分新旧活动版本、按版本回收连接。</summary>
+    /// <summary>自动切换开关：在用的那一家失败时是否按顺序换到其他测试通过的上游；只在活动上游的快照上有意义，备用上游的快照恒为 false。</summary>
+    public bool Failover { get; } = failover;
+
+    /// <summary>活动上游版本的编号，用于区分新旧活动版本、按版本回收连接；备用上游的快照记的是读取时的活动版本，哪一家靠 <see cref="CandidateId"/> 区分。</summary>
     public long Version { get; } = version;
 
     /// <summary>该版本的非秘密连接配置。</summary>

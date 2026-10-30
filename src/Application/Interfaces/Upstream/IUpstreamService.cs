@@ -32,6 +32,9 @@ public interface IUpstreamService : IActiveUpstreamSource
     /// <summary>读取活动上游的非秘密部分供页面展示；不读凭据、不等官方登录令牌刷新。转发用 <see cref="IActiveUpstreamSource.ReadActive"/>。</summary>
     UpstreamOverview ReadOverview();
 
+    /// <summary>打开或关闭自动切换，保存即生效；关闭后只用在用的那一家，行为与没有自动切换时相同。</summary>
+    void SetFailover(bool enabled);
+
     /// <summary>修改供应商名称；只影响显示，切换和用量都按主键关联。</summary>
     void Rename(string id, string name);
 

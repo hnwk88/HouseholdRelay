@@ -16,7 +16,7 @@ internal sealed class UsageAttemptSchema(RelayDataOptions options) : IDatabaseMi
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version == 5) return;
+        if (version is 5 or 6) return;
         if (version != 4) throw new InvalidOperationException("数据库版本不支持。");
         using var transaction = connection.BeginTransaction();
         Execute(connection, transaction, """

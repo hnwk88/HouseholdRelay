@@ -21,6 +21,8 @@ public sealed class IndexModel(IConfigurationService settings, IIdentityService 
     public string UpstreamStatus { get; private set; } = "尚未配置";
     /// <summary>当前生效上游的供应商名称；没有生效上游时为「尚未选择」，生效的是旧版迁移来的未命名上游时为「未命名」。</summary>
     public string UpstreamName { get; private set; } = "尚未选择";
+    /// <summary>此刻实际走的是哪家、哪家暂避到几点、为什么；没有生效上游时为空。</summary>
+    public string RoutingText { get; private set; } = "";
     /// <summary>证书状态文字：未配置、已过期、私有 CA 需客户端信任或已导入可信证书。</summary>
     public string CertificateStatus { get; private set; } = "尚未配置 HTTPS";
     /// <summary>打开管理首页（需已登录）：汇总使用者数、上游池运行状态和证书状态，只读。</summary>
@@ -32,6 +34,7 @@ public sealed class IndexModel(IConfigurationService settings, IIdentityService 
         UpstreamName = !active.Configured ? "尚未选择" : active.Name ?? "未命名";
         UpstreamStatus = !active.Configured ? "尚未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0 ? "上游冷却中"
             : active.Report?.CanActivate == true ? "最小模型调用已验证" : "已有凭据 · 调用未检测";
+        RoutingText = active.Configured ? UpstreamModel.RoutingSentence(upstreamPool, active, upstreams.ListCandidates()) : "";
         var certificate = certificates.ReadInfo(); CertificateStatus = certificate is not null
             ? certificate.ValidUntil > DateTimeOffset.UtcNow ? certificate.Mode == "private" ? "私有 CA · 客户端安装一次信任" : "已导入可信证书" : "证书已过期"
             : "尚未配置 HTTPS";

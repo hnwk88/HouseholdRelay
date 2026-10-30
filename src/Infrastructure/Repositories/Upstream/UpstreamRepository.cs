@@ -24,14 +24,34 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     {
         using var connection = database.Open();
         using var command = Command(connection, null, """
-            SELECT u.version,u.options_json,u.credential,u.report_json,u.candidate_id,c.name
+            SELECT u.version,u.options_json,u.credential,u.report_json,u.candidate_id,c.name,u.failover
             FROM upstream u LEFT JOIN upstream_candidates c ON c.id=u.candidate_id WHERE u.id=1
             """);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
         return new(reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : (byte[])reader[2], reader.IsDBNull(3) ? null : reader.GetString(3),
-            reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5));
+            reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetBoolean(6));
     }
+
+    /// <summary>按创建先后列出测试通过、且不是活动上游来源的已保存上游，版本记为此刻的活动版本；与上游页列表同一顺序。</summary>
+    public IReadOnlyList<StoredUpstream> ListStandby()
+    {
+        using var connection = database.Open();
+        using var command = Command(connection, null, """
+            SELECT u.version,c.options_json,c.credential,c.report_json,c.id,c.name
+            FROM upstream_candidates c JOIN upstream u ON u.id=1
+            WHERE c.state='passed' AND c.id IS NOT u.candidate_id ORDER BY c.created_at,c.rowid
+            """);
+        using var reader = command.ExecuteReader();
+        var rows = new List<StoredUpstream>();
+        while (reader.Read())
+            rows.Add(new(reader.GetInt64(0), reader.GetString(1), (byte[])reader[2], reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.GetString(5)));
+        return rows;
+    }
+
+    /// <summary>只改活动上游行上的自动切换开关。</summary>
+    public void SetFailover(bool enabled) => database.Write((connection, transaction) =>
+        Execute(connection, transaction, "UPDATE upstream SET failover=$enabled WHERE id=1", ("$enabled", enabled)));
 
     /// <summary>读取活动上游的加密凭据。</summary>
     public byte[]? ReadActiveCredential()

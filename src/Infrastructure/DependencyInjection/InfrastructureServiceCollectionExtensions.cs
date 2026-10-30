@@ -33,12 +33,13 @@ public static class InfrastructureServiceCollectionExtensions
         configure(options);
         services.AddSingleton(options);
 
-        // 数据库构造时依次执行这些步骤；登记顺序与 Order 一致：旧数据导入、上游架构、用量架构、上游命名与全局代理。
+        // 数据库构造时依次执行这些步骤；登记顺序与 Order 一致：旧数据导入、上游架构、用量架构、上游命名与全局代理、上游尝试记录、自动切换与按上游计价。
         services.AddSingleton<IDatabaseMigration, LegacyImport>();
         services.AddSingleton<IDatabaseMigration, UpstreamSchema>();
         services.AddSingleton<IDatabaseMigration, UsageSchema>();
         services.AddSingleton<IDatabaseMigration, UpstreamNamingSchema>();
         services.AddSingleton<IDatabaseMigration, UsageAttemptSchema>();
+        services.AddSingleton<IDatabaseMigration, UpstreamFailoverSchema>();
         services.AddSingleton<RelayDatabase>();
         services.AddSingleton<IRelayInstance>(provider => provider.GetRequiredService<RelayDatabase>());
         services.AddSingleton<IServingLock, ServingLockFile>();
@@ -75,6 +76,8 @@ public static class InfrastructureServiceCollectionExtensions
     public static IServiceCollection AddUpstreamConnections(this IServiceCollection services)
     {
         services.TryAddSingleton<IUpstreamProxy>(provider => new SystemUpstreamProxy(provider.GetRequiredService<RelayConfiguration>));
+        // 暂避计时用它；正式服务由应用层登记过，独立中转模式在这里补上系统时钟。
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IUpstreamPool, UpstreamPool>();
         return services;
     }

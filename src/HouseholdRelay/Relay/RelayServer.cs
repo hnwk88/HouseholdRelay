@@ -81,7 +81,7 @@ public sealed class RelayServer : IDisposable
         var stopwatch = Stopwatch.StartNew(); var id = Guid.NewGuid().ToString("N"); var name = "unknown";
         var path = context.Request.Path.Value ?? "/"; var outcome = "succeeded";
         UsageAccumulator? usage = null; var recorded = false; var dispatched = false; int? upstreamStatus = null;
-        UpstreamAttempt? attempt = null; string? upstreamName = null;
+        var attempts = new List<UpstreamAttempt>(); string? upstreamName = null;
         try
         {
             if (path == "/healthz" && context.Request.Method == "GET")
@@ -103,15 +103,15 @@ public sealed class RelayServer : IDisposable
             var kind = path == "/v1/messages" ? "inference" : path == "/v1/models" ? "models" : "estimate";
             usage = new UsageAccumulator(kind);
             if (Usage is not null) { await Usage.Start(id, client, kind); recorded = true; }
-            using var upstream = Upstreams.Acquire();
-            upstream.CheckState(); Admission.CheckRate(client.Id);
+            using var route = Upstreams.Route();
+            route.CheckState(); Admission.CheckRate(client.Id);
             using var lease = await Admission.Enter(client.Id, context.RequestAborted);
             if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked while queued.");
-            upstream.CheckState();
+            route.CheckState();
             var body = await ReadBody(context);
             if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked during upload.");
-            upstream.CheckState();
-            string? model = null;
+            route.CheckState();
+            string? model = null; byte[]? normalized = null;
             if (method == "POST")
             {
                 if (!(context.Request.ContentType ?? "").StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
@@ -121,50 +121,81 @@ public sealed class RelayServer : IDisposable
                     using var document = JsonDocument.Parse(body);
                     if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
                     if (document.RootElement.TryGetProperty("model", out var modelValue) && modelValue.ValueKind == JsonValueKind.String)
-                        model = SafeModel(modelValue.GetString(), token, upstream.Snapshot.Credential);
-                    if (upstream.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata) body = DeviceMetadata.Normalize(body, config.DeviceId);
+                        model = SafeModel(modelValue.GetString(), token, route.Active.Snapshot.Credential);
+                    if (route.Active.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata) normalized = DeviceMetadata.Normalize(body, config.DeviceId);
                 }
                 // 请求体不是 JSON 对象时在发往上游之前就以 400 拒绝，不把解析器的内部消息透给客户端。
                 catch (JsonException) { throw new RelayFailure(400, "Expected a JSON object."); }
             }
             // JSON 处理完成后再核验，缩短上传结束与真正发往上游之间的撤销窗口。
             if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked before dispatch.");
-            using var request = upstream.Request(path, context.Request.QueryString.ToString(), body, method, config.UpstreamUserAgent, context.Request.Headers);
+            // 每家按自己的接入方式用同一份请求体重建请求：账户模式统一设备元数据，API 模式原样；请求体只读了一次。
+            byte[] Body(IUpstreamLease target) => method == "POST" && target.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata
+                ? normalized ??= DeviceMetadata.Normalize(body, config.DeviceId) : body;
+            var upstream = route.Next(model)!;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
             // 总超时与客户端断开共用同一个令牌：客户端断开时立即取消上游调用，超时时也会取消，二者在下方 catch 里按 RequestAborted 区分。
+            // 换家时不重新计时，几家加起来也不超过同一个总超时。
             timeout.CancelAfter(TimeSpan.FromSeconds(config.RequestTimeoutSeconds));
-            // 尝试记录里的说明先去掉上游凭据和个人令牌，再截断落库。
-            var secret = upstream.Snapshot.Credential!;
-            string Redact(string value) => UpstreamResponses.Redact(UpstreamResponses.Redact(value, secret), token!);
+            UpstreamAttempt? attempt = null; var classified = false; Func<string, string> redact = value => value;
             try
             {
                 try
                 {
                     timeout.Token.ThrowIfCancellationRequested();
-                    if (recorded) await Usage!.Dispatch(id, upstream.Snapshot.Version, model);
+                    if (recorded) await Usage!.Dispatch(id, upstream.Snapshot.Version, upstream.Snapshot.CandidateId, model);
                     dispatched = true;
-                    attempt = new UpstreamAttempt(1, upstream.Snapshot.CandidateId, upstream.Snapshot.Version, Usage?.Now ?? DateTimeOffset.UtcNow);
-                    upstreamName = upstream.Snapshot.Name;
-                    using var response = await upstream.Send(request, timeout.Token);
-                    upstreamStatus = (int)response.StatusCode;
-                    attempt.Headers(upstreamStatus.Value, UpstreamRequestId(response), Redact);
-                    upstream.Observe(response);
-                    await UpstreamResponses.Copy(response, context.Response, secret, id, timeout.Token, usage);
-                    attempt.Completed(upstreamStatus.Value, usage, Redact);
-                    if (!response.IsSuccessStatusCode || usage.Error) outcome = "failed";
-                    else if (usage.IsStream && !usage.ProtocolComplete) outcome = "interrupted";
-                    Interlocked.Increment(ref completed);
+                    while (true)
+                    {
+                        attempt = new UpstreamAttempt(attempts.Count + 1, upstream.Snapshot.CandidateId, upstream.Snapshot.Version, Usage?.Now ?? DateTimeOffset.UtcNow);
+                        attempts.Add(attempt); classified = false; upstreamName = upstream.Snapshot.Name; upstreamStatus = null;
+                        // 尝试记录里的说明先去掉这一家的上游凭据和个人令牌，再截断落库；每家只用自己的凭据，不会带到别家。
+                        var secret = upstream.Snapshot.Credential!;
+                        redact = value => UpstreamResponses.Redact(UpstreamResponses.Redact(value, secret), token!);
+                        using var request = upstream.Request(path, context.Request.QueryString.ToString(), Body(upstream), method, config.UpstreamUserAgent, context.Request.Headers);
+                        HttpResponseMessage response;
+                        try { response = await upstream.Send(request, timeout.Token); }
+                        // 先按原始异常给这次尝试分类；连不上（含建连超时、TLS 失败）且顺序里还有下一家时让这家暂避、换下一家，否则原样抛给下面的转换，返回给客户端的内容不变。
+                        catch (Exception error)
+                        {
+                            attempt.Failed(error, context.RequestAborted.IsCancellationRequested, redact); classified = true;
+                            if (!attempt.Switchable || route.Next(model) is not { } after) throw;
+                            attempt.PassOn(); route.Avoid(upstream, attempt); upstream = after; continue;
+                        }
+                        using (response)
+                        {
+                            upstreamStatus = (int)response.StatusCode;
+                            attempt.Headers(upstreamStatus.Value, UpstreamRequestId(response), redact);
+                            upstream.Observe(response);
+                            // 还没向客户端写出任何字节：5xx、429、401、403 且顺序里还有下一家时，只读出这家的错误说明记进尝试，丢弃响应，换下一家。
+                            if (attempt.Switchable && route.Next(model) is { } next)
+                            {
+                                var discarded = new UsageAccumulator(kind);
+                                await UpstreamResponses.Inspect(response, secret, discarded, timeout.Token);
+                                attempt.Completed(upstreamStatus.Value, discarded, redact); attempt.PassOn(); route.Avoid(upstream, attempt);
+                                upstream = next; continue;
+                            }
+                            // 从这里开始向客户端写状态码和正文，之后出什么错都不再换家。
+                            await UpstreamResponses.Copy(response, context.Response, secret, id, timeout.Token, usage);
+                            attempt.Completed(upstreamStatus.Value, usage, redact);
+                            if (!response.IsSuccessStatusCode || usage.Error) outcome = "failed";
+                            else if (usage.IsStream && !usage.ProtocolComplete) outcome = "interrupted";
+                            else route.Served(upstream);
+                            Interlocked.Increment(ref completed);
+                        }
+                        break;
+                    }
                 }
-                // 先按原始异常给这次尝试分类，再原样抛给下面和外层的转换；分类只进记录，返回给客户端的内容不变。
-                catch (Exception error) when (attempt is not null) { attempt.Failed(error, context.RequestAborted.IsCancellationRequested, Redact); throw; }
+                // 回传途中等尚未分类的异常：先给这次尝试分类，再原样抛给下面和外层的转换；分类只进记录，返回给客户端的内容不变。
+                catch (Exception error) when (attempt is not null && !classified) { attempt.Failed(error, context.RequestAborted.IsCancellationRequested, redact); throw; }
             }
             // 客户端仍在连接却被取消，只能是总超时触发，转成 504；客户端自己断开的情况留给外层按 cancelled 处理。
             catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
             { throw new RelayFailure(504, "Upstream request timed out."); }
             // 代理已启用却取不到地址：建连前就拒绝，请求没有发出，用量记成未发出的失败（发送标记在此之前已写，结束记录会按这里改回）；
-            // 固定提示让使用者知道去找管理员查代理，不透出代理地址。
+            // 之前已经换过家时前面那几次确实发出过，仍记为已发送。固定提示让使用者知道去找管理员查代理，不透出代理地址。
             catch (HttpRequestException error) when (ProxyUnavailable(error))
-            { dispatched = false; throw new RelayFailure(502, "Upstream proxy is enabled but unavailable; the request was not sent. Ask the administrator to check proxy settings in local management."); }
+            { dispatched = attempts.Count > 1; throw new RelayFailure(502, "Upstream proxy is enabled but unavailable; the request was not sent. Ask the administrator to check proxy settings in local management."); }
             // 连不上上游时只回固定的 502 提示，不透出上游地址或底层网络错误细节。
             catch (HttpRequestException) { throw new RelayFailure(502, "Upstream connection failed. Check host connectivity."); }
         }
@@ -182,7 +213,6 @@ public sealed class RelayServer : IDisposable
         // 事件日志在原有字段之后补上游名称、尝试次数和最后一次错误类型，原有字段与顺序不变。
         finally
         {
-            UpstreamAttempt[] attempts = attempt is null ? [] : [attempt];
             if (recorded)
                 await Usage!.Finish(id, new UsageEnd(outcome, dispatched, context.Response.StatusCode, upstreamStatus,
                     stopwatch.ElapsedMilliseconds, usage!.Completeness(dispatched, outcome == "succeeded"), usage.Tokens,
@@ -190,7 +220,7 @@ public sealed class RelayServer : IDisposable
                     { Attempts = attempts });
             log.Write(new { time = DateTimeOffset.UtcNow, requestId = id, client = name, route = Routes.ContainsKey(path) ? path : "local",
                 status = context.Response.StatusCode, outcome, durationMs = stopwatch.ElapsedMilliseconds,
-                upstream = upstreamName, attempts = attempts.Length, error = attempts.LastOrDefault()?.ErrorType });
+                upstream = upstreamName, attempts = attempts.Count, error = attempts.LastOrDefault()?.ErrorType });
         }
     }
 

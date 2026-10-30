@@ -16,6 +16,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
     private readonly HttpClient http;
     private long cooldownUntil;
     private int paused, references = 1;
+    private UpstreamAvoidance? avoidance;
     /// <summary>创建本连接时读到的上游版本快照（地址、凭据、模式等）；整个连接生命周期内不变，因此旧租约在版本切换后仍按原配置发请求。</summary>
     public UpstreamSnapshot Snapshot { get; }
     /// <summary>上游曾返回 401 或 403 时置为真，表示凭据已失效需在本机管理页重新测试激活；用易失读取，多线程下立即可见。</summary>
@@ -93,6 +94,26 @@ internal sealed class UpstreamConnection : IUpstreamLease
         do { previous = Interlocked.Read(ref cooldownUntil); if (previous >= until) return; }
         while (Interlocked.CompareExchange(ref cooldownUntil, until, previous) != previous);
     }
+    /// <summary>自动切换把这家换掉时记下暂避：到期时刻与最后一次失败的读法；后记的覆盖先记的。</summary>
+    internal void Avoid(UpstreamAvoidance value) => Volatile.Write(ref avoidance, value);
+
+    /// <summary>在 <paramref name="now"/> 这一刻是否还在暂避中。</summary>
+    internal bool Avoided(DateTimeOffset now) => Volatile.Read(ref avoidance) is { Until: { } until } && until > now;
+
+    /// <summary>
+    /// 这家此刻为什么排不到前面，供页面读出：认证暂停优先，其次 429 冷却，再次暂避；都没有时为 null。
+    /// <paramref name="now"/> 只用于暂避到期判断，冷却沿用连接自己按系统时钟记的截止时刻。
+    /// </summary>
+    internal UpstreamAvoidance? Held(DateTimeOffset now)
+    {
+        if (Paused) return new(Snapshot.CandidateId, "paused", null, null, null, null);
+        if (CooldownSeconds > 0) return new(Snapshot.CandidateId, "cooldown", DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref cooldownUntil)), 429, null, null);
+        return Avoided(now) ? Volatile.Read(ref avoidance) : null;
+    }
+
+    /// <summary>这家现在能不能接请求：有凭据、没有认证暂停、不在 429 冷却中；暂避不算，暂避的只是排到最后。</summary>
+    internal bool Usable => Snapshot.Configured && !Paused && CooldownSeconds == 0;
+
     /// <summary>归还一次引用；最后一个持有者（连接池或在途请求的租约）归还时才销毁 HTTP 客户端，保证版本切换不会打断仍在进行的请求。</summary>
     public void Dispose() { if (Interlocked.Decrement(ref references) == 0) http.Dispose(); }
 

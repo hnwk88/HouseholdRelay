@@ -21,8 +21,8 @@ public interface IUsageService
     /// <summary>记录请求开始；保存失败时以 503 拒绝请求，不发往上游。</summary>
     Task Start(string requestId, ClientAccess client, string kind);
 
-    /// <summary>记录即将发送；保存失败时以 503 拒绝请求，不发往上游。</summary>
-    Task Dispatch(string requestId, long version, string? model);
+    /// <summary>记录即将发送与首先要试的那一家（已保存上游主键）；保存失败时以 503 拒绝请求，不发往上游。</summary>
+    Task Dispatch(string requestId, long version, string? candidateId, string? model);
 
     /// <summary>保存请求结束结果，最多重试三次；全部失败时返回 false。</summary>
     Task<bool> Finish(string requestId, UsageEnd result);

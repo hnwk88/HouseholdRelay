@@ -153,7 +153,7 @@ static class UpstreamAttemptTests
         var now = new DateTimeOffset(2026, 11, 2, 6, 30, 0, TimeSpan.Zero); var clock = new UsageClock(now); var usage = new TestProcess(home.Path, clock).Usage;
         foreach (var (id, time) in new[] { ("expired", now.AddDays(-40).AddTicks(-1)), ("boundary", now.AddDays(-40)) })
         {
-            clock.Set(time); await usage.Start(id, user, "inference"); await usage.Dispatch(id, 1, "fixture-model");
+            clock.Set(time); await usage.Start(id, user, "inference"); await usage.Dispatch(id, 1, "fixture-candidate", "fixture-model");
             Check(await usage.Finish(id, new UsageEnd("failed", true, 503, 503, 1, "partial", new()) { Attempts = [new UpstreamAttempt(1, "fixture-candidate", 1, time)] }));
         }
         int Count(string sql) { using var connection = process.Database.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
@@ -181,7 +181,7 @@ static class UpstreamAttemptTests
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_requests WHERE request_id='kept' AND input_tokens=3")) == 1);
         }
         var upgraded = new TestProcess(home.Path);
-        using (var connection = upgraded.Database.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 5);
+        using (var connection = upgraded.Database.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 6);
         Check(upgraded.Usage.Query(new()).Rows.Single().Tokens == new UsageTokens(3, 4));
     }
 
@@ -216,11 +216,15 @@ static class UpstreamAttemptTests
         return Task.CompletedTask;
     }
 
-    /// <summary>起一个模拟上游和一个把事件日志收进队列的管理网页主机。</summary>
+    /// <summary>
+    /// 起一个模拟上游和一个把事件日志收进队列的管理网页主机，并关掉自动切换：这组用例模拟「测过之后变坏」时库里还留着那家好的，
+    /// 开关开着会换过去；关掉后它们就是「开关关闭时客户端拿到的与没有自动切换时逐字相同」的回归用例。
+    /// </summary>
     private static async Task<(UpstreamFixture Upstream, WebFixture Web, ConcurrentQueue<string> Logs)> Start()
     {
         var logs = new ConcurrentQueue<string>(); var upstream = await UpstreamFixture.Create();
         var web = await WebFixture.Create(overrides: services => services.AddSingleton<IRelayEventLog>(new FixtureLog(logs)));
+        web.Upstreams.SetFailover(false);
         return (upstream, web, logs);
     }
 

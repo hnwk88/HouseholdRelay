@@ -52,6 +52,21 @@ public static class UpstreamResponses
         }
     }
 
+    /// <summary>
+    /// 自动切换要丢弃这家的错误响应时，只为尝试记录读出错误类型与说明：正文限 1 MB 读入，脱敏后交给 <paramref name="usage"/>，不是 JSON 时标为无法解析；
+    /// 一个字节也不写给客户端。读正文途中连接断了或超限时放弃，错误类型留给尝试记录按「格式不认识」读；总超时或客户端断开的取消照常抛出。
+    /// </summary>
+    public static async Task Inspect(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation)
+    {
+        byte[] bytes;
+        try { await using var stream = await upstream.Content.ReadAsStreamAsync(cancellation); bytes = await ReadBounded(stream, 1024 * 1024, cancellation); }
+        // 要丢弃的响应读不全也不影响换下一家，只是说不出它为什么失败。
+        catch (Exception error) when (error is IOException or HttpRequestException or RelayFailure) { return; }
+        try { usage.Json(Json(bytes, secret)); }
+        // 和交给客户端时同一口径：非 JSON 的错误正文记为无法解析。
+        catch (JsonException) { usage.Unreadable(); }
+    }
+
     /// <summary>把流读入内存，累计超过 <paramref name="limit"/> 字节立即抛 502，防止异常大的上游响应耗尽内存；读缓冲取自共享数组池。</summary>
     public static async Task<byte[]> ReadBounded(Stream stream, int limit, CancellationToken cancellation)
     {

@@ -21,8 +21,30 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
         var (row, options) = Active();
         var credential = row.ProtectedCredential is null ? null
             : options.OfficialLogin ? row.CandidateId is { } account ? officialAccounts.ReadAccessToken(account) : null : Decrypt(row.ProtectedCredential);
-        return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name);
+        return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name, row.Failover);
     }
+
+    /// <summary>
+    /// 读取在用那一家以外、测试通过的已保存上游快照，按上游页顺序：官方登录的读它账户目录里的最新令牌（取不到时凭据为 null，转发会跳过它），其余解密库中凭据。
+    /// 配置或报告 JSON 损坏的那一家跳过，不挡住其余备用上游。
+    /// </summary>
+    public IReadOnlyList<UpstreamSnapshot> ReadStandby()
+    {
+        var snapshots = new List<UpstreamSnapshot>();
+        foreach (var row in repository.ListStandby())
+        {
+            UpstreamOptions options; UpstreamReport? report;
+            try { options = Parse<UpstreamOptions>(row.OptionsJson); report = Report(row); }
+            // 一家的配置坏了只让它不参与切换，在用的那家和其余备用照常；它在上游页上照样读得出来，由管理员重新测试或删除。
+            catch (Exception error) when (error is JsonException or InvalidOperationException) { continue; }
+            var credential = row.ProtectedCredential is null ? null : options.OfficialLogin ? officialAccounts.ReadAccessToken(row.CandidateId!) : Decrypt(row.ProtectedCredential);
+            snapshots.Add(new(row.Version, options, credential, report, row.CandidateId, row.Name));
+        }
+        return snapshots;
+    }
+
+    /// <summary>打开或关闭自动切换；保存即生效，下一个请求就按新开关取尝试顺序，不改在用的那一家。</summary>
+    public void SetFailover(bool enabled) => repository.SetFailover(enabled);
 
     /// <summary>
     /// 读取活动上游的非秘密部分供页面展示：不解密、不读令牌，官方登录上游的「已配置」只看账户目录里有没有凭据文件，不等刷新；
@@ -32,7 +54,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     {
         var (row, options) = Active();
         var configured = row.ProtectedCredential is not null && (!options.OfficialLogin || row.CandidateId is { } account && officialAccounts.HasCredential(account));
-        return new(row.Version, options, configured, Report(row), row.CandidateId, row.Name);
+        return new(row.Version, options, configured, Report(row), row.CandidateId, row.Name, row.Failover);
     }
 
     /// <summary>读取最近创建的上游（不含凭据）；一个都没有时返回 null。</summary>
@@ -88,7 +110,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
 
     /// <summary>
     /// 删除一个已保存上游：当前使用中或正在检测时由仓储在写事务里拒绝；删掉的是官方登录上游时再删它的账户目录。
-    /// 用量按活动版本号记录、不按这个主键关联，删除不影响历史用量。
+    /// 用量与尝试记录只记这个主键、不设外键，删除不影响历史用量，名称读作已删除的上游。
     /// </summary>
     public void Delete(string id)
     {

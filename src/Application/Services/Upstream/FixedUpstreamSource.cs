@@ -10,6 +10,9 @@ public sealed class FixedUpstreamSource(UpstreamSnapshot snapshot) : IActiveUpst
     /// <summary>始终返回同一固定快照。</summary>
     public UpstreamSnapshot ReadActive() => snapshot;
 
+    /// <summary>独立中转模式只有这一个固定上游，没有备用。</summary>
+    public IReadOnlyList<UpstreamSnapshot> ReadStandby() => [];
+
     /// <summary>校验凭据格式并只允许本机 HTTP 模拟上游，再按旧式配置组成版本 0 的快照。</summary>
     public static FixedUpstreamSource ForLegacy(RelayConfiguration config, string? credential, Uri? testUpstream)
     {

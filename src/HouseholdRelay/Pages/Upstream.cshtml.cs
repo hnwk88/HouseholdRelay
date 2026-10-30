@@ -32,6 +32,8 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public string? Notice { get; private set; }
     /// <summary>活动上游的运行状态文字：未配置、凭据失效、冷却中（含剩余秒数）、已通过检测或尚未检测。</summary>
     public string RuntimeStatus { get; private set; } = "";
+    /// <summary>此刻实际走的是哪家、哪家暂避到几点、为什么，按读屏顺序读成一句话。</summary>
+    public string RoutingText { get; private set; } = "";
 
     /// <summary>打开上游页（需已登录）：<paramref name="candidateId"/> 指定时把它作为正在设置的上游，否则取最近一个还没测通过的；只读。</summary>
     public void OnGet(string? candidateId) => Load(candidateId);
@@ -121,6 +123,15 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         Load(null); return Page();
     }
 
+    /// <summary>保存自动切换开关（需已登录且通过防 CSRF 校验）：保存即生效，下一个请求就按新开关走，不用重启，也不改在用的那一家。</summary>
+    public IActionResult OnPostFailover(bool failover)
+    {
+        ModelState.Clear();
+        upstreams.SetFailover(failover);
+        Notice = failover ? "自动切换已打开：在用的上游失败时，会按顺序换到其他测试通过的上游。" : "自动切换已关闭：只用在用的那一家，它失败时把错误直接交给客户端。";
+        Load(null); return Page();
+    }
+
     /// <summary>改名（需已登录且通过防 CSRF 校验）：只改显示名称，切换和用量都按主键关联，不受影响。</summary>
     public IActionResult OnPostRename(string candidateId, string? newName)
     {
@@ -200,7 +211,12 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         var state = upstreamPool.Status(Active.Version);
         RuntimeStatus = !Active.Configured ? "未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0
             ? $"上游冷却中，约 {state.CooldownSeconds} 秒后重试" : Active.Report?.CanActivate == true ? "已通过最小调用检测" : "已迁移凭据，调用尚未检测";
+        RoutingText = RoutingSentence(upstreamPool, Active, Saved);
     }
+
+    /// <summary>上游页与概览共用的走法读句：名称按主键从已保存上游里查，查不到时读「已删除的上游」，在用的不是从已保存上游切换来的读「未命名上游」。</summary>
+    public static string RoutingSentence(IUpstreamPool pool, UpstreamOverview active, IReadOnlyList<UpstreamCandidate> saved) =>
+        pool.Routing().Describe(active.Failover, active.CandidateId, id => saved.FirstOrDefault(item => item.Id == id)?.Name ?? (id is null ? "未命名上游" : "已删除的上游"));
 
     /// <summary>「接入方式」的读法：官方账户登录、官方账户令牌或 API 密钥。</summary>
     public static string AccessText(UpstreamOptions options) => options.OfficialLogin ? "官方账户登录" : options.Mode == "oauth" ? "官方账户令牌" : "API 密钥";

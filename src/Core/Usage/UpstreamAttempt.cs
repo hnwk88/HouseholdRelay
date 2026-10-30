@@ -42,6 +42,18 @@ public sealed class UpstreamAttempt(int number, string? candidateId, long versio
     /// <summary>这次尝试的去向：client（结果交给客户端）或 next（换下一家）。</summary>
     public string Disposition { get; private set; } = "client";
 
+    /// <summary>
+    /// 自动切换时这一次失败该不该换下一家（只在还没向客户端写出任何字节时问）：连不上（含建连超时、TLS 失败）、上游 5xx（含 529）、429、401、403 换；
+    /// 代理不可用不换（代理是全局的，换一家也一样连不上），400、404、413 等请求本身的问题和中转自己的拒绝也不换。
+    /// </summary>
+    public bool Switchable => ErrorType == "connection_failed" ? ConnectFailure != "proxy" : UpstreamStatus is >= 500 and < 600 or 429 or 401 or 403;
+
+    /// <summary>换掉这一家时要不要让它暂避 5 分钟：连不上与 5xx 要；429 沿用 Retry-After 冷却、401 与 403 沿用认证暂停，不另加暂避。</summary>
+    public bool Avoids => ErrorType == "connection_failed" || UpstreamStatus is >= 500 and < 600;
+
+    /// <summary>把去向改成「换下一家」：这一次的结果不交给客户端，转去试顺序里的下一家。</summary>
+    public void PassOn() => Disposition = "next";
+
     /// <summary>收到上游响应头：记下到响应头耗时、状态码，以及格式合规且不含秘密的上游请求编号。</summary>
     public void Headers(int status, string? requestId, Func<string, string> redact)
     {

@@ -8,6 +8,12 @@ public interface IUpstreamRepository
     /// <summary>读取活动上游原始行（含关联的已保存上游主键与当前名称）；行缺失时为空。</summary>
     StoredUpstream? ReadActive();
 
+    /// <summary>读取在用那一家以外、测试通过的已保存上游（含加密凭据），按创建先后；版本记为此刻的活动版本。</summary>
+    IReadOnlyList<StoredUpstream> ListStandby();
+
+    /// <summary>打开或关闭自动切换；只改活动上游行上的开关，不改版本、不换在用的那一家。</summary>
+    void SetFailover(bool enabled);
+
     /// <summary>读取活动上游的加密凭据；未配置时为空。</summary>
     byte[]? ReadActiveCredential();
 

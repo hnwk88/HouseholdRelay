@@ -8,10 +8,13 @@ public interface IUsageRepository
     /// <summary>写入请求开始记录，归属取自已鉴权的使用者与令牌。</summary>
     void InsertStart(string requestId, string userId, string? tokenId, long startedAtTicks, string kind);
 
-    /// <summary>把仍处于开始状态的记录标记为已发送，并复制当时的单价快照；返回受影响行数。</summary>
-    int MarkDispatched(string requestId, long version, string? model);
+    /// <summary>把仍处于开始状态的记录标记为已发送，记下首先要试的那一家，并复制它当时的单价快照；返回受影响行数。</summary>
+    int MarkDispatched(string requestId, long version, string? candidateId, string? model);
 
-    /// <summary>在一个事务里读出单价快照、调用 <paramref name="price"/> 计算金额并写入结束结果；记录已结束时不覆盖。</summary>
+    /// <summary>
+    /// 在一个事务里读出单价快照、调用 <paramref name="price"/> 计算金额并写入结束结果与各次尝试；记录已结束时不覆盖。
+    /// 最后一次尝试换了一家时，用量改记实际服务的那一家，单价快照也换成那一家的。
+    /// </summary>
     void Complete(string requestId, long endedAtTicks, UsageEnd result, Func<string, string?, UsageMoney> price);
 
     /// <summary>把所有遗留的开始状态记录标记为中断。</summary>

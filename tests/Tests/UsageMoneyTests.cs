@@ -16,9 +16,9 @@ static class UsageMoneyTests
     public static async Task ReportedCosts()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var user = web.Identities.Create("费用"); var service = web.Upstreams; await upstream.Activate(service);
-        var pricing = web.Pricing; var version = service.ReadActive().Version;
-        pricing.Save(version, "fixture-model", "USD", 1, 2, 0, 0);
+        var user = web.Identities.Create("费用"); var service = web.Upstreams; var candidate = await upstream.Activate(service);
+        var pricing = web.Pricing;
+        pricing.Save(candidate, "fixture-model", "USD", 1, 2, 0, 0);
         upstream.Handler = async context =>
         {
             if (context.Request.Query["case"] == "stream")
@@ -68,16 +68,22 @@ static class UsageMoneyTests
     {
         using var home = new TestHome(); var db = new TestProcess(home.Path); var ids = db.Identities; var user = ids.Create("时区"); var client = ids.Clients.Authenticate(user.Token)!;
         var now = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero); var clock = new UsageClock(now); var clocked = new TestProcess(home.Path, clock); var store = clocked.Usage; var prices = clocked.Pricing;
-        prices.Save(1, "priced", "USD", 1, 2, 0, 0);
+        // 单价按已保存上游主键挂；这里只计价不转发，直接放一行测试通过的上游给单价挂上。
+        db.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
+            INSERT INTO upstream_candidates(id,expected_version,options_json,credential,state,report_json,created_at,test_started_at,name)
+            VALUES('priced-upstream',1,'{}',x'00','passed',NULL,0,NULL,'计价上游')
+            """));
+        const string priced = "priced-upstream";
+        prices.Save(priced, "priced", "USD", 1, 2, 0, 0);
         var dates = new[] { new DateTimeOffset(2026, 11, 1, 5, 30, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 1, 6, 30, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 2, 5, 5, 0, TimeSpan.Zero) };
         for (var index = 0; index < dates.Length; index++)
         {
             clock.Set(dates[index]); var id = "priced-" + index;
-            await store.Start(id, client, "inference"); await store.Dispatch(id, 1, "priced");
-            if (index == 0) prices.Save(1, "priced", "USD", 100, 200, 0, 0);
+            await store.Start(id, client, "inference"); await store.Dispatch(id, 1, priced, "priced");
+            if (index == 0) prices.Save(priced, "priced", "USD", 100, 200, 0, 0);
             await store.Finish(id, new("succeeded", true, 200, 200, 1, "complete", new(10000, 10000)));
         }
-        clock.Set(now); await store.Start("unknown", client, "inference"); await store.Dispatch("unknown", 1, "no-price");
+        clock.Set(now); await store.Start("unknown", client, "inference"); await store.Dispatch("unknown", 1, priced, "no-price");
         await store.Finish("unknown", new("succeeded", true, 200, 200, 1, "complete", new(2, 3)));
         var hours = store.Query(new(Granularity: "hour", TimeZone: "America/New_York"));
         Check(hours.Rows.Single(row => row.RequestId == "priced-0").Money.Amount == 0.03m, "Dispatch must snapshot the old price before later changes");
@@ -89,36 +95,36 @@ static class UsageMoneyTests
         var range = store.Query(new(From: dates[0], Until: dates[1], Granularity: "hour", TimeZone: "America/New_York"));
         Check(range.Total == 1 && range.Periods.Single().Summary.Money.Single().Amount == 0.03m);
         var reopened = new TestProcess(home.Path, clock).Usage; Check(reopened.Query(new()).Summary[0].Money.Single().Amount == 6.03m);
-        prices.Save(1, "partial", "CNY", 2, null, null, null);
-        await store.Start("partial", client, "inference"); await store.Dispatch("partial", 1, "partial");
+        prices.Save(priced, "partial", "CNY", 2, null, null, null);
+        await store.Start("partial", client, "inference"); await store.Dispatch("partial", 1, priced, "partial");
         await store.Finish("partial", new("cancelled", true, 200, 200, 1, "partial", new(1000)));
         Check(store.Query(new(Model: "partial")).Rows.Single().Money == new UsageMoney(0.002m, "CNY", "estimated", "partial"));
-        await store.Start("no-usage", client, "inference"); await store.Dispatch("no-usage", 1, "priced");
+        await store.Start("no-usage", client, "inference"); await store.Dispatch("no-usage", 1, priced, "priced");
         await store.Finish("no-usage", new("succeeded", true, 200, 200, 1, "not_provided", new()));
         Check(store.Query(new()).Rows.Single(row => row.RequestId == "no-usage").Money.Amount is null, "Zero-priced cache must not turn entirely unknown consumption into zero cost");
-        var untouched = prices.List(1).Count; clock.Advance(TimeSpan.FromDays(41)); await store.Cleanup(); Check(prices.List(1).Count == untouched);
+        var untouched = prices.List(priced).Count; clock.Advance(TimeSpan.FromDays(41)); await store.Cleanup(); Check(prices.List(priced).Count == untouched);
     }
 
     /// <summary>
-    /// 验证价格表单的管理员、CSRF 与上游版本边界：个人令牌访问价格页被重定向到登录；缺少防伪令牌的保存返回 400；
-    /// 带令牌保存成功并绑定当前上游版本；上游重新激活后用旧版本表单提交会提示活动上游已改变，旧价格不变也不写入新版本。
+    /// 验证价格表单的管理员、CSRF 与按上游分开的边界：个人令牌访问价格页被重定向到登录；缺少防伪令牌的保存返回 400；
+    /// 带令牌保存成功并挂在所选上游的主键上，另一家上游没有这条单价；所选上游被删除后再提交旧表单会提示上游已不存在，旧价格不变也不写到别家。
     /// </summary>
     public static async Task PricingWebSecurity()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var user = web.Identities.Create("个人"); await upstream.Activate(web.Upstreams);
+        var user = web.Identities.Create("个人"); var first = await upstream.Activate(web.Upstreams);
         using (var personal = new HttpRequestMessage(HttpMethod.Get, web.Url + "/Pricing"))
         { personal.Headers.Authorization = new("Bearer", user.Token); using var result = await web.Http.SendAsync(personal); Check(result.StatusCode == HttpStatusCode.Redirect); }
         await web.Login();
-        var data = new Dictionary<string, string> { ["Version"] = "2", ["ModelName"] = "fixture-model", ["Currency"] = "USD", ["InputPrice"] = "1.2", ["OutputPrice"] = "3.4", ["CacheReadPrice"] = "0", ["CacheWritePrice"] = "0" };
+        var data = new Dictionary<string, string> { ["CandidateId"] = first, ["ModelName"] = "fixture-model", ["Currency"] = "USD", ["InputPrice"] = "1.2", ["OutputPrice"] = "3.4", ["CacheReadPrice"] = "0", ["CacheWritePrice"] = "0" };
         using (var rejected = await web.Post("/Pricing", data)) Check(rejected.StatusCode == HttpStatusCode.BadRequest);
         data["__RequestVerificationToken"] = await web.Csrf("/Pricing");
         using (var saved = await web.Post("/Pricing", data)) Check(saved.IsSuccessStatusCode);
-        var price = web.Pricing.List(2).Single(); Check(price.InputPerMillion == 1.2m && price.OutputPerMillion == 3.4m);
-        await upstream.Activate(web.Upstreams);
+        var price = web.Pricing.List(first).Single(); Check(price.InputPerMillion == 1.2m && price.OutputPerMillion == 3.4m && price.CandidateId == first);
+        var second = await upstream.Activate(web.Upstreams); web.Upstreams.Delete(first);
         data["InputPrice"] = "999";
         using (var stale = await web.Post("/Pricing", data))
-        { var html = WebUtility.HtmlDecode(await stale.Content.ReadAsStringAsync()); Check(html.Contains("活动上游已改变")); }
-        Check(web.Pricing.List(2).Single().InputPerMillion == 1.2m && web.Pricing.List(3).Count == 0);
+        { var html = WebUtility.HtmlDecode(await stale.Content.ReadAsStringAsync()); Check(html.Contains("这个上游已不存在")); }
+        Check(web.Pricing.List(first).Single().InputPerMillion == 1.2m && web.Pricing.List(second).Count == 0);
     }
 }

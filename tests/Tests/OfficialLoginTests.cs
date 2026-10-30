@@ -131,7 +131,7 @@ static class OfficialLoginTests
             Check((await service.TestCandidate(id, true, CancellationToken.None)).CanActivate); service.Activate(id);
             var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", id);
             FakeClaude.Write(directory, "fixture-login-token-expired", -1);
-            foreach (var (path, expected) in new[] { ("/", "刷新卡住"), ("/Connection", "刷新卡住"), ("/Pricing", mock.Url), ("/Upstream", "名称：刷新卡住") })
+            foreach (var (path, expected) in new[] { ("/", "刷新卡住"), ("/Connection", "刷新卡住"), ("/Pricing", "正在设置：刷新卡住"), ("/Upstream", "名称：刷新卡住") })
             {
                 var clock = Stopwatch.StartNew();
                 using var page = await web.Http.GetAsync(web.Url + path);
@@ -197,7 +197,7 @@ static class OfficialLoginTests
     {
         using var gate = new ManualResetEventSlim(); using var waiting = new ManualResetEventSlim();
         var source = new GatedSource(gate, waiting);
-        using var pool = new UpstreamPool(source, new RelayConfiguration(), new Infrastructure.ExternalSources.Network.SystemUpstreamProxy(() => new RelayConfiguration()));
+        using var pool = new UpstreamPool(source, new RelayConfiguration(), new Infrastructure.ExternalSources.Network.SystemUpstreamProxy(() => new RelayConfiguration()), TimeProvider.System);
         // 两次取租约放到线程池上并行：第一次卡在读快照里，第二次若还排在锁后面就会超时，正好量出等待是否在锁外。
         var slow = Task.Run(pool.Acquire);
         Check(waiting.Wait(TimeSpan.FromSeconds(5)), "The slow read never started");
@@ -222,6 +222,9 @@ static class OfficialLoginTests
             waiting.Set(); gate.Wait(TimeSpan.FromSeconds(10));
             return new(1, options, "fixture-pool-old");
         }
+
+        /// <summary>这个用例只看在用那一家的连接，没有备用上游。</summary>
+        public IReadOnlyList<UpstreamSnapshot> ReadStandby() => [];
     }
 
     /// <summary>数据目录下没有任何官方账户目录（目录本身不存在或为空）。</summary>

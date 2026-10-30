@@ -27,7 +27,7 @@ static class UsageStorageTests
         }
         var client = web.Identities.Clients.Authenticate(user.Token)!; var usage = web.Relay.Usage!;
         var completed = new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(12, 9));
-        await usage.Start("finish-retry", client, "inference"); await usage.Dispatch("finish-retry", 2, "fixture-model");
+        await usage.Start("finish-retry", client, "inference"); await usage.Dispatch("finish-retry", 2, null, "fixture-model");
         Task<bool> finish;
         using (var connection = web.Database.Open())
         using (var locked = connection.BeginTransaction())
@@ -67,7 +67,7 @@ static class UsageStorageTests
         var end = new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(2, 3));
         foreach (var (id, time) in new[] { ("expired", now.AddDays(-40).AddTicks(-1)), ("boundary", now.AddDays(-40)), ("inside", now.AddDays(-40).AddTicks(1)), ("recent", now.AddHours(-1)) })
         { clock.Set(time); await usage.Start(id, user, "inference"); await usage.Finish(id, end); }
-        clock.Set(now); await usage.Start("unfinished", user, "inference"); await usage.Dispatch("unfinished", 1, "fixture-model");
+        clock.Set(now); await usage.Start("unfinished", user, "inference"); await usage.Dispatch("unfinished", 1, null, "fixture-model");
         Check(usage.Query(new()).Total == 4, "Queries must filter expired data before deletion runs");
         var reopenedProcess = new TestProcess(home.Path, clock); var reopened = reopenedProcess.Database; var resumed = reopenedProcess.Usage;
         Check(resumed.Query(new()).Rows.Single(row => row.RequestId == "unfinished").Outcome == "started", "Opening for queries must not recover live requests");

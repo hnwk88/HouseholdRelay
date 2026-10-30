@@ -45,17 +45,17 @@ public sealed class UsageService(IUsageRepository repository, TimeProvider timeP
     }
 
     /// <summary>
-    /// 即将发往上游时把开始记录标记为已发送，并让仓储复制当时的单价快照。开始记录不存在或已不在开始状态、写入排队超时或存储故障时，
+    /// 即将发往上游时把开始记录标记为已发送、记下首先要试的那一家，并让仓储复制它当时的单价快照。开始记录不存在或已不在开始状态、写入排队超时或存储故障时，
     /// 计入失败并抛出 503 的 <see cref="RelayFailure"/>，请求不会发往上游。
     /// </summary>
-    public async Task Dispatch(string requestId, long version, string? model)
+    public async Task Dispatch(string requestId, long version, string? candidateId, string? model)
     {
         var acquired = false;
         try
         {
             acquired = await writes.WaitAsync(TimeSpan.FromSeconds(2));
             if (!acquired) throw new InvalidOperationException("Usage write queue is busy.");
-            if (repository.MarkDispatched(requestId, version, model) != 1)
+            if (repository.MarkDispatched(requestId, version, candidateId, model) != 1)
                 throw new InvalidOperationException("Usage start record unavailable.");
         }
         // 发送标记或单价快照没写成功就不发出请求，保证每次上游调用都有可计费的记录；只转换存储类故障，其他异常照常上抛。
