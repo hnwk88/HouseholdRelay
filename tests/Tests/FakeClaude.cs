@@ -22,7 +22,7 @@ static class FakeClaude
 
     /// <summary>
     /// 按场景扮演 claude：<c>auth login</c> 在 success 下写入一小时后到期的令牌、expired 下写入已过期的令牌、no-credential 下什么也不写，cancel 下以退出码 1 结束；
-    /// <c>auth status --json</c> 报告已登录与邮箱；<c>-p /usage</c> 写入刷新后的新令牌。返回退出码。
+    /// <c>auth status --json</c> 报告已登录与邮箱；<c>-p /usage</c> 写入刷新后的新令牌（slow-refresh 下先卡 30 秒，模拟刷新卡住）。返回退出码。
     /// </summary>
     public static int Run(string[] args)
     {
@@ -43,7 +43,11 @@ static class FakeClaude
             return 0;
         }
         if (command == "auth status --json") { Console.WriteLine(JsonSerializer.Serialize(new { loggedIn = true, authMethod = "claude.ai", email = Email })); return 0; }
-        if (command.StartsWith("-p /usage", StringComparison.Ordinal)) { Write(directory, RefreshedToken, 60); Console.WriteLine("{}"); return 0; }
+        if (command.StartsWith("-p /usage", StringComparison.Ordinal))
+        {
+            if (scenario == "slow-refresh") Thread.Sleep(TimeSpan.FromSeconds(30));
+            Write(directory, RefreshedToken, 60); Console.WriteLine("{}"); return 0;
+        }
         return 2;
     }
 
@@ -70,10 +74,13 @@ static class FakeClaude
     private static extern bool IsWindowVisible(IntPtr window);
 
     /// <summary>按 Claude Code 的格式写凭据文件：<c>claudeAiOauth</c> 下的访问令牌、刷新令牌和 <paramref name="minutes"/> 分钟后到期的毫秒时间戳。</summary>
-    public static void Write(string directory, string token, int minutes) => File.WriteAllText(Path.Combine(directory, OfficialCredential.FileName), JsonSerializer.Serialize(new
+    public static void Write(string directory, string token, int minutes) => File.WriteAllBytes(Path.Combine(directory, OfficialCredential.FileName), Credential(token, minutes));
+
+    /// <summary>按 Claude Code 的格式生成凭据文件正文；<paramref name="refreshToken"/> 为 null 时不写刷新令牌（导入时应被拒）。</summary>
+    public static byte[] Credential(string token, int minutes, string? refreshToken = "fixture-refresh-token") => JsonSerializer.SerializeToUtf8Bytes(new
     {
-        claudeAiOauth = new { accessToken = token, refreshToken = "fixture-refresh-token", expiresAt = DateTimeOffset.UtcNow.AddMinutes(minutes).ToUnixTimeMilliseconds(), scopes = new[] { "user:inference" } }
-    }));
+        claudeAiOauth = new { accessToken = token, refreshToken, expiresAt = DateTimeOffset.UtcNow.AddMinutes(minutes).ToUnixTimeMilliseconds(), scopes = new[] { "user:inference" } }
+    });
 }
 
 /// <summary>

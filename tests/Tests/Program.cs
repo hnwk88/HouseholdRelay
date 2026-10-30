@@ -15,6 +15,7 @@ using Tests;
 
 if (args.FirstOrDefault() == "--real-upstream-browser") return await RealUpstreamValidation.Run(args);
 if (args.FirstOrDefault() == "--real-detection-browser") return await RealDetectionValidation.Run(args);
+if (args.FirstOrDefault() == "--real-import-browser") return await RealImportValidation.Run(args);
 if (args.FirstOrDefault() == "--fake-claude") return FakeClaude.Run(args);
 if (Path.GetFileNameWithoutExtension(Environment.ProcessPath)?.Equals("claude", StringComparison.OrdinalIgnoreCase) == true) return FakeClaude.RunAsClaude(args);
 
@@ -69,6 +70,16 @@ var tests = new (string Name, Func<Task> Test)[]
     ("official account login cancel, missing credentials and missing Claude Code leave nothing behind", OfficialLoginTests.LoginFailures),
     ("slow official token read waits outside the upstream pool lock", OfficialLoginTests.SlowTokenReadOutsidePoolLock),
     ("upstream 5xx reads as network exit refusal; rediscover reuses the stored key; delete refuses active and testing", UpstreamDetectionTests.UnavailableRediscoverAndDelete),
+    ("official login file import names by email, stores it verbatim and discovers with its token", OfficialImportTests.ImportNamesByEmail),
+    ("official login file import with an expired token forwards the refreshed token", OfficialImportTests.ImportExpiredTokenRefreshes),
+    ("official login file import refuses a file without refresh token and an overlong name before writing", OfficialImportTests.ImportWithoutRefreshToken),
+    ("official login file import refuses a file that is not JSON", OfficialImportTests.ImportNotJson),
+    ("official login file import refuses a file over 64 KB", OfficialImportTests.ImportOversize),
+    ("official login file import refuses without Claude Code and leaves no directory", OfficialImportTests.ImportWithoutClaudeCode),
+    ("upstream delete button follows the service test window rule", UpstreamDetectionTests.DeleteButtonFollowsServiceRule),
+    ("rediscovering the active upstream keeps its test verdict and only updates models", UpstreamDetectionTests.RediscoverKeepsActiveVerdict),
+    ("admin pages do not wait for a stuck official token refresh", OfficialLoginTests.PagesDoNotWaitForTokenRefresh),
+    ("deleting an official login during a refresh leaves no account directory", OfficialLoginTests.DeleteDuringRefreshLeavesNoDirectory),
     ("global proxy none, manual and auto states; unavailable proxy refuses", ProxySettingsTests.ThreeStates),
     ("enabled but unavailable proxy refuses relay and model discovery without dispatch", ProxySettingsTests.RefusedWhenUnavailable),
     ("child process proxy variables are cleared before writing", ProxySettingsTests.ChildEnvironment),

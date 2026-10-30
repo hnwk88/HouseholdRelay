@@ -32,7 +32,7 @@ public sealed class PricingModel(IUsagePricingService pricing, IUpstreamService 
     /// <summary>打开费率页（需已登录）：记录活动上游版本，选定模型后若已有单价则回填到表单，只读。</summary>
     public void OnGet()
     {
-        var active = upstreams.ReadActive(); Version = active.Version;
+        var active = upstreams.ReadOverview(); Version = active.Version;
         if (string.IsNullOrEmpty(ModelName)) ModelName = active.Options.Model;
         Load();
         if (Prices.SingleOrDefault(item => item.Model == ModelName) is not { } price) return;
@@ -52,5 +52,5 @@ public sealed class PricingModel(IUsagePricingService pricing, IUpstreamService 
     }
     /// <summary>按当前活动上游重新读取基础地址和该版本的单价列表；GET 与 POST 渲染前都会调用。</summary>
     private void Load()
-    { var active = upstreams.ReadActive(); UpstreamAddress = active.Options.BaseUrl; Prices = pricing.List(active.Version); }
+    { var active = upstreams.ReadOverview(); UpstreamAddress = active.Options.BaseUrl; Prices = pricing.List(active.Version); }
 }

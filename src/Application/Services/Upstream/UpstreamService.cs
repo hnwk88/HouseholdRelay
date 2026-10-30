@@ -18,11 +18,21 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     /// </summary>
     public UpstreamSnapshot ReadActive()
     {
-        var row = repository.ReadActive() ?? throw new InvalidOperationException("上游配置缺失。");
-        var options = Parse<UpstreamOptions>(row.OptionsJson);
+        var (row, options) = Active();
         var credential = row.ProtectedCredential is null ? null
             : options.OfficialLogin ? row.CandidateId is { } account ? officialAccounts.ReadAccessToken(account) : null : Decrypt(row.ProtectedCredential);
-        return new(row.Version, options, credential, row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson), row.CandidateId, row.Name);
+        return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name);
+    }
+
+    /// <summary>
+    /// 读取活动上游的非秘密部分供页面展示：不解密、不读令牌，官方登录上游的「已配置」只看账户目录里有没有凭据文件，不等刷新；
+    /// 「已配置」与 <see cref="ReadActive"/> 的 <see cref="UpstreamSnapshot.Configured"/> 同一口径。活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>。
+    /// </summary>
+    public UpstreamOverview ReadOverview()
+    {
+        var (row, options) = Active();
+        var configured = row.ProtectedCredential is not null && (!options.OfficialLogin || row.CandidateId is { } account && officialAccounts.HasCredential(account));
+        return new(row.Version, options, configured, Report(row), row.CandidateId, row.Name);
     }
 
     /// <summary>读取最近创建的上游（不含凭据）；一个都没有时返回 null。</summary>
@@ -65,21 +75,13 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
         finally { CryptographicOperations.ZeroMemory(plain); }
     }
 
-    /// <summary>
-    /// 先生成主键，委托 <see cref="IOfficialAccountLogin.Login"/> 在以它命名的配置目录里登录，再保存为账户模式（Bearer、官方登录）的未测试上游；
-    /// 名称为空时用登录邮箱（超过 40 字截断），邮箱也取不到时叫「官方账户」。库里只存加密的空凭据占位，令牌留在登录目录里由 CLI 维护。
-    /// 名称不合规则在登录前就拒绝，免得白登录一次。
-    /// </summary>
-    public async Task<string> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation)
-    {
-        options = (options with { Mode = "oauth", Authentication = "bearer", AuthenticationManual = false, OfficialLogin = true }).Validated();
-        var chosen = string.IsNullOrWhiteSpace(name) ? null : ValidName(name);
-        var id = Guid.NewGuid().ToString("N");
-        var email = await officialAccounts.Login(id, cancellation);
-        chosen ??= ValidName(email is { Length: > 0 } ? email.Length > 40 ? email[..40] : email : "官方账户");
-        repository.InsertCandidate(id, expectedVersion, chosen, Serialize(options), protector.Protect([]));
-        return id;
-    }
+    /// <summary>委托 <see cref="IOfficialAccountLogin.Login"/> 在新上游自己的配置目录里登录，再按 <see cref="AddOfficial"/> 取名、保存。</summary>
+    public Task<string> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation) =>
+        AddOfficial(expectedVersion, options, name, id => officialAccounts.Login(id, cancellation));
+
+    /// <summary>委托 <see cref="IOfficialAccountLogin.Import"/> 把登录文件放进新上游自己的配置目录，再按 <see cref="AddOfficial"/> 取名、保存；得到的上游与登录得到的不可区分。</summary>
+    public Task<string> ImportOfficial(long expectedVersion, UpstreamOptions options, byte[] content, string? name, CancellationToken cancellation) =>
+        AddOfficial(expectedVersion, options, name, id => officialAccounts.Import(id, content, cancellation));
 
     /// <summary>校验后改名；名称只做显示，切换、检测记录和用量都按主键关联，改名不影响它们。</summary>
     public void Rename(string id, string name) => repository.Rename(id, ValidName(name));
@@ -98,12 +100,22 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     /// <summary>
     /// 获取模型目录：先把该上游标记为检测中（正在检测时拒绝），按认证顺序读 <c>/v1/models</c>，不发模型调用、不花额度；
     /// 自动探测时把被接受的认证方式写回配置，手动指定时保持原值；目录与读句存为未测试报告，供页面列出下拉框。
+    /// 当前使用中的那个已经在转发：结束后（含失败、取消）写回原状态、原配置与原报告，获取成功时只把报告里的模型目录换成新的，不读成未测试。
     /// </summary>
     public async Task<ModelCatalog> DiscoverModels(string id, CancellationToken cancellation)
     {
         var candidate = ReadCandidate(id); var token = LoginToken(candidate);
+        var kept = candidate.Report is { } previous && repository.ReadActive()?.CandidateId == id ? previous : null;
         var secret = repository.BeginCandidateTest(id);
-        var catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret)), cancellation);
+        ModelCatalog catalog;
+        try { catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret)), cancellation); }
+        // 在用的那个获取途中失败或被取消：写回原样，不让它停在「检测中」、丢掉测试结论。
+        catch when (kept is not null) { repository.FinishCandidateTest(id, candidate.State, Serialize(kept), Serialize(candidate.Options)); throw; }
+        if (kept is not null)
+        {
+            repository.FinishCandidateTest(id, candidate.State, Serialize(catalog.Status == "passed" ? kept with { Models = catalog.Models } : kept), Serialize(candidate.Options));
+            return catalog;
+        }
         var options = catalog.Authentication is { } accepted && !candidate.Options.AuthenticationManual ? candidate.Options with { Authentication = accepted } : candidate.Options;
         var report = new UpstreamReport(DateTimeOffset.UtcNow, catalog.Status == "failed" ? "failed" : "passed",
             catalog.Status switch { "passed" => "passed", "rejected" => "reconnect", _ => "unverified" },
@@ -154,9 +166,40 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
         return name;
     }
 
+    /// <summary>
+    /// 登录与导入共用的尾段：先校验配置与名称（不合规则时在拿凭据之前就拒绝），生成主键交给 <paramref name="acquire"/> 把凭据放进以它命名的配置目录，
+    /// 再保存为账户模式（Bearer、官方登录）的未测试上游。名称为空时用登录邮箱（超过 40 字截断），邮箱也取不到时叫「官方账户」；
+    /// 库里只存加密的空凭据占位，令牌留在账户目录里由 CLI 维护。写库被拒（活动版本已变化）时删掉刚放好的账户目录。
+    /// </summary>
+    private async Task<string> AddOfficial(long expectedVersion, UpstreamOptions options, string? name, Func<string, Task<string?>> acquire)
+    {
+        options = (options with { Mode = "oauth", Authentication = "bearer", AuthenticationManual = false, OfficialLogin = true }).Validated();
+        var chosen = string.IsNullOrWhiteSpace(name) ? null : ValidName(name);
+        var id = Guid.NewGuid().ToString("N");
+        var email = await acquire(id);
+        try
+        {
+            chosen ??= ValidName(email is { Length: > 0 } ? email.Length > 40 ? email[..40] : email : "官方账户");
+            repository.InsertCandidate(id, expectedVersion, chosen, Serialize(options), protector.Protect([]));
+        }
+        // 凭据已在账户目录里、上游却没建成：删掉目录，不留没有上游引用的账户；异常原样读出。
+        catch { officialAccounts.Remove(id); throw; }
+        return id;
+    }
+
+    /// <summary>读活动上游行并解析配置；行缺失时抛出 <see cref="InvalidOperationException"/>。</summary>
+    private (StoredUpstream Row, UpstreamOptions Options) Active()
+    {
+        var row = repository.ReadActive() ?? throw new InvalidOperationException("上游配置缺失。");
+        return (row, Parse<UpstreamOptions>(row.OptionsJson));
+    }
+
+    /// <summary>解析活动行的检测报告；没有时为 null。</summary>
+    private static UpstreamReport? Report(StoredUpstream row) => row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson);
+
     /// <summary>把库中的已保存上游行解析成可展示的对象。</summary>
     private static UpstreamCandidate ToCandidate(StoredCandidate row) => new(row.Id, row.Name, row.ExpectedVersion, Parse<UpstreamOptions>(row.OptionsJson), row.State,
-        row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson));
+        row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson), row.Deletable);
 
     /// <summary>按统一 JSON 选项序列化配置或报告。</summary>
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, ConfigurationFiles.Json);

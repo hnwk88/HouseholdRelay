@@ -1,7 +1,9 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using System.Security.Cryptography;
 using Application.Interfaces.Upstream;
 using Core.Upstream;
+using Infrastructure.ExternalSources.ClaudeCode;
 
 namespace HouseholdRelay.Pages;
 
@@ -14,10 +16,14 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     [BindProperty] public UpstreamInput Account { get; set; } = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
     /// <summary>「官方账户」里「登录官方账户」的表单：名称可空（用登录邮箱），地址默认官方接口。</summary>
     [BindProperty] public UpstreamInput Login { get; set; } = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
+    /// <summary>「官方账户」里「导入登录文件」的表单：名称可空（用登录邮箱），地址默认官方接口。</summary>
+    [BindProperty] public UpstreamInput Import { get; set; } = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
+    /// <summary>要导入的 <c>.credentials.json</c>；处理完无论成败都清空，不回显到页面。</summary>
+    [BindProperty] public IFormFile? ImportFile { get; set; }
     /// <summary>打开页面时的活动上游版本号；保存与切换时若活动版本已变化则拒绝，防止基于过期页面操作。</summary>
     [BindProperty] public long Version { get; set; }
-    /// <summary>当前活动上游的不可变快照；页面只使用其中的非秘密字段。</summary>
-    public UpstreamSnapshot Active { get; private set; } = null!;
+    /// <summary>当前活动上游的非秘密部分；读它不等官方登录令牌刷新。</summary>
+    public UpstreamOverview Active { get; private set; } = null!;
     /// <summary>全部已保存的上游，按创建先后排列。</summary>
     public IReadOnlyList<UpstreamCandidate> Saved { get; private set; } = [];
     /// <summary>正在设置的上游（刚获取模型、或在列表里点了「选择模型并测试」）；没有时不显示第二步。</summary>
@@ -53,6 +59,34 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         }
         // 未安装、登录取消或超时、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        Load(working); return Page();
+    }
+
+    /// <summary>
+    /// 导入登录文件（需已登录且通过防 CSRF 校验）：限长读入上传的 <c>.credentials.json</c>，交给服务校验并放进新上游自己的账户目录，保存后立刻获取模型（不花额度）；
+    /// 文件字节用完即清零，文件与名称以外的绑定值不回显。文件不合格、未安装 Claude Code 等原因作为表单错误读出。
+    /// </summary>
+    public async Task<IActionResult> OnPostImportAccountAsync()
+    {
+        ModelState.Clear();
+        string? working = null; byte[]? content = null;
+        try
+        {
+            if (ImportFile is null || ImportFile.Length == 0) throw new InvalidOperationException("请先选择要导入的登录文件（.credentials.json），再按「导入登录文件」。");
+            // 最多读到上限多一个字节：够判断超限，又不把超大的上传整份读进内存；是否超限由服务那一处判定、读出。
+            content = new byte[(int)Math.Min(ImportFile.Length, OfficialCredential.MaxFileBytes + 1)];
+            await using (var input = ImportFile.OpenReadStream())
+                if (await input.ReadAtLeastAsync(content, content.Length, false, HttpContext.RequestAborted) < content.Length)
+                    throw new InvalidOperationException("登录文件没有读完整，请重新选择后再按「导入登录文件」。");
+            working = await upstreams.ImportOfficial(Version, Import.ToLoginOptions(), content, Import.Name, HttpContext.RequestAborted);
+            var catalog = await upstreams.DiscoverModels(working, HttpContext.RequestAborted);
+            Notice = $"登录文件已导入，已保存为「{upstreams.ReadCandidate(working).Name}」。{catalog.Message}";
+            Import = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
+        }
+        // 文件不合格、未安装 Claude Code、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
+        catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        // 登录文件里有访问令牌和刷新令牌：无论成败都清零字节、清掉文件绑定值。
+        finally { if (content is not null) CryptographicOperations.ZeroMemory(content); ImportFile = null; }
         Load(working); return Page();
     }
 
@@ -157,10 +191,11 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     /// <summary>重新读取活动上游、已保存列表、正在设置的上游和上游池运行状态，并把版本号更新为最新。</summary>
     private void Load(string? workingId)
     {
-        Active = upstreams.ReadActive(); Saved = upstreams.ListCandidates(); Version = Active.Version; ModelState.Remove(nameof(Version));
+        Active = upstreams.ReadOverview(); Saved = upstreams.ListCandidates(); Version = Active.Version; ModelState.Remove(nameof(Version));
         // 其他按钮的提交不带官方账户表单字段，绑定会给出空地址；补回官方地址，避免读屏读到一个空的必填框。
         if (string.IsNullOrWhiteSpace(Account.BaseUrl)) Account.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         if (string.IsNullOrWhiteSpace(Login.BaseUrl)) Login.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
+        if (string.IsNullOrWhiteSpace(Import.BaseUrl)) Import.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         Working = workingId is null ? Saved.LastOrDefault(item => item.State != "passed") : Saved.FirstOrDefault(item => item.Id == workingId);
         var state = upstreamPool.Status(Active.Version);
         RuntimeStatus = !Active.Configured ? "未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0

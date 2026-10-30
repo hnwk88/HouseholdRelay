@@ -17,6 +17,8 @@ const apiSecret = 'fixture-browser-api-secret';
 const accountSecret = 'fixture-browser-account-secret';
 // 与 FakeClaude.cs 的 FirstToken、Email 一致：假登录写进账户目录的令牌和 auth status 报告的邮箱。
 const loginToken = 'fixture-login-token-first', loginEmail = 'family.member@example.com';
+// 「导入登录文件」上传的那份凭据里的访问令牌；模拟上游据此认出导入的上游。
+const importToken = 'fixture-browser-imported-token';
 const testsExe = process.argv[4] ? path.resolve(process.argv[4]) : readdirSync(path.join(__dirname, 'bin', 'Release'))
     .map(name => path.join(__dirname, 'bin', 'Release', name, 'Tests.exe')).find(existsSync);
 const fakeClaude = path.join(path.dirname(testsExe ?? '.'), 'claude.exe');
@@ -102,6 +104,20 @@ async function officialLogin(page, url, upstreamUrl, scenario, name) {
     await said.first().waitFor({ timeout: 60000 });
     return (await said.first().textContent()).trim();
 }
+// 按「导入登录文件」：选一份凭据文件（buffer），名称可空；返回页面读出的那句话（成功读状态，失败读错误）。
+async function importLogin(page, url, upstreamUrl, content, name) {
+    await page.goto(url + '/Upstream');
+    const form = page.locator('section', { has: page.getByRole('heading', { name: '官方账户', exact: true }) });
+    await form.getByLabel('登录文件（.credentials.json）', { exact: true }).setInputFiles({ name: '.credentials.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(content)) });
+    await form.getByLabel('导入的账户名称（可不填，不填就用登录邮箱）', { exact: true }).fill(name);
+    await form.getByText('导入的高级设置（一般不用改）', { exact: true }).click();
+    await form.getByLabel('导入用的上游地址', { exact: true }).fill(upstreamUrl + '/gateway/v1?tenant=browser');
+    await form.getByLabel('允许导入用的上游是本机或私网地址（包括 HTTP）', { exact: true }).check();
+    await page.getByRole('button', { name: '导入登录文件', exact: true }).click();
+    const said = page.getByRole('status').filter({ hasText: '登录文件已导入' }).or(page.getByRole('alert').filter({ hasText: '文件' }));
+    await said.first().waitFor({ timeout: 60000 });
+    return (await said.first().textContent()).trim();
+}
 // 同一区域内可访问名称相同的输入框：展开全部高级设置后，按 section 收集输入框、下拉框的标签文字与折叠标题，返回清点结果。
 async function duplicateNames(page) {
     await page.locator('details').evaluateAll(items => items.forEach(item => { item.open = true; }));
@@ -126,7 +142,7 @@ async function relay(url, token, stream = false) {
     upstream = http.createServer(async (request, response) => {
         let raw = ''; for await (const piece of request) raw += piece;
         const account = request.headers.authorization === 'Bearer ' + accountSecret;
-        const mode = account ? 'account' : request.headers.authorization === 'Bearer ' + loginToken ? 'login' : 'api';
+        const mode = account ? 'account' : request.headers.authorization === 'Bearer ' + loginToken ? 'login' : request.headers.authorization === 'Bearer ' + importToken ? 'import' : 'api';
         calls.push({ path: request.url, mode, beta: request.headers['anthropic-beta'] || '' });
         // 模拟按地区屏蔽当前网络出口：照 sftoken 现场回 503 和一张说明网页。
         if (regionBlocked) { response.writeHead(503, { 'content-type': 'text/html; charset=utf-8' }); response.end('<title>该网页在当前地区不可用</title>'); return; }
@@ -227,6 +243,23 @@ async function relay(url, token, stream = false) {
     steps.push('登录官方账户（假 Claude Code）取消时读出：' + cancelled + ' 没有新增上游、没有留下账户目录。');
     steps.push('登录官方账户（假 Claude Code）成功、名称留空时读出：' + loggedIn + ' 随后测试、按名称切换，转发用登录得到的令牌；假 CLI 每次调用都没有可见窗口。');
     steps.push(`上游页按区域清点输入框 ${audit.inputs} 个，同一区域内可访问名称相同的 ${audit.duplicates.length} 处（明细见 duplicate-names.json）。`);
+    // 导入登录文件（假 Claude Code 取邮箱）：先导入没有刷新令牌的文件，读出原因、不新增上游、不多账户目录；再导入合格文件，名称留空得邮箱，测试、切换后转发用导入的令牌。
+    const oauth = refreshToken => ({ claudeAiOauth: { accessToken: importToken, refreshToken, expiresAt: Date.now() + 3600000, scopes: ['user:inference'] } });
+    const savedBefore = await savedCount(), accountsBefore = readdirSync(accounts).length;
+    const importRefused = await importLogin(page, url, upstreamUrl, oauth(undefined), '不合格的导入');
+    assert.equal(importRefused, '选的文件里只有访问令牌、没有刷新令牌（refreshToken），导入后到期不能自动续期。请改用下面的「贴账户访问令牌」。');
+    assert.equal(await savedCount(), savedBefore); assert.equal(readdirSync(accounts).length, accountsBefore);
+    assert.equal((await page.content()).includes(importToken), false);
+    await screenshot(page, '21-import-refused');
+    const imported = await importLogin(page, url, upstreamUrl, oauth('fixture-browser-imported-refresh'), '');
+    assert.ok(imported.startsWith(`登录文件已导入，已保存为「${loginEmail}」。已获取 1 个模型`), imported);
+    assert.equal(await savedCount(), savedBefore + 1); assert.equal(readdirSync(accounts).length, accountsBefore + 1);
+    assert.equal((await page.content()).includes(importToken), false);
+    await testAndSwitch(page, loginEmail, 'Bearer', '22-import-tested', importToken, '22-upstream-after-import');
+    assert.equal((await relay(url, token)).status, 200);
+    assert.ok(calls.some(call => call.mode === 'import' && call.path.includes('/messages')));
+    steps.push('导入登录文件（没有刷新令牌）时读出：' + importRefused + ' 没有新增上游、没有多出账户目录。');
+    steps.push('导入登录文件（合格、名称留空）时读出：' + imported + ' 随后测试、按名称切换，转发用导入文件里的令牌。');
     await page.goto(url + '/Connection'); assert.equal(await page.getByText('fixture-model', { exact: false }).count() > 0, true);
     assert.equal((await page.content()).includes(accountSecret), false); assert.equal((await page.content()).includes(token), false);
     await screenshot(page, '10-connection');
@@ -277,7 +310,7 @@ async function relay(url, token, stream = false) {
     steps.push('网页创建私有 CA、公共包下载、表单等待提示、键盘跳转/提交和复制反馈通过；本脚本未安装系统根信任。');
     steps.push('未提供公开可信证书、域名及真实账户/API 凭据，因此公网和真实上游尚未实测。');
     await fs.writeFile(path.join(output, 'upstream-browser-steps.md'), '\uFEFF# 上游网页验证\n\n浏览器：' + await browser.version() + '\n\n' + steps.map(step => '- ' + step).join('\n') + '\n', 'utf8');
-    console.log('PASS upstream browser journey: API/account setup, test, activate, JSON/SSE, credential failure, recovery, official login cancel/success, restart, certificates, connection, mobile');
+    console.log('PASS upstream browser journey: API/account setup, test, activate, JSON/SSE, credential failure, recovery, official login cancel/success, login file import refused/success, restart, certificates, connection, mobile');
 })().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
     if (browser) await browser.close(); await stop(); if (upstream) await new Promise(resolve => upstream.close(resolve));
     // 只删本脚本复制出来的那个 claude.exe，不碰同目录的 Tests.exe。

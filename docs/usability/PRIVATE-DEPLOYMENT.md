@@ -1,6 +1,6 @@
 ﻿# 私人部署、客户端信任与恢复
 
-当前路线是 Windows 服务主机、已有的 Anthropic Messages 兼容 API、每台私人电脑一次性安装 CA。日常管理全部通过本机网页完成。官方账户可在上游页「官方账户」里按「登录官方账户」接入：程序委托本机 Claude Code 打开浏览器登录，凭据只存在数据目录 `.state\official-accounts` 下，不碰本机 Claude Code 自己的登录。公网部署以后按实际需要安排；本程序不会购买域名或配置公网映射。
+当前路线是 Windows 服务主机、已有的 Anthropic Messages 兼容 API、每台私人电脑一次性安装 CA。日常管理全部通过本机网页完成。官方账户可在上游页「官方账户」里按「登录官方账户」接入：程序委托本机 Claude Code 打开浏览器登录，凭据只存在数据目录 `.state\official-accounts` 下，不碰本机 Claude Code 自己的登录。也可以按「导入登录文件」，选另一台 Windows 电脑上登录过的 `%USERPROFILE%\.claude\.credentials.json`；导入后那份登录只给中转用，到期由本机 Claude Code 刷新。公网部署以后按实际需要安排；本程序不会购买域名或配置公网映射。
 
 ## 首次启动
 

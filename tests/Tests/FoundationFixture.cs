@@ -106,6 +106,16 @@ sealed class WebFixture : IAsyncDisposable
         request.Headers.TryAddWithoutValidation("Origin", origin ?? Url);
         return await (client ?? Http).SendAsync(request);
     }
+    /// <summary>以 multipart 提交 POST，带本站 Origin：<paramref name="values"/> 是普通字段，<paramref name="file"/> 作为名为 <paramref name="field"/> 的上传文件。调用方负责释放响应。</summary>
+    public async Task<HttpResponseMessage> Post(string path, Dictionary<string, string> values, string field, string fileName, byte[] file)
+    {
+        using var content = new MultipartFormDataContent();
+        foreach (var (name, value) in values) content.Add(new StringContent(value), name);
+        content.Add(new ByteArrayContent(file), field, fileName);
+        using var request = new HttpRequestMessage(HttpMethod.Post, Url + path) { Content = content };
+        request.Headers.TryAddWithoutValidation("Origin", Url);
+        return await Http.SendAsync(request);
+    }
     /// <summary>如尚未初始化则用首次引导码设置测试密码，再通过登录表单登录默认会话；登录必须返回 302 跳转。</summary>
     public async Task Login()
     {

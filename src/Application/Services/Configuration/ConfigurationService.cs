@@ -40,7 +40,7 @@ public sealed class ConfigurationService(IConfigurationRepository settings, IUps
     /// <summary>以当前活动版本的配置加上新凭据保存为待测试候选，不直接替换活动上游；须经检测通过后才能激活。当前是官方登录上游时，新候选改为贴入的账户令牌。</summary>
     public void SaveCredential(string credential)
     {
-        var active = upstreams.ReadActive();
+        var active = upstreams.ReadOverview();
         upstreams.SaveCandidate(active.Version, active.Options with { OfficialLogin = false }, credential, active.Name);
     }
 

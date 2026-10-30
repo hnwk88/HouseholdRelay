@@ -23,13 +23,22 @@ public interface IUpstreamService : IActiveUpstreamSource
     /// </summary>
     Task<string> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation);
 
+    /// <summary>
+    /// 导入别处 Claude Code 登录成功后生成的 <c>.credentials.json</c>（<paramref name="content"/>）并保存为一个账户模式的未测试上游，返回主键；此后与 <see cref="LoginOfficial"/> 得到的上游完全一样。
+    /// <paramref name="name"/> 为空时用登录邮箱；文件不合格、未安装 Claude Code、名称不合规则或活动版本已变化时抛出 <see cref="InvalidOperationException"/> 读出原因，不新增上游、不留账户目录。
+    /// </summary>
+    Task<string> ImportOfficial(long expectedVersion, UpstreamOptions options, byte[] content, string? name, CancellationToken cancellation);
+
+    /// <summary>读取活动上游的非秘密部分供页面展示；不读凭据、不等官方登录令牌刷新。转发用 <see cref="IActiveUpstreamSource.ReadActive"/>。</summary>
+    UpstreamOverview ReadOverview();
+
     /// <summary>修改供应商名称；只影响显示，切换和用量都按主键关联。</summary>
     void Rename(string id, string name);
 
     /// <summary>删除一个已保存上游（官方登录的连同它的账户目录）；当前使用中或正在检测时拒绝，读出原因与下一步。</summary>
     void Delete(string id);
 
-    /// <summary>获取模型目录（不花额度），自动探测的认证方式写回该上游；手动指定的认证方式不被覆盖。</summary>
+    /// <summary>获取模型目录（不花额度），自动探测的认证方式写回该上游；手动指定的认证方式不被覆盖。当前使用中的上游保留原测试结论，只更新模型目录。</summary>
     Task<ModelCatalog> DiscoverModels(string id, CancellationToken cancellation);
 
     /// <summary>选定要测试的模型；与原值不同时清除旧的通过状态，需重新测试才能切换。</summary>

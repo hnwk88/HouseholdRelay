@@ -28,7 +28,7 @@ public sealed class IndexModel(IConfigurationService settings, IIdentityService 
     {
         UserCount = identities.List().Count; CredentialConfigured = settings.HasCredential;
         CertificateConfigured = settings.HasCertificate; PublicUrl = settings.Read().Value.PublicUrl;
-        var active = upstreams.ReadActive(); var state = upstreamPool.Status(active.Version);
+        var active = upstreams.ReadOverview(); var state = upstreamPool.Status(active.Version);
         UpstreamName = !active.Configured ? "尚未选择" : active.Name ?? "未命名";
         UpstreamStatus = !active.Configured ? "尚未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0 ? "上游冷却中"
             : active.Report?.CanActivate == true ? "最小模型调用已验证" : "已有凭据 · 调用未检测";

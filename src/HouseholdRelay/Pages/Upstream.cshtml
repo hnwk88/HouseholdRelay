@@ -66,7 +66,7 @@
                     <label for="rename-@item.Id">「@item.Name」的新名称</label><input id="rename-@item.Id" name="newName" maxlength="40" required />
                     <button type="submit" class="secondary">改名</button>
                 </form>
-                @if (item.Id != Model.Active.CandidateId && item.State != "testing")
+                @if (item.Deletable)
                 {
                     <form method="post" asp-page-handler="Delete"><input type="hidden" name="candidateId" value="@item.Id" />
                         <label class="checkbox"><input type="checkbox" name="deleteConfirmed" value="true" required />确认删除「@item.Name」（删除后不能恢复）</label>
@@ -102,6 +102,17 @@
             <label class="checkbox"><input asp-for="Login.AllowPrivateNetwork" />允许登录用的上游是本机或私网地址（包括 HTTP）</label>
         </details>
         <button type="submit">登录官方账户</button>
+    </form>
+    <h3 id="account-import-heading">或者导入登录文件</h3>
+    <p>在另一台 Windows 电脑上登录过 Claude Code 的，把那台电脑的 <code>%USERPROFILE%\.claude\.credentials.json</code>（.claude 是隐藏文件夹）拷过来，在这里选它导入。导入后这份登录只给中转用，那台电脑请不要再用它，否则两边会互相挤掉登录；到期前由本机的 Claude Code 自动刷新。</p>
+    <form method="post" asp-page-handler="ImportAccount" enctype="multipart/form-data" class="settings" aria-labelledby="account-import-heading"><input type="hidden" asp-for="Version" />
+        <label asp-for="ImportFile">登录文件（.credentials.json）</label><input asp-for="ImportFile" type="file" accept=".json" required />
+        <label asp-for="Import.Name">导入的账户名称（可不填，不填就用登录邮箱）</label><input asp-for="Import.Name" maxlength="40" placeholder="例如 我的 Claude 账户" />
+        <details><summary>导入的高级设置（一般不用改）</summary>
+            <label asp-for="Import.BaseUrl">导入用的上游地址</label><input asp-for="Import.BaseUrl" type="url" maxlength="2048" required />
+            <label class="checkbox"><input asp-for="Import.AllowPrivateNetwork" />允许导入用的上游是本机或私网地址（包括 HTTP）</label>
+        </details>
+        <button type="submit">导入登录文件</button>
     </form>
     <h3 id="account-token-heading">或者贴已有的账户访问令牌</h3>
     <form method="post" asp-page-handler="DiscoverAccount" class="settings" aria-labelledby="account-token-heading"><input type="hidden" asp-for="Version" />

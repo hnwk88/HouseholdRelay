@@ -13,9 +13,19 @@ public interface IOfficialAccountLogin
     /// </summary>
     Task<string?> Login(string accountId, CancellationToken cancellation);
 
+    /// <summary>
+    /// 把别处 Claude Code 登录成功后生成的 <c>.credentials.json</c>（<paramref name="content"/>，原样保存不改写）放进 <paramref name="accountId"/> 的配置目录，再用 <c>auth status --json</c> 取登录邮箱返回（取不到时为 null）。
+    /// 先在内存里校验（上限 64 KB、是 JSON、有访问令牌与刷新令牌），合格才建目录；未安装 Claude Code（续期要靠它）、代理启用却取不到时同样拒绝。
+    /// 失败时抛出 <see cref="InvalidOperationException"/>（消息只说缺了什么与下一步，不含文件内容）并删掉这个目录。
+    /// </summary>
+    Task<string?> Import(string accountId, byte[] content, CancellationToken cancellation);
+
+    /// <summary><paramref name="accountId"/> 目录里有可用的凭据；只读文件，不刷新、不等待。</summary>
+    bool HasCredential(string accountId);
+
     /// <summary>读取 <paramref name="accountId"/> 目录里最新的访问令牌；快到期时让 CLI 刷新，已过期时等刷新结束（有上限）再读。没有凭据时返回 null。</summary>
     string? ReadAccessToken(string accountId);
 
-    /// <summary>删除 <paramref name="accountId"/> 的配置目录（上游被删除时调用）；目录不存在或删不掉时不抛出，残留的只是一个不再被引用的目录。</summary>
+    /// <summary>删除 <paramref name="accountId"/> 的配置目录（上游被删除时调用）：先结束该账户正在跑的刷新（有上限）再删，之后不再刷新它；目录不存在或删不掉时不抛出，残留的只是一个不再被引用的目录。</summary>
     void Remove(string accountId);
 }

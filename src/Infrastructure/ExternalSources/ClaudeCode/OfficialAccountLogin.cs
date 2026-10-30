@@ -23,9 +23,14 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     private static readonly TimeSpan RefreshWait = TimeSpan.FromSeconds(30);
     /// <summary>同一账户两次刷新之间至少隔这么久，刷新失败时不至于每个请求都起一个 CLI。</summary>
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
+    /// <summary>删除账户时最多等被取消的刷新结束这么久，再删目录。</summary>
+    private static readonly TimeSpan RemoveWait = TimeSpan.FromSeconds(10);
     /// <summary>登录与刷新按官方接口地址解析代理。</summary>
     private static readonly Uri OfficialTarget = new("https://" + UpstreamDetection.OfficialHost);
-    private readonly Dictionary<string, (Task Task, DateTimeOffset StartedAt)> refreshes = new(StringComparer.Ordinal);
+    // 取消源只取消不释放：没有计时器也不取等待句柄，不占非托管资源；释放了反而会让删除时的取消撞上已释放的对象。
+    private readonly Dictionary<string, (Task Task, DateTimeOffset StartedAt, CancellationTokenSource Stop)> refreshes = new(StringComparer.Ordinal);
+    /// <summary>已删除的账户主键；与 <see cref="refreshes"/> 同一把锁，删除后不再起刷新，刷新结束时发现已删除就再删一次目录。</summary>
+    private readonly HashSet<string> removed = new(StringComparer.Ordinal);
 
     /// <summary>
     /// 定位 claude.exe、按全局设置解析代理（启用却取不到时抛出 <see cref="UpstreamProxyUnavailableException"/>），建好受保护的配置目录后运行 <c>claude auth login</c> 等它结束；
@@ -66,6 +71,32 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         catch { RemoveDirectory(directory); throw; }
     }
 
+    /// <summary>
+    /// 先在内存里校验登录文件（不超过 <see cref="OfficialCredential.MaxFileBytes"/>、是 JSON、有访问令牌和刷新令牌），再定位 claude.exe、解析代理，
+    /// 合格才建受保护的账户目录、把文件原样写进去，用 <c>auth status --json</c> 取邮箱返回。任何失败都删掉目录；读给管理员的原因不含文件内容。
+    /// </summary>
+    public async Task<string?> Import(string accountId, byte[] content, CancellationToken cancellation)
+    {
+        ValidateImport(content);
+        string executable;
+        try { executable = launcher.FindClaude(); }
+        // 定位失败只说明本机没装；导入的令牌到期要靠它续期，所以照登录的口径拒绝。
+        catch (InvalidOperationException) { throw new InvalidOperationException("本机没有找到 Claude Code，无法导入登录文件（令牌到期要靠它自动续期）。请先安装 Claude Code，再导入。"); }
+        var route = proxy.Resolve(OfficialTarget);
+        var directory = Directory(accountId);
+        protector.ProtectDirectory(directory);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(directory, OfficialCredential.FileName), content);
+            return await Email(executable, directory, route, cancellation);
+        }
+        // 写文件或取邮箱途中被取消等失败：不留半截目录，异常原样交给调用方读出。
+        catch { RemoveDirectory(directory); throw; }
+    }
+
+    /// <summary>账户目录里有可用的凭据文件；只读文件，不刷新、不等待，供打开页面时判断「已配置」。</summary>
+    public bool HasCredential(string accountId) => Read(Directory(accountId)) is not null;
+
     /// <summary>读最新凭据；离到期不足 <see cref="RefreshMargin"/> 时在后台让 CLI 刷新，已过期时最多等 <see cref="RefreshWait"/> 后重读，刷新不成仍返回旧令牌，由上游的拒绝触发重新登录提示。</summary>
     public string? ReadAccessToken(string accountId)
     {
@@ -78,35 +109,72 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         return Read(directory)?.AccessToken ?? credential.AccessToken;
     }
 
-    /// <summary>上游被删除时删掉它的账户目录；主键不合格式时拒绝，删不掉时放弃。</summary>
-    public void Remove(string accountId) => RemoveDirectory(Directory(accountId));
+    /// <summary>
+    /// 上游被删除时删掉它的账户目录：先记为已删除并取消正在跑的刷新，等它结束进程树（最多 <see cref="RemoveWait"/>）再删，免得 CLI 占着文件或把目录重新写出；
+    /// 主键不合格式时拒绝，删不掉时放弃。
+    /// </summary>
+    public void Remove(string accountId)
+    {
+        var directory = Directory(accountId);
+        (Task Task, DateTimeOffset StartedAt, CancellationTokenSource Stop)? running = null;
+        // 记已删除与取出正在跑的刷新在同一把锁里：否则刷新可能在两步之间登记，删除后又起一个 CLI 写出目录。
+        lock (refreshes)
+        {
+            removed.Add(accountId);
+            if (refreshes.Remove(accountId, out var last) && !last.Task.IsCompleted) running = last;
+        }
+        // 取消放在锁外：取消回调会同步结束进程树，不该占着刷新登记表的锁。
+        if (running is { } refresh) { refresh.Stop.Cancel(); Task.WhenAny(refresh.Task, Task.Delay(RemoveWait)).Wait(); }
+        // 刚被结束的进程树可能还占着这个工作目录一小会儿：删不掉就稍等重试，最多约 5 秒，之后放弃。
+        for (var attempt = 0; attempt < 25 && RemoveDirectory(directory); attempt++) Thread.Sleep(200);
+    }
 
-    /// <summary>同一账户同时只跑一次刷新，且两次之间至少隔 <see cref="RefreshInterval"/>；否则返回上一次的任务。</summary>
+    /// <summary>同一账户同时只跑一次刷新，且两次之间至少隔 <see cref="RefreshInterval"/>；否则返回上一次的任务。已删除的账户不再刷新。</summary>
     private Task Refresh(string accountId, string directory)
     {
         // 并发请求同时发现令牌快到期：查上一次刷新与登记新刷新必须在同一把锁里，否则会各起一个 CLI 同时改写凭据文件。
         lock (refreshes)
         {
+            if (removed.Contains(accountId)) return Task.CompletedTask;
             if (refreshes.TryGetValue(accountId, out var last) && (!last.Task.IsCompleted || clock.GetUtcNow() - last.StartedAt < RefreshInterval)) return last.Task;
-            var task = Task.Run(() => RunRefresh(directory));
-            refreshes[accountId] = (task, clock.GetUtcNow());
+            var stop = new CancellationTokenSource();
+            var task = Task.Run(() => RunRefresh(accountId, directory, stop.Token));
+            refreshes[accountId] = (task, clock.GetUtcNow(), stop);
             return task;
         }
     }
 
     /// <summary>
     /// 在账户目录里跑一次 <c>claude -p /usage</c>（MyCoAI 用的本地免费命令，不花模型额度）：CLI 发现令牌快到期会自己用刷新令牌换新并写回凭据文件。
-    /// 失败只说明这次没刷新成，不抛出，转发继续用旧令牌。
+    /// 失败或被删除取消只说明这次没刷新成，不抛出，转发继续用旧令牌；结束时所属上游已删除就再删一次目录。
     /// </summary>
-    private async Task RunRefresh(string directory)
+    private async Task RunRefresh(string accountId, string directory, CancellationToken stop)
     {
         try
         {
             var start = Start(launcher.FindClaude(), directory, proxy.Resolve(OfficialTarget), "-p", "/usage", "--output-format", "json", "--no-session-persistence");
-            await RunHidden(start, TimeSpan.FromSeconds(60), CancellationToken.None);
+            await RunHidden(start, TimeSpan.FromSeconds(60), stop);
         }
-        // 没装 Claude Code、代理取不到、进程起不来或超时：这次不刷新，令牌真失效时上游拒绝会提示重新登录。
+        // 没装 Claude Code、代理取不到、进程起不来、超时或因删除被取消：这次不刷新，令牌真失效时上游拒绝会提示重新登录。
         catch (Exception error) when (error is InvalidOperationException or Win32Exception or IOException or OperationCanceledException) { }
+        bool gone;
+        // 已删除集合与删除方共用这把锁，读到的是删除之后的最新状态。
+        lock (refreshes) gone = removed.Contains(accountId);
+        // 刷新途中上游被删：CLI 可能在删除之后又写出了目录，这里补删，不留残目录。
+        if (gone) RemoveDirectory(directory);
+    }
+
+    /// <summary>导入前的内存校验：超过上限、不是 JSON、没有访问令牌、没有刷新令牌各读出原因与下一步，不复述文件内容。</summary>
+    private static void ValidateImport(byte[] content)
+    {
+        const string Where = "另一台电脑上的 %USERPROFILE%\\.claude\\.credentials.json";
+        if (content.Length > OfficialCredential.MaxFileBytes) throw new InvalidOperationException($"选的文件超过 64 KB，不是 Claude Code 的登录文件。请选{Where}。");
+        OfficialCredential? credential;
+        try { credential = OfficialCredential.Parse(content); }
+        // 解析错误的消息里可能带文件片段，只读出结论。
+        catch (JsonException) { throw new InvalidOperationException($"选的文件不是 JSON，不是 Claude Code 的登录文件。请选{Where}。"); }
+        if (credential is null) throw new InvalidOperationException($"选的文件里没有官方账户的访问令牌（claudeAiOauth.accessToken），不是登录成功后的文件。请选{Where}。");
+        if (!credential.Refreshable) throw new InvalidOperationException("选的文件里只有访问令牌、没有刷新令牌（refreshToken），导入后到期不能自动续期。请改用下面的「贴账户访问令牌」。");
     }
 
     /// <summary>跑 <c>auth status --json</c> 取 <c>email</c>；命令失败、超时或输出不是预期 JSON 时返回 null，不影响登录结果。</summary>
@@ -173,13 +241,13 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         return Path.Combine(instance.State, "official-accounts", accountId);
     }
 
-    /// <summary>删除登录失败留下的、或所属上游已删除的账户目录；删不掉时放弃，残留的只是一个没有凭据或未被任何上游引用的目录。</summary>
-    private static void RemoveDirectory(string directory)
+    /// <summary>删除登录失败留下的、或所属上游已删除的账户目录；删不掉时放弃并返回 true（目录还在），残留的只是一个没有凭据或未被任何上游引用的目录。</summary>
+    private static bool RemoveDirectory(string directory)
     {
-        try { if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, true); }
+        try { if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, true); return false; }
         // 文件被占用：放弃清理，不掩盖登录失败的真实原因。
-        catch (IOException) { }
+        catch (IOException) { return true; }
         // 没有删除权限：同样放弃清理。
-        catch (UnauthorizedAccessException) { }
+        catch (UnauthorizedAccessException) { return true; }
     }
 }

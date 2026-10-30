@@ -1,4 +1,5 @@
-﻿using System.Net;
+﻿using System.Diagnostics;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using Core.Upstream;
@@ -111,6 +112,81 @@ static class OfficialLoginTests
         Check(Directory.Exists(Path.Combine(host.Home.Path, ".state", "official-accounts", removed)));
         service.Delete(removed);
         Check(NoAccountDirectories(host) && service.ListCandidates().Count == 0, "Deleting an official login upstream must remove its account directory");
+    }
+
+    /// <summary>
+    /// 在用的官方登录上游令牌已过期、刷新又卡住（假 CLI 卡 30 秒）：打开首页、连接说明、费率、上游页各自几秒内返回，且照常读出它已配置，
+    /// 页面没有去读令牌、没有等刷新，也没有起刷新。
+    /// </summary>
+    public static async Task PagesDoNotWaitForTokenRefresh()
+    {
+        using var claude = new FakeClaudeLauncher("slow-refresh");
+        await using var mock = await UpstreamFixture.Create();
+        await using var web = await WebFixture.Create(overrides: claude.Register); await web.Login();
+        await SettleOnFailure(async () =>
+        {
+            var service = web.Upstreams;
+            var id = await service.LoginOfficial(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新卡住", CancellationToken.None);
+            service.ChooseModel(id, "fixture-model");
+            Check((await service.TestCandidate(id, true, CancellationToken.None)).CanActivate); service.Activate(id);
+            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", id);
+            FakeClaude.Write(directory, "fixture-login-token-expired", -1);
+            foreach (var (path, expected) in new[] { ("/", "刷新卡住"), ("/Connection", "刷新卡住"), ("/Pricing", mock.Url), ("/Upstream", "名称：刷新卡住") })
+            {
+                var clock = Stopwatch.StartNew();
+                using var page = await web.Http.GetAsync(web.Url + path);
+                var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync()); clock.Stop();
+                Check(page.IsSuccessStatusCode && clock.Elapsed < TimeSpan.FromSeconds(5) && html.Contains(expected), $"{path} took {clock.Elapsed.TotalSeconds:0.0}s: {html}");
+            }
+            Check(!File.ReadAllText(Path.Combine(directory, "fake-calls.log")).Contains("-p /usage"), "Opening pages must not start a token refresh");
+            Check(service.ReadOverview() is { Configured: true, Name: "刷新卡住" } overview && overview.CandidateId == id);
+        });
+    }
+
+    /// <summary>
+    /// 刷新进行中（假 CLI 卡 30 秒）删除这个官方登录上游：删除先结束正在跑的刷新再删目录，几秒内完成且目录不在；
+    /// 等刷新那边也收场后目录仍然不在，之后读令牌也不再起刷新。
+    /// </summary>
+    public static async Task DeleteDuringRefreshLeavesNoDirectory()
+    {
+        using var claude = new FakeClaudeLauncher("slow-refresh");
+        await using var mock = await UpstreamFixture.Create();
+        await using var web = await WebFixture.Create(overrides: claude.Register);
+        await SettleOnFailure(async () =>
+        {
+            var service = web.Upstreams; var accounts = web.App.Services.GetRequiredService<IOfficialAccountLogin>();
+            var id = await service.LoginOfficial(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新中删除", CancellationToken.None);
+            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", id); var log = Path.Combine(directory, "fake-calls.log");
+            FakeClaude.Write(directory, "fixture-login-token-expired", -1);
+            var reading = Task.Run(() => accounts.ReadAccessToken(id));
+            var started = false;
+            for (var attempt = 0; attempt < 100 && !started; attempt++)
+            {
+                await Task.Delay(100);
+                try { started = File.ReadAllText(log).Contains("-p /usage"); }
+                // 假 CLI 正在追加这个日志时可能读不到，下一轮再读。
+                catch (IOException) { }
+            }
+            Check(started, "The refresh never started");
+            var clock = Stopwatch.StartNew(); service.Delete(id); clock.Stop();
+            Check(clock.Elapsed < TimeSpan.FromSeconds(15) && !Directory.Exists(directory), $"Delete took {clock.Elapsed.TotalSeconds:0.0}s, directory left: {Directory.Exists(directory)}");
+            // 等令牌那边与 35 秒计时赛跑：刷新被取消后它应很快收场，计时先到即判失败。
+            Check(await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(35))) == reading, "The waiting token read must finish");
+            await Task.Delay(500);
+            Check(!Directory.Exists(directory) && service.ListCandidates().Count == 0, "No directory may reappear after the refresh ends");
+            Check(accounts.ReadAccessToken(id) is null && !Directory.Exists(directory), "A deleted account must not start a new refresh");
+        });
+    }
+
+    /// <summary>
+    /// 跑用到「刷新卡住」假 CLI 的用例正文：断言失败时卡住的假 CLI 可能还占着账户目录，先等它卡完（30 秒）再交给夹具清理，
+    /// 免得删临时目录的 IOException 盖掉原来的断言；通过时不多等。
+    /// </summary>
+    private static async Task SettleOnFailure(Func<Task> body)
+    {
+        try { await body(); }
+        // 只在失败路径上等：卡住的假 CLI 最多 30 秒自己结束，之后原异常照样抛出。
+        catch { await Task.Delay(TimeSpan.FromSeconds(31)); throw; }
     }
 
     /// <summary>

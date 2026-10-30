@@ -37,7 +37,7 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
     public void OnGet()
     {
         RootUrl = settings.Read().Value.PublicUrl.TrimEnd('/');
-        var active = upstreams.ReadActive();
+        var active = upstreams.ReadOverview();
         UpstreamName = !active.Configured ? "尚未选择" : active.Name ?? "未命名";
         ClaudeCodeOnly = active.Options.Diagnostic == "claude-code";
         if (active.Report?.CanActivate == true)

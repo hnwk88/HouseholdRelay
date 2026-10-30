@@ -176,6 +176,58 @@ static class UpstreamDetectionTests
     }
 
     /// <summary>
+    /// 删除按钮与删除事务同一判据：检测开始不到两分钟时不出删除按钮、服务也拒绝；检测开始超过两分钟视为已中断，页面出删除按钮、按下就删掉；当前使用中的始终不出。
+    /// </summary>
+    public static async Task DeleteButtonFollowsServiceRule()
+    {
+        await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
+        var service = web.Upstreams;
+        var active = await Passed(service, mock, "在用的"); await Switch(web, active, "在用的");
+        var stuck = service.SaveCandidate(service.ReadActive().Version, mock.Options(), "fixture-stuck-secret", "卡住的");
+        web.App.Services.GetRequiredService<IUpstreamRepository>().BeginCandidateTest(stuck);
+        Check(!service.ReadCandidate(stuck).Deletable && !service.ReadCandidate(active).Deletable);
+        string listing;
+        using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
+        Check(!listing.Contains("删除「卡住的」") && !listing.Contains("删除「在用的」"), "A candidate under test offers no delete button");
+        using (var connection = web.Database.Open())
+            RelayDatabase.Execute(connection, null, "UPDATE upstream_candidates SET test_started_at=$at WHERE id=$id", ("$at", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 121), ("$id", stuck));
+        Check(service.ReadCandidate(stuck) is { State: "testing", Deletable: true } && !service.ReadCandidate(active).Deletable);
+        using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
+        Check(listing.Contains("删除「卡住的」") && !listing.Contains("删除「在用的」"), "An interrupted test must offer the delete button the service accepts");
+        var delete = new Dictionary<string, string> { ["candidateId"] = stuck, ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        using (var deleted = await web.Post("/Upstream?handler=Delete", delete))
+            Check(WebUtility.HtmlDecode(await deleted.Content.ReadAsStringAsync()).Contains("已删除「卡住的」") && service.ListCandidates().All(item => item.Id != stuck));
+    }
+
+    /// <summary>
+    /// 在用的上游重新获取模型：保留测试通过的结论、验证过的模型与配置，只把模型目录换成新的；获取失败时原样保留；不在用的照旧读成未测试。
+    /// </summary>
+    public static async Task RediscoverKeepsActiveVerdict()
+    {
+        await using var mock = await UpstreamFixture.Create(); await using var other = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
+        var service = web.Upstreams;
+        var active = await Passed(service, mock, "在用的"); await Switch(web, active, "在用的");
+        var idle = await Passed(service, other, "备用的");
+        var before = service.ReadCandidate(active);
+        mock.Handler = context => context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal)
+            ? context.Response.WriteAsJsonAsync(new { data = new[] { new { id = "fixture-model" }, new { id = "fixture-model-new" } } }) : UpstreamFixture.Success(context);
+        var again = new Dictionary<string, string> { ["candidateId"] = active, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        using (var page = await web.Post("/Upstream?handler=Rediscover", again))
+        {
+            var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
+            Check(html.Contains("已重新获取「在用的」的模型。已获取 2 个模型") && html.Contains("测试通过") && html.Contains("<option value=\"fixture-model-new\""), html);
+        }
+        var after = service.ReadCandidate(active);
+        Check(after.State == "passed" && after.Report is { CanActivate: true } report && report.VerifiedModel == before.Report!.VerifiedModel
+            && report.Models.SequenceEqual(["fixture-model", "fixture-model-new"]) && JsonSerializer.Serialize(after.Options) == JsonSerializer.Serialize(before.Options), "The active upstream keeps its verdict");
+        mock.Handler = context => Status(context, 503);
+        await service.DiscoverModels(active, CancellationToken.None);
+        Check(service.ReadCandidate(active) is { State: "passed", Report.Models.Length: 2 }, "A failed rediscovery leaves the active upstream as it was");
+        await service.DiscoverModels(idle, CancellationToken.None);
+        Check(service.ReadCandidate(idle).State == "untested", "An idle upstream still reads as untested after rediscovery");
+    }
+
+    /// <summary>
     /// 验证秘密不出现在页面与错误里：上游在 401 正文和响应头里回显密钥，获取模型、测试、列表页面、报告 JSON 和读句都不含它；
     /// 把密钥写进名称时拒绝，错误文字也不复述密钥。
     /// </summary>
