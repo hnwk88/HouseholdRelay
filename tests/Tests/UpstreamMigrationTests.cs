@@ -20,6 +20,7 @@ static class UpstreamMigrationTests
         // 构造前一版的实际表结构；身份、哈希、实例标记和加密机密全部保留。
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             DROP TABLE upstream_candidates;
+            DROP TABLE usage_attempts;
             DROP TABLE usage_requests;
             DROP TABLE usage_prices;
             ALTER TABLE upstream DROP COLUMN options_json;

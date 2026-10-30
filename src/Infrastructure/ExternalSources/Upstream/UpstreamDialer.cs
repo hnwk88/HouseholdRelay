@@ -53,18 +53,20 @@ public static class UpstreamDialer
         catch { stream.Dispose(); throw; }
     }
 
-    /// <summary>按顺序尝试连接已校验的地址列表，第一个连上的地址返回网络流（流拥有套接字）；全部失败时抛出 <see cref="HttpRequestException"/>。</summary>
+    /// <summary>按顺序尝试连接已校验的地址列表，第一个连上的地址返回网络流（流拥有套接字）；全部失败时抛出 <see cref="HttpRequestException"/>，内部异常是最后一个套接字错误。</summary>
     private static async Task<Stream> Open(IPAddress[] addresses, int port, CancellationToken cancellation)
     {
+        SocketException? last = null;
         foreach (var address in addresses)
         {
             var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try { await socket.ConnectAsync(new IPEndPoint(address, port), cancellation); return new NetworkStream(socket, ownsSocket: true); }
             // 单个地址连不上只释放这个套接字，继续尝试下一个已校验地址。
-            catch (SocketException) { socket.Dispose(); }
+            catch (SocketException error) { socket.Dispose(); last = error; }
             // 取消等其他异常不再重试：释放套接字后原样抛出，让取消及时传到调用方。
             catch { socket.Dispose(); throw; }
         }
-        throw new HttpRequestException("无法连接已验证的目的地址。");
+        // 带上最后一个套接字错误作内部异常，上游尝试记录才分得出拒绝连接还是超时；返回给客户端的仍是固定提示。
+        throw new HttpRequestException("无法连接已验证的目的地址。", last);
     }
 }

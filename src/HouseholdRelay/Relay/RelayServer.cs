@@ -81,6 +81,7 @@ public sealed class RelayServer : IDisposable
         var stopwatch = Stopwatch.StartNew(); var id = Guid.NewGuid().ToString("N"); var name = "unknown";
         var path = context.Request.Path.Value ?? "/"; var outcome = "succeeded";
         UsageAccumulator? usage = null; var recorded = false; var dispatched = false; int? upstreamStatus = null;
+        UpstreamAttempt? attempt = null; string? upstreamName = null;
         try
         {
             if (path == "/healthz" && context.Request.Method == "GET")
@@ -132,18 +133,30 @@ public sealed class RelayServer : IDisposable
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
             // 总超时与客户端断开共用同一个令牌：客户端断开时立即取消上游调用，超时时也会取消，二者在下方 catch 里按 RequestAborted 区分。
             timeout.CancelAfter(TimeSpan.FromSeconds(config.RequestTimeoutSeconds));
+            // 尝试记录里的说明先去掉上游凭据和个人令牌，再截断落库。
+            var secret = upstream.Snapshot.Credential!;
+            string Redact(string value) => UpstreamResponses.Redact(UpstreamResponses.Redact(value, secret), token!);
             try
             {
-                timeout.Token.ThrowIfCancellationRequested();
-                if (recorded) await Usage!.Dispatch(id, upstream.Snapshot.Version, model);
-                dispatched = true;
-                using var response = await upstream.Send(request, timeout.Token);
-                upstreamStatus = (int)response.StatusCode;
-                upstream.Observe(response);
-                await UpstreamResponses.Copy(response, context.Response, upstream.Snapshot.Credential!, id, timeout.Token, usage);
-                if (!response.IsSuccessStatusCode || usage.Error) outcome = "failed";
-                else if (usage.IsStream && !usage.ProtocolComplete) outcome = "interrupted";
-                Interlocked.Increment(ref completed);
+                try
+                {
+                    timeout.Token.ThrowIfCancellationRequested();
+                    if (recorded) await Usage!.Dispatch(id, upstream.Snapshot.Version, model);
+                    dispatched = true;
+                    attempt = new UpstreamAttempt(1, upstream.Snapshot.CandidateId, upstream.Snapshot.Version, Usage?.Now ?? DateTimeOffset.UtcNow);
+                    upstreamName = upstream.Snapshot.Name;
+                    using var response = await upstream.Send(request, timeout.Token);
+                    upstreamStatus = (int)response.StatusCode;
+                    attempt.Headers(upstreamStatus.Value, UpstreamRequestId(response), Redact);
+                    upstream.Observe(response);
+                    await UpstreamResponses.Copy(response, context.Response, secret, id, timeout.Token, usage);
+                    attempt.Completed(upstreamStatus.Value, usage, Redact);
+                    if (!response.IsSuccessStatusCode || usage.Error) outcome = "failed";
+                    else if (usage.IsStream && !usage.ProtocolComplete) outcome = "interrupted";
+                    Interlocked.Increment(ref completed);
+                }
+                // 先按原始异常给这次尝试分类，再原样抛给下面和外层的转换；分类只进记录，返回给客户端的内容不变。
+                catch (Exception error) when (attempt is not null) { attempt.Failed(error, context.RequestAborted.IsCancellationRequested, Redact); throw; }
             }
             // 客户端仍在连接却被取消，只能是总超时触发，转成 504；客户端自己断开的情况留给外层按 cancelled 处理。
             catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
@@ -166,16 +179,24 @@ public sealed class RelayServer : IDisposable
         // 兜底：未预料的异常只回 500 固定消息，不泄露堆栈、令牌或上游凭据。
         catch (Exception) { outcome = "failed"; await Fail(context, new RelayFailure(500, "Internal relay error.")); }
         // 无论成败都要写用量结束结果和事件日志，保证已开始的用量记录不会悬空；日志只含请求编号、客户端名和路由，不含令牌。
+        // 事件日志在原有字段之后补上游名称、尝试次数和最后一次错误类型，原有字段与顺序不变。
         finally
         {
+            UpstreamAttempt[] attempts = attempt is null ? [] : [attempt];
             if (recorded)
                 await Usage!.Finish(id, new UsageEnd(outcome, dispatched, context.Response.StatusCode, upstreamStatus,
                     stopwatch.ElapsedMilliseconds, usage!.Completeness(dispatched, outcome == "succeeded"), usage.Tokens,
-                    usage.ReportedMoney is { } money ? money with { Completeness = usage.ProtocolComplete && outcome == "succeeded" ? "complete" : "partial" } : null));
+                    usage.ReportedMoney is { } money ? money with { Completeness = usage.ProtocolComplete && outcome == "succeeded" ? "complete" : "partial" } : null)
+                    { Attempts = attempts });
             log.Write(new { time = DateTimeOffset.UtcNow, requestId = id, client = name, route = Routes.ContainsKey(path) ? path : "local",
-                status = context.Response.StatusCode, outcome, durationMs = stopwatch.ElapsedMilliseconds });
+                status = context.Response.StatusCode, outcome, durationMs = stopwatch.ElapsedMilliseconds,
+                upstream = upstreamName, attempts = attempts.Length, error = attempts.LastOrDefault()?.ErrorType });
         }
     }
+
+    /// <summary>取上游响应头里的请求编号：先看 Anthropic 的 request-id，再看通用的 x-request-id；都没有时为 null。</summary>
+    private static string? UpstreamRequestId(HttpResponseMessage response) =>
+        response.Headers.TryGetValues("request-id", out var values) || response.Headers.TryGetValues("x-request-id", out values) ? values.FirstOrDefault() : null;
 
     /// <summary>建连异常链里是否有「代理已启用却取不到地址」；有就说明请求根本没有发出。</summary>
     private static bool ProxyUnavailable(Exception error)

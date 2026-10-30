@@ -38,6 +38,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IDatabaseMigration, UpstreamSchema>();
         services.AddSingleton<IDatabaseMigration, UsageSchema>();
         services.AddSingleton<IDatabaseMigration, UpstreamNamingSchema>();
+        services.AddSingleton<IDatabaseMigration, UsageAttemptSchema>();
         services.AddSingleton<RelayDatabase>();
         services.AddSingleton<IRelayInstance>(provider => provider.GetRequiredService<RelayDatabase>());
         services.AddSingleton<IServingLock, ServingLockFile>();

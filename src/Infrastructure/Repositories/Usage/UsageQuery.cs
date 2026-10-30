@@ -66,9 +66,10 @@ internal static class UsageQuery
                 (int?)Number(reader, 11), (int?)Number(reader, 12), Number(reader, 13), reader.GetString(14), Tokens(reader, 15))
                 { Money = new(reader.IsDBNull(19) ? null : decimal.Parse(reader.GetString(19), CultureInfo.InvariantCulture),
                     reader.IsDBNull(20) ? null : reader.GetString(20), reader.GetString(21), reader.GetString(22)) });
+        var attempts = Attempts(connection, transaction, where, parameters.ToArray());
         transaction.Commit();
         return new(cutoff, now, filter.Page, UsageFilter.PageSize, summary.Sum(item => item.Requests), summary, rows, persistenceFailures)
-            { Periods = periods, Granularity = filter.Granularity, TimeZone = filter.TimeZone };
+            { Periods = periods, Granularity = filter.Granularity, TimeZone = filter.TimeZone, Attempts = attempts };
     }
 
     /// <summary>在同一事务内汇总有金额的请求：按类型、币种和金额来源分组，用自定义的十进制求和避免浮点误差，并统计笔数与金额不完整的笔数；<paramref name="timed"/> 为真时再按时间段分组，否则时间段固定为 0。</summary>
@@ -83,6 +84,26 @@ internal static class UsageQuery
             decimal.Parse(reader.GetString(4), CultureInfo.InvariantCulture), reader.GetInt64(5), reader.GetInt64(6))));
         return result;
     }
+    /// <summary>在同一事务内读出本页明细各行的上游尝试，按请求编号分组、按次序排列；名称按候选主键现查，候选已删除时为 null。本页用与明细相同的条件、排序和分页圈定。</summary>
+    private static Dictionary<string, IReadOnlyList<UpstreamAttemptRow>> Attempts(SqliteConnection connection, SqliteTransaction transaction, string where, (string Name, object? Value)[] args)
+    {
+        using var command = Command(connection, transaction, """
+            SELECT a.request_id,a.attempt,a.candidate_id,c.name,a.upstream_version,a.started_at,a.headers_ms,a.duration_ms,a.upstream_status,
+                a.upstream_request_id,a.error_type,a.error_message,a.connect_failure,a.disposition
+            FROM usage_attempts a LEFT JOIN upstream_candidates c ON c.id=a.candidate_id
+            WHERE a.request_id IN (SELECT r.request_id FROM usage_requests r WHERE
+            """ + where + " ORDER BY r.request_started_at DESC,r.request_id DESC LIMIT $limit OFFSET $offset) ORDER BY a.request_id,a.attempt", args);
+        using var reader = command.ExecuteReader(); var result = new Dictionary<string, List<UpstreamAttemptRow>>();
+        string? Text(int column) => reader.IsDBNull(column) ? null : reader.GetString(column);
+        while (reader.Read())
+        {
+            if (!result.TryGetValue(reader.GetString(0), out var list)) result[reader.GetString(0)] = list = [];
+            list.Add(new(reader.GetInt32(1), Text(2), Text(3), reader.GetInt64(4), new DateTimeOffset(reader.GetInt64(5), TimeSpan.Zero), Number(reader, 6),
+                reader.GetInt64(7), (int?)Number(reader, 8), Text(9), Text(10), Text(11), Text(12), reader.GetString(13)));
+        }
+        return result.ToDictionary(item => item.Key, item => (IReadOnlyList<UpstreamAttemptRow>)item.Value);
+    }
+
     /// <summary>从 <see cref="Metrics"/> 列组读出一条分类汇总，<paramref name="offset"/> 是这组列在结果行中的起始列号（分段查询前面多一列时间段）。</summary>
     private static UsageSummary Summary(SqliteDataReader reader, int offset) => new(reader.GetString(offset), reader.GetInt64(offset + 1), reader.GetInt64(offset + 2), reader.GetInt64(offset + 3),
         reader.GetInt64(offset + 4), reader.GetInt64(offset + 5), reader.GetInt64(offset + 6), reader.GetInt64(offset + 7), reader.GetInt64(offset + 8), Tokens(reader, offset + 9))

@@ -104,7 +104,7 @@ static class UsageStorageTests
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities; var user = identities.Create("迁移");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
-            DROP TABLE usage_requests; DROP TABLE usage_prices;
+            DROP TABLE usage_attempts; DROP TABLE usage_requests; DROP TABLE usage_prices;
             ALTER TABLE upstream_candidates DROP COLUMN name; ALTER TABLE upstream DROP COLUMN candidate_id; PRAGMA user_version=2;
             CREATE TABLE usage_requests(unexpected TEXT);
             """));

@@ -36,16 +36,18 @@ public static class UpstreamResponses
         else
         {
             var bytes = await ReadBounded(stream, upstream.IsSuccessStatusCode ? 16 * 1024 * 1024 : 1024 * 1024, cancellation);
-            byte[] safe;
+            byte[] safe; var unreadable = false;
             try { safe = Json(bytes, secret); }
             // 成功响应不是合法 JSON 说明协议异常，直接报 502；错误响应无法解析时换成固定错误正文，避免原文中的秘密被原样转出。
             catch (JsonException)
             {
                 if (upstream.IsSuccessStatusCode) throw new RelayFailure(502, "Upstream returned an invalid protocol response.");
-                safe = SafeError("Upstream returned an unreadable error response.");
+                safe = SafeError("Upstream returned an unreadable error response."); unreadable = true;
             }
             response.ContentType = "application/json; charset=utf-8";
             usage?.Json(safe);
+            // 替换正文读出来是 api_error，要在它之后标明原文无法解析，尝试记录才知道真实情况。
+            if (unreadable) usage?.Unreadable();
             await response.Body.WriteAsync(safe, cancellation);
         }
     }
@@ -153,6 +155,7 @@ public static class UpstreamResponses
             // data 不是合法 JSON：错误事件换成固定错误正文，避免把无法逐字段检查的原文转出；其他事件退回整段文本脱敏。
             catch (JsonException)
             {
+                if (isError) usage?.Unreadable();
                 text = isError ? "event: error\ndata: " + Encoding.UTF8.GetString(SafeError("Upstream returned an unreadable stream error.")) + "\n\n"
                     : Redact(text, secret);
             }

@@ -10,6 +10,12 @@ public sealed class UsageAccumulator(string kind)
     /// <summary>上游是否返回了错误：JSON 响应的 type 为 error，或流中出现 error 事件；一旦置为 true 就影响完整性判断。</summary>
     public bool Error { get; private set; }
 
+    /// <summary>上游错误正文里 error.type 的原值；正文无法解析时为 unreadable，没有错误对象时为 null。只供上游尝试记录使用，不影响计数。</summary>
+    public string? ErrorType { get; private set; }
+
+    /// <summary>上游错误正文里 error.message 的原值（未脱敏、未截断）；由上游尝试记录脱敏截断后才落库，没有时为 null。</summary>
+    public string? ErrorMessage { get; private set; }
+
     /// <summary>是否按 SSE 流处理过响应；只要收到过任何流事件即为 true。</summary>
     public bool IsStream => stream;
 
@@ -35,6 +41,7 @@ public sealed class UsageAccumulator(string kind)
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object) return;
         Error = Text(root, "type") == "error";
+        ReadError(root);
         if (kind == "estimate") input = Number(root, "input_tokens") ?? input;
         else if (kind == "inference" && root.TryGetProperty("usage", out var usage)) Update(usage);
         jsonComplete = true;
@@ -55,7 +62,7 @@ public sealed class UsageAccumulator(string kind)
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return;
             var type = Text(root, "type") ?? eventName;
-            if (type == "error") Error = true;
+            if (type == "error") { Error = true; ReadError(root); }
             if (type == "message_start" && root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object)
             {
                 started = true;
@@ -82,6 +89,16 @@ public sealed class UsageAccumulator(string kind)
         if (succeeded && ProtocolComplete && input.HasValue && (kind == "estimate" || output.HasValue)) return "complete";
         if (any || !succeeded || !ProtocolComplete) return "partial";
         return "not_provided";
+    }
+
+    /// <summary>响应层发现上游错误正文（或流里的错误事件）不是合法 JSON、已换成固定错误正文时调用：错误类型记为 unreadable，不留说明。须在交出替换正文之后调用，替换正文不能盖掉它。</summary>
+    public void Unreadable() { ErrorType = "unreadable"; ErrorMessage = null; }
+
+    /// <summary>读取 error 对象里的 type 与 message；Anthropic 格式和常见兼容中转的 {"error":{"type","message"}} 都适用，没有 error 对象时保留原值。</summary>
+    private void ReadError(JsonElement root)
+    {
+        if (!root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object) return;
+        ErrorType = Text(error, "type") ?? ErrorType; ErrorMessage = Text(error, "message") ?? ErrorMessage;
     }
 
     /// <summary>从推理接口的 usage 对象更新各项计数与上游报告金额；缺失或非法的字段保留原值，因此流中后到的部分 usage 不会清掉先到的计数。</summary>

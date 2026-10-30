@@ -45,8 +45,8 @@
                 <td>@item.Incomplete 次</td><td>@if (item.Kind == "inference") { <partial name="_MoneyTotals" model="item" /> } else { <span>不适用</span> }</td></tr>
         }
         </tbody></table></div>
-    <h2>请求明细</h2><div class="table-scroll" tabindex="0" role="region" aria-label="用量明细，可横向滚动"><table>
-        <thead><tr><th>时间 / 请求</th><th>使用者 / 模型</th><th>接口 / 结果</th><th>发送 / 状态</th><th>输入 / 输出</th><th>缓存读 / 写</th><th>金额</th><th>完整性 / 版本</th></tr></thead><tbody>
+    <h2>请求明细</h2><p>最后一列读出这次请求实际走的哪家上游、上游状态码、失败原因和耗时；没发往上游的读「未发往上游」。</p><div class="table-scroll" tabindex="0" role="region" aria-label="用量明细，可横向滚动"><table>
+        <thead><tr><th>时间 / 请求</th><th>使用者 / 模型</th><th>接口 / 结果</th><th>发送 / 状态</th><th>输入 / 输出</th><th>缓存读 / 写</th><th>金额</th><th>完整性 / 版本</th><th>上游 / 原因 / 耗时</th></tr></thead><tbody>
         @foreach (var row in report.Rows)
         {
             <tr><td><time datetime="@row.StartedAt.ToString("O")">@row.StartedAt.ToLocalTime()</time><small>@row.RequestId</small></td>
@@ -56,7 +56,8 @@
                 <td>@(row.Completeness == "not_applicable" ? "不适用" : UsageLabels.Count(row.Tokens.Input) + " / " + (row.Kind == "estimate" ? "不适用" : UsageLabels.Count(row.Tokens.Output)))</td>
                 <td>@(row.Kind == "inference" && row.Dispatched ? UsageLabels.Count(row.Tokens.CacheRead) + " / " + UsageLabels.Count(row.Tokens.CacheWrite) : "不适用")</td>
                 <td>@UsageLabels.Money(row.Money)</td>
-                <td>@UsageLabels.Completeness(row.Completeness)<small>上游版本 @(row.UpstreamVersion?.ToString() ?? "未知")</small></td></tr>
+                <td>@UsageLabels.Completeness(row.Completeness)<small>上游版本 @(row.UpstreamVersion?.ToString() ?? "未知")</small></td>
+                <td data-upstream-attempts>@UsageLabels.Attempts(report.AttemptsOf(row.RequestId))</td></tr>
         }
         </tbody></table></div>
     <div class="actions" aria-label="分页">

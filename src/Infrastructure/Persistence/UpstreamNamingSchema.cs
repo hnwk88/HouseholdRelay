@@ -13,7 +13,7 @@ internal sealed class UpstreamNamingSchema(RelayDataOptions options) : IDatabase
     public int Order => 40;
 
     /// <summary>
-    /// 已是 4 时直接返回，不是 3 时拒绝。在一个事务里：候选表加 name 列并按地址主机名回填，活动表加 candidate_id 列；
+    /// 已是 4 或更高时直接返回，不是 3 时拒绝。在一个事务里：候选表加 name 列并按地址主机名回填，活动表加 candidate_id 列；
     /// 旧的 activated 状态改回 passed（激活不再改变候选状态，才能切回）；活动上游按「选项与报告原文一致的已激活候选」找回来源，
     /// 找不到且已有凭据时为它补建一条候选；活动或任一候选带 proxyUrl 时全局代理设为手动并沿用（活动优先，再按最近候选），
     /// 并从所有选项 JSON 删掉 proxyUrl；没有代理时不改设置，默认就是不使用代理。最后写入版本号 4。
@@ -22,7 +22,7 @@ internal sealed class UpstreamNamingSchema(RelayDataOptions options) : IDatabase
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version == 4) return;
+        if (version is 4 or 5) return;
         if (version != 3) throw new InvalidOperationException("数据库版本不支持。");
         using var transaction = connection.BeginTransaction();
         Execute(connection, transaction, """

@@ -55,6 +55,16 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
             ("$completeness", result.Completeness), ("$input", result.Tokens.Input), ("$output", result.Tokens.Output),
             ("$read", result.Tokens.CacheRead), ("$write", result.Tokens.CacheWrite),
             ("$amount", UsageMoneyRules.DecimalText(money.Amount)), ("$currency", money.Currency), ("$source", money.Source), ("$moneyState", money.Completeness));
+        // 尝试记录与结束结果同一事务提交：要么都在，要么都不在，重试保存时不会留下重复的尝试。
+        foreach (var attempt in result.Attempts)
+            Execute(connection, transaction, """
+                INSERT INTO usage_attempts(request_id,attempt,candidate_id,upstream_version,started_at,headers_ms,duration_ms,upstream_status,
+                    upstream_request_id,error_type,error_message,connect_failure,disposition)
+                VALUES($id,$attempt,$candidate,$version,$started,$headers,$duration,$status,$upstreamId,$type,$message,$connect,$disposition)
+                """, ("$id", requestId), ("$attempt", attempt.Number), ("$candidate", attempt.CandidateId), ("$version", attempt.Version),
+                ("$started", attempt.StartedAt.UtcTicks), ("$headers", attempt.HeadersMs), ("$duration", attempt.DurationMs), ("$status", attempt.UpstreamStatus),
+                ("$upstreamId", attempt.UpstreamRequestId), ("$type", attempt.ErrorType), ("$message", attempt.ErrorMessage), ("$connect", attempt.ConnectFailure),
+                ("$disposition", attempt.Disposition));
         transaction.Commit();
     }
 
@@ -68,7 +78,7 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
             """, ("$time", nowTicks));
     }
 
-    /// <summary>删除一批过期记录。</summary>
+    /// <summary>删除一批过期记录；它们的上游尝试由外键级联在同一条语句里一并删除，返回的行数只计用量记录。</summary>
     public int DeleteExpiredBatch(long cutoffTicks)
     {
         using var connection = database.Open(1);

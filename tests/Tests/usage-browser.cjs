@@ -70,6 +70,7 @@ async function createUser(page, name) {
         if (parsed.pathname.endsWith('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'fixture-model' }] })); return; }
         if (parsed.pathname.endsWith('/count_tokens')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"input_tokens":123}'); return; }
         const scenario = parsed.searchParams.get('case');
+        if (scenario === 'overloaded') { response.writeHead(503, { 'content-type': 'application/json', 'request-id': 'req_browser_503' }); response.end('{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'); return; }
         if (scenario === 'sse-report' || scenario === 'crash') {
             response.writeHead(200, { 'content-type': 'text/event-stream' });
             response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":11,"output_tokens":0,"cache_read_input_tokens":7,"cache_creation_input_tokens":5}}}\n\n');
@@ -121,12 +122,20 @@ async function createUser(page, name) {
     assert.ok((await mine.locator('#results').textContent()).includes('已知输入：未知')); assert.ok(!(await mine.locator('#results').textContent()).includes('统计甲'));
     await mine.getByLabel('个人令牌', { exact: true }).fill(''); await shot(mine, '02-personal-unknown');
     await call(a.token, 'sse-report'); await call(a.token, 'count', '/v1/messages/count_tokens'); await call(a.token, 'models', '/v1/models');
-    await call(b.token, 'estimated'); const reportA = await settled(a.token, 4), reportB = await settled(b.token, 2);
+    await call(b.token, 'estimated');
+    const overloaded = await fetch(url + '/v1/messages?case=overloaded', { method: 'POST', headers: { Authorization: 'Bearer ' + b.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'fixture-private-prompt' }] }) });
+    assert.equal(overloaded.status, 503); assert.equal(await overloaded.text(), '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}');
+    const reportA = await settled(a.token, 4), reportB = await settled(b.token, 3);
+    assert.ok(!JSON.stringify(reportB).includes('用量测试上游') && !JSON.stringify(reportB).includes('overloaded_error'), '个人用量不带上游诊断');
     assert.equal(reportA.summary.find(item => item.kind === 'inference').money[0].amount, 0.1);
     assert.equal(reportB.rows.find(row => row.money.source === 'estimated').money.amount, 0.00011);
     await page.goto(url + '/Usage'); await page.getByLabel('时间统计', { exact: true }).selectOption('hour');
     await page.getByRole('button', { name: '查询用量', exact: true }).click(); await page.getByRole('heading', { name: '按小时统计', exact: true }).waitFor();
     assert.ok((await page.textContent('main')).includes('0.1 USD')); assert.ok((await page.textContent('main')).includes('0.00011 USD')); await shot(page, '03-admin-hourly');
+    assert.ok((await page.locator('thead').last().textContent()).includes('上游 / 原因 / 耗时'), '明细表有上游尝试列');
+    const attempts = await page.locator('[data-upstream-attempts]').allTextContents();
+    assert.ok(attempts.some(text => /^用量测试上游，503，上游过载，Overloaded，\d+\.\d 秒$/.test(text)), '失败行读出哪家、状态码、错误类型、说明、耗时');
+    assert.ok(attempts.some(text => /^用量测试上游，200，\d+\.\d 秒$/.test(text)), '成功行读出哪家和耗时');
     await page.getByLabel('使用者', { exact: true }).selectOption(a.id);
     await page.getByLabel('开始时间（含）', { exact: true }).fill(new Date(Date.now() + 8 * 3600000 - 3600000).toISOString().slice(0, 16));
     await page.getByLabel('结束时间（不含）', { exact: true }).fill(new Date(Date.now() + 8 * 3600000 + 3600000).toISOString().slice(0, 16));
@@ -163,6 +172,7 @@ async function createUser(page, name) {
     assert.equal(await mine.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
     steps.push('全新网页完成首次设置、两位使用者、上游测试与激活；管理员诊断未进入个人用量。');
+    steps.push('上游回 503 overloaded_error 时管理员用量页末列读出「用量测试上游，503，上游过载，Overloaded，耗时」，成功行读出上游名称与耗时；个人用量数据不带上游诊断。');
     steps.push('配置费率后覆盖 JSON/SSE、上游报告金额、估算金额、未知用量、Count Tokens 与 Models 分栏；按小时和自选时间筛选。');
     steps.push('个人页面只返回本人；伪造身份被拒；轮换、改名保留历史；停用令牌不能查询。改价不改变历史估算。');
     steps.push('请求处理中强制结束独立服务进程，重启后恢复为中断/不完整；已结束记录和金额保留。390px 管理与个人页面无横向溢出。');
