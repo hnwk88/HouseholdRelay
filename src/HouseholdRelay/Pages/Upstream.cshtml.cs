@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Security.Cryptography;
 using Application.Interfaces.Upstream;
+using Application.Services.Upstream;
 using Core.Upstream;
 using Infrastructure.ExternalSources.ClaudeCode;
 
@@ -20,6 +21,8 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     [BindProperty] public UpstreamInput Import { get; set; } = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
     /// <summary>要导入的 <c>.credentials.json</c>；处理完无论成败都清空，不回显到页面。</summary>
     [BindProperty] public IFormFile? ImportFile { get; set; }
+    /// <summary>要导入的上游导出文件；处理完无论成败都清空，不回显到页面。</summary>
+    [BindProperty] public IFormFile? UpstreamFile { get; set; }
     /// <summary>打开页面时的活动上游版本号；保存与切换时若活动版本已变化则拒绝，防止基于过期页面操作。</summary>
     [BindProperty] public long Version { get; set; }
     /// <summary>当前活动上游的非秘密部分；读它不等官方登录令牌刷新。</summary>
@@ -34,6 +37,14 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public string RuntimeStatus { get; private set; } = "";
     /// <summary>此刻实际走的是哪家、哪家暂避到几点、为什么，按读屏顺序读成一句话。</summary>
     public string RoutingText { get; private set; } = "";
+    /// <summary>在用的那一家已导出搬走时读出的说明与下一步；没有搬走时为 null。</summary>
+    public string? MovedText { get; private set; }
+    /// <summary>在用的是登录得到、还没搬走的官方账户时，导出表单里事先读出「勾选它导出后会怎样」；否则为 null。</summary>
+    public string? ExportWarning { get; private set; }
+    /// <summary>刚导出成功时的下载地址（加密文件的 data: 地址，页面打开即自动下载一次）；其余时候为 null。</summary>
+    public string? ExportDownload { get; private set; }
+    /// <summary>刚导出的文件名。</summary>
+    public string ExportFileName { get; private set; } = "";
 
     /// <summary>打开上游页（需已登录）：<paramref name="candidateId"/> 指定时把它作为正在设置的上游，否则取最近一个还没测通过的；只读。</summary>
     public void OnGet(string? candidateId) => Load(candidateId);
@@ -132,6 +143,59 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         Load(null); return Page();
     }
 
+    /// <summary>
+    /// 导出（需已登录且通过防 CSRF 校验）：两次输入的导出密码一致后，把勾选的上游加密成一个文件，页面读出结果并自动下载；密码不保存、不回显。
+    /// 勾选的官方账户随之搬走，此后本机不再用它转发、不再续期。密码不合规则、没勾或上游已不在时作为表单错误读出，什么都不改。
+    /// </summary>
+    public IActionResult OnPostExport(string[]? exportIds, string? exportPassword, string? exportPasswordAgain)
+    {
+        ModelState.Clear();
+        try
+        {
+            if (exportPassword != exportPasswordAgain) throw new InvalidOperationException("两次输入的导出密码不一样，请重新输入两遍，再按「导出加密文件」。");
+            var export = upstreams.Export(exportIds ?? [], exportPassword ?? "");
+            ExportFileName = $"household-relay-upstreams-{DateTimeOffset.Now:yyyyMMdd-HHmm}.hrupstreams";
+            ExportDownload = "data:application/octet-stream;base64," + Convert.ToBase64String(export.File);
+            Notice = $"已导出 {export.Names.Count} 家上游：{Quoted(export.Names)}。浏览器正在下载「{ExportFileName}」；没有自动下载时，按下面的「下载导出文件」。"
+                + (export.Moved.Count == 0 ? "" : $"官方账户{Quoted(export.Moved)}已经搬走：本机不再用它转发、不再续期。")
+                + "下一步：把文件拷到新电脑，在它的上游页「导入上游」里选这个文件，输入同一个导出密码。";
+        }
+        // 两次密码不一样、密码长度不对、没勾、上游已不在、官方账户凭据不在或续期没结束：读出原因，什么都不改。
+        catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        Load(null); return Page();
+    }
+
+    /// <summary>
+    /// 导入上游（需已登录且通过防 CSRF 校验）：限长读入导出文件，用导入密码解开后按文件顺序加成未测试上游，页面逐家读出结果与下一步；
+    /// 文件字节用完即清零，文件与密码都不回显。文件或密码不对时一家都不写，作为表单错误读出。
+    /// </summary>
+    public async Task<IActionResult> OnPostImportUpstreamsAsync(string? importPassword)
+    {
+        ModelState.Clear();
+        byte[]? content = null;
+        try
+        {
+            if (UpstreamFile is null || UpstreamFile.Length == 0) throw new InvalidOperationException("请先选择旧电脑上导出的文件，再按「导入上游」。");
+            // 最多读到上限多一个字节：够判断超限，又不把超大的上传整份读进内存；是否超限由服务那一处判定、读出。
+            content = new byte[(int)Math.Min(UpstreamFile.Length, UpstreamService.MaxImportBytes + 1)];
+            await using (var input = UpstreamFile.OpenReadStream())
+                if (await input.ReadAtLeastAsync(content, content.Length, false, HttpContext.RequestAborted) < content.Length)
+                    throw new InvalidOperationException("导出文件没有读完整，请重新选择后再按「导入上游」。");
+            var outcomes = await upstreams.Import(Version, content, importPassword ?? "", HttpContext.RequestAborted);
+            var added = outcomes.Where(item => item.Error is null).Select(item => item.Name).ToArray();
+            var failed = outcomes.Where(item => item.Error is not null).Select(item => $"「{item.Name}」：{item.Error}").ToArray();
+            var next = "下一步：逐家按「选择模型并测试」，测试通过后再切换。";
+            if (failed.Length == 0) Notice = $"已导入 {added.Length} 家上游：{Quoted(added)}，都排在已有上游后面，尚未测试。{next}";
+            else if (added.Length == 0) ModelState.AddModelError("", $"文件里的 {failed.Length} 家上游一家都没导入。{string.Join("", failed)}");
+            else Notice = $"导入了 {added.Length} 家上游：{Quoted(added)}，尚未测试；{failed.Length} 家没导入。{string.Join("", failed)}{next}没导入的按原因处理后，在本机重新添加。";
+        }
+        // 文件不对、格式版本不认识、密码不对、文件被改过或活动版本已变化：读出原因，一家都不写。
+        catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        // 导出文件里有全部密钥和登录文件（虽已加密）：无论成败都清零字节、清掉文件绑定值。
+        finally { if (content is not null) CryptographicOperations.ZeroMemory(content); UpstreamFile = null; }
+        Load(null); return Page();
+    }
+
     /// <summary>改名（需已登录且通过防 CSRF 校验）：只改显示名称，切换和用量都按主键关联，不受影响。</summary>
     public IActionResult OnPostRename(string candidateId, string? newName)
     {
@@ -207,9 +271,17 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         if (string.IsNullOrWhiteSpace(Account.BaseUrl)) Account.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         if (string.IsNullOrWhiteSpace(Login.BaseUrl)) Login.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         if (string.IsNullOrWhiteSpace(Import.BaseUrl)) Import.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
-        Working = workingId is null ? Saved.LastOrDefault(item => item.State != "passed") : Saved.FirstOrDefault(item => item.Id == workingId);
+        // 已导出搬走的不再获取模型、测试，不作为正在设置的上游。
+        Working = (workingId is null ? Saved.LastOrDefault(item => item.State != "passed") : Saved.FirstOrDefault(item => item.Id == workingId)) is { ExportedAt: null } chosen ? chosen : null;
+        var current = Saved.FirstOrDefault(item => item.Id == Active.CandidateId);
+        MovedText = current?.ExportedAt is null ? null : MovedSentence(current.Name, Active.Failover);
+        ExportWarning = current is { ExportedAt: null, Options.OfficialLogin: true }
+            ? $"在用的「{current.Name}」是登录得到的官方账户，勾选它导出后它就搬走了：" + (Active.Failover
+                ? "自动切换开着，之后的请求会按「已保存的上游」的顺序换到其他测试通过的上游。"
+                : "自动切换关着，导出后中转会没有可用上游。请先切换到别的上游，或者打开自动切换，再导出。")
+            : null;
         var state = upstreamPool.Status(Active.Version);
-        RuntimeStatus = !Active.Configured ? "未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0
+        RuntimeStatus = MovedText is not null ? "已导出搬走，本机不再用它" : !Active.Configured ? "未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0
             ? $"上游冷却中，约 {state.CooldownSeconds} 秒后重试" : Active.Report?.CanActivate == true ? "已通过最小调用检测" : "已迁移凭据，调用尚未检测";
         RoutingText = RoutingSentence(upstreamPool, Active, Saved);
     }
@@ -217,6 +289,14 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     /// <summary>上游页与概览共用的走法读句：名称按主键从已保存上游里查，查不到时读「已删除的上游」，在用的不是从已保存上游切换来的读「未命名上游」。</summary>
     public static string RoutingSentence(IUpstreamPool pool, UpstreamOverview active, IReadOnlyList<UpstreamCandidate> saved) =>
         pool.Routing().Describe(active.Failover, active.CandidateId, id => saved.FirstOrDefault(item => item.Id == id)?.Name ?? (id is null ? "未命名上游" : "已删除的上游"));
+
+    /// <summary>在用的那一家已导出搬走时的读句：本机不再用它，按自动切换开关说明请求此刻怎么走，再给下一步；上游页与概览共用。</summary>
+    public static string MovedSentence(string name, bool failover) => $"在用的「{name}」已经导出搬走，本机不再用它转发、不再续期。"
+        + (failover ? "自动切换开着：请求按「已保存的上游」的顺序交给其他测试通过的上游。" : "自动切换关着：中转现在没有可用上游，家里的请求会失败。")
+        + $"下一步：在「已保存的上游」里切换到别的上游；不再需要「{name}」时可以删除它。";
+
+    /// <summary>把名称列成「甲」「乙」的读法。</summary>
+    private static string Quoted(IEnumerable<string> names) => string.Concat(names.Select(name => $"「{name}」"));
 
     /// <summary>「接入方式」的读法：官方账户登录、官方账户令牌或 API 密钥。</summary>
     public static string AccessText(UpstreamOptions options) => options.OfficialLogin ? "官方账户登录" : options.Mode == "oauth" ? "官方账户令牌" : "API 密钥";
@@ -227,8 +307,10 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
             ? UpstreamDetection.AuthenticationLabel(item.Options.Authentication) + (item.Options.AuthenticationManual ? "（手动指定）" : "")
             : "尚未确认";
 
-    /// <summary>列表里「最近一次检测」的读法：通过、未通过（附原因）、正在检测或尚未测试。</summary>
-    public static string ResultText(UpstreamCandidate item) => item.State switch
+    /// <summary>列表里「最近一次检测」的读法：已导出搬走、通过、未通过（附原因）、正在检测或尚未测试。</summary>
+    public static string ResultText(UpstreamCandidate item) => item.ExportedAt is { } moved
+        ? $"已导出搬走（{moved.ToLocalTime():yyyy-MM-dd HH:mm}）：本机不再用它转发、不再续期。不再需要时可以删除。"
+        : item.State switch
     {
         "passed" => $"测试通过（{item.Report?.CheckedAt.ToLocalTime():yyyy-MM-dd HH:mm}）。{item.Report?.Message}",
         "failed" => "测试未通过：" + item.Report?.Message,

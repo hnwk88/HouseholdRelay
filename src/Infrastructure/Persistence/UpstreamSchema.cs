@@ -16,7 +16,7 @@ internal sealed class UpstreamSchema : IDatabaseMigration
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version is 2 or 3 or 4 or 5 or 6) return;
+        if (version is 2 or 3 or 4 or 5 or 6 or 7) return;
         if (version != 1) throw new InvalidOperationException("数据库版本不支持。");
         using var transaction = connection.BeginTransaction();
         var settings = JsonSerializer.Deserialize<RelayConfiguration>((string)Scalar(connection, transaction, "SELECT json FROM settings WHERE id=1")!, ConfigurationFiles.Json)!;

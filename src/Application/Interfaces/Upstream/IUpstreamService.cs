@@ -1,4 +1,5 @@
-﻿using Core.Upstream;
+﻿using Application.Contracts.Upstream;
+using Core.Upstream;
 
 namespace Application.Interfaces.Upstream;
 
@@ -28,6 +29,18 @@ public interface IUpstreamService : IActiveUpstreamSource
     /// <paramref name="name"/> 为空时用登录邮箱；文件不合格、未安装 Claude Code、名称不合规则或活动版本已变化时抛出 <see cref="InvalidOperationException"/> 读出原因，不新增上游、不留账户目录。
     /// </summary>
     Task<string> ImportOfficial(long expectedVersion, UpstreamOptions options, byte[] content, string? name, CancellationToken cancellation);
+
+    /// <summary>
+    /// 把 <paramref name="ids"/> 指定的上游按上游页顺序导出成用 <paramref name="password"/>（12–128 个字符，不保存）加密的文件；登录得到的官方账户随之搬走：
+    /// 本实例此后不再用它转发、不再续期，账户目录留着等管理员删除。密码不合规则、一家都没勾或勾的已不在时抛出 <see cref="InvalidOperationException"/>，什么都不改。
+    /// </summary>
+    UpstreamExport Export(IReadOnlyCollection<string> ids, string password);
+
+    /// <summary>
+    /// 用 <paramref name="password"/> 解开 <see cref="Export"/> 产生的文件，按文件里的顺序把每家加成未测试上游（与「API 供应商」保存、「导入登录文件」导入的完全一样），排在已有上游后面。
+    /// 文件或密码不对、活动版本已变化时抛出 <see cref="InvalidOperationException"/> 读出原因，一家都不写；解开以后个别上游被拒只记在它自己的结果里。
+    /// </summary>
+    Task<IReadOnlyList<UpstreamImportOutcome>> Import(long expectedVersion, byte[] file, string password, CancellationToken cancellation);
 
     /// <summary>读取活动上游的非秘密部分供页面展示；不读凭据、不等官方登录令牌刷新。转发用 <see cref="IActiveUpstreamSource.ReadActive"/>。</summary>
     UpstreamOverview ReadOverview();

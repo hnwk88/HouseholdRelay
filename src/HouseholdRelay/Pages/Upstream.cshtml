@@ -6,7 +6,13 @@
 <div asp-validation-summary="All" role="alert"></div>
 @if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
 <section class="card" aria-labelledby="active-heading"><h2 id="active-heading">当前使用的上游</h2>
-    @if (Model.Active.Configured)
+    @if (Model.MovedText is not null)
+    {
+        <p>名称：@Model.Active.Name</p>
+        <p class="status">@Model.RuntimeStatus</p>
+        <p>@Model.MovedText</p>
+    }
+    else if (Model.Active.Configured)
     {
         <p>名称：@(Model.Active.Name ?? "未命名")</p>
         <p class="status">@Model.RuntimeStatus</p>
@@ -66,12 +72,15 @@
                     <dt>认证方式</dt><dd>@UpstreamModel.AuthenticationText(item)</dd>
                     <dt>模型</dt><dd>@(item.Options.Model.Length == 0 ? "尚未选择" : item.Options.Model)</dd>
                     <dt>最近一次检测</dt><dd>@UpstreamModel.ResultText(item)</dd></dl>
-                @if (item.State == "passed" && item.Id != Model.Active.CandidateId && item.Id != Model.Working?.Id)
-                { <form method="post" asp-page-handler="Activate"><input type="hidden" asp-for="Version" /><input type="hidden" name="candidateId" value="@item.Id" /><button type="submit">切换到「@item.Name」</button></form> }
-                <a asp-page="/Upstream" asp-route-candidateId="@item.Id" asp-fragment="test">选择模型并测试「@item.Name」</a>
-                <form method="post" asp-page-handler="Rediscover"><input type="hidden" name="candidateId" value="@item.Id" />
-                    <button type="submit" class="secondary">重新获取「@item.Name」的模型（不花额度）</button>
-                </form>
+                @if (item.ExportedAt is null)
+                {
+                    if (item.State == "passed" && item.Id != Model.Active.CandidateId && item.Id != Model.Working?.Id)
+                    { <form method="post" asp-page-handler="Activate"><input type="hidden" asp-for="Version" /><input type="hidden" name="candidateId" value="@item.Id" /><button type="submit">切换到「@item.Name」</button></form> }
+                    <a asp-page="/Upstream" asp-route-candidateId="@item.Id" asp-fragment="test">选择模型并测试「@item.Name」</a>
+                    <form method="post" asp-page-handler="Rediscover"><input type="hidden" name="candidateId" value="@item.Id" />
+                        <button type="submit" class="secondary">重新获取「@item.Name」的模型（不花额度）</button>
+                    </form>
+                }
                 <form method="post" asp-page-handler="Rename"><input type="hidden" name="candidateId" value="@item.Id" />
                     <label for="rename-@item.Id">「@item.Name」的新名称</label><input id="rename-@item.Id" name="newName" maxlength="40" required />
                     <button type="submit" class="secondary">改名</button>
@@ -87,6 +96,34 @@
         }
     </section>
 }
+<section class="card" aria-labelledby="transfer-heading"><h2 id="transfer-heading">搬到另一套中转：导出与导入</h2>
+    @if (Model.ExportDownload is not null)
+    { <p><a href="@Model.ExportDownload" download="@Model.ExportFileName" data-auto-download>下载导出文件「@Model.ExportFileName」</a></p> }
+    @if (Model.Saved.Count > 0)
+    {
+        <h3 id="export-heading">导出加密文件</h3>
+        <p>把勾选的上游连同密钥加密成一个文件，拷到另一台电脑的中转里导入。导出密码当场设、不保存，导入时输入同一个密码；忘了就解不开。登录得到的官方账户导出后就搬走了：本机不再用它转发、不再续期，账户留在列表里，不需要时自己删除。官方账户的导出文件只在搬家那一刻有用，本机续期一次以后旧文件就可能失效；API 密钥的导出可以长期留作备份。</p>
+        @if (Model.ExportWarning is not null) { <p class="status">@Model.ExportWarning</p> }
+        <form method="post" asp-page-handler="Export" class="settings" aria-labelledby="export-heading">
+            <fieldset><legend>要导出的上游（默认全部）</legend>
+                @foreach (var item in Model.Saved)
+                {
+                    <label class="checkbox"><input type="checkbox" name="exportIds" value="@item.Id" checked />「@item.Name」，@UpstreamModel.AccessText(item.Options)@(item.ExportedAt is not null ? "，已经导出搬走过" : item.Options.OfficialLogin ? "，导出后本机不再用它" : "")</label>
+                }
+            </fieldset>
+            <label for="export-password">导出密码（12 到 128 个字符，导入时要用，不会保存）</label><input id="export-password" name="exportPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required />
+            <label for="export-password-again">再输入一次导出密码</label><input id="export-password-again" name="exportPasswordAgain" type="password" autocomplete="new-password" minlength="12" maxlength="128" required />
+            <button type="submit">导出加密文件</button>
+        </form>
+    }
+    <h3 id="import-heading">导入上游</h3>
+    <p>选另一台电脑上导出的文件，输入导出时设的密码。文件里的上游按原顺序加到已保存上游的后面，都是尚未测试，逐家测试通过后才能切换。官方账户要靠本机的 Claude Code 续期，请先装好。</p>
+    <form method="post" asp-page-handler="ImportUpstreams" enctype="multipart/form-data" class="settings" aria-labelledby="import-heading"><input type="hidden" asp-for="Version" />
+        <label asp-for="UpstreamFile">导出文件</label><input asp-for="UpstreamFile" type="file" accept=".hrupstreams" required />
+        <label for="import-password">导出时设的密码</label><input id="import-password" name="importPassword" type="password" autocomplete="off" maxlength="128" required />
+        <button type="submit">导入上游</button>
+    </form>
+</section>
 <section class="card" aria-labelledby="api-heading"><h2 id="api-heading">API 供应商</h2>
     <p>只填三样：名称、地址、密钥。按下面的按钮会先加密保存这个上游，再读取它的模型目录；密钥只需输入这一次。</p>
     <form method="post" asp-page-handler="DiscoverApi" class="settings"><input type="hidden" asp-for="Version" />

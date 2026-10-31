@@ -48,7 +48,7 @@ static class UpstreamNamingMigrationTests
         Check(active.CandidateId == "old-candidate" && active.Name == "aitoll.net" && active.Credential == "fixture-migrated-secret" && active.Options.Diagnostic == "claude-code");
         using (var connection = upgraded.Database.Open())
         {
-            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 6);
+            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 7);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM upstream_candidates WHERE options_json LIKE '%proxyUrl%'")) == 0);
             Check(!((string)RelayDatabase.Scalar(connection, null, "SELECT options_json FROM upstream WHERE id=1")!).Contains("proxyUrl"));
         }
@@ -80,7 +80,7 @@ static class UpstreamNamingMigrationTests
     private static void Downgrade(RelayDatabase database, Action<SqliteConnection> seed)
     {
         using var connection = database.Open();
-        RelayDatabase.Execute(connection, null, "DROP TABLE usage_attempts; ALTER TABLE upstream_candidates DROP COLUMN name; ALTER TABLE upstream DROP COLUMN candidate_id; PRAGMA user_version=3;");
+        RelayDatabase.Execute(connection, null, "DROP TABLE usage_attempts; ALTER TABLE upstream_candidates DROP COLUMN name; ALTER TABLE upstream_candidates DROP COLUMN exported_at; ALTER TABLE upstream DROP COLUMN candidate_id; PRAGMA user_version=3;");
         seed(connection);
     }
 

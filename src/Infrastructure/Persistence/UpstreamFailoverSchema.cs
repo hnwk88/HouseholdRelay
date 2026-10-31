@@ -11,14 +11,14 @@ internal sealed class UpstreamFailoverSchema(RelayDataOptions options) : IDataba
     public int Order => 60;
 
     /// <summary>
-    /// 已是 6 时直接返回，不是 5 时拒绝。在一个事务里：活动上游行加 failover 列（默认开）；用量记录加 candidate_id 列，按已有尝试记录回填最后一次尝试的上游；
+    /// 已是 6 或更新时直接返回，不是 5 时拒绝。在一个事务里：活动上游行加 failover 列（默认开）；用量记录加 candidate_id 列，按已有尝试记录回填最后一次尝试的上游；
     /// 单价表重建为按（已保存上游主键, 模型）唯一，旧行里属于当前活动版本的改挂到当前在用的那一家，更早版本的单价此后不会再被查到，不迁。最后写入版本号 6。
     /// </summary>
     public void Apply(RelayDatabase database)
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version == 6) return;
+        if (version is 6 or 7) return;
         if (version != 5) throw new InvalidOperationException("数据库版本不支持。");
         using var transaction = connection.BeginTransaction();
         // 每一步先看是不是已经是新形状：版本号被改回 5 的库（备份恢复或用例模拟旧库）里新列可能已经在了，重放时跳过那一步，不报重复列。

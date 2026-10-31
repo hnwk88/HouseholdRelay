@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Application.Interfaces.ClaudeCode;
@@ -31,6 +32,10 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     private readonly Dictionary<string, (Task Task, DateTimeOffset StartedAt, CancellationTokenSource Stop)> refreshes = new(StringComparer.Ordinal);
     /// <summary>已删除的账户主键；与 <see cref="refreshes"/> 同一把锁，删除后不再起刷新，刷新结束时发现已删除就再删一次目录。</summary>
     private readonly HashSet<string> removed = new(StringComparer.Ordinal);
+    /// <summary>已导出搬走的账户主键；与 <see cref="refreshes"/> 同一把锁，搬走后不再起刷新，账户目录留着等管理员删除。</summary>
+    private readonly HashSet<string> moved = new(StringComparer.Ordinal);
+    /// <summary>搬走时最多等正在跑的刷新结束这么久：刷新本身限时 60 秒，多留一点余量。</summary>
+    private static readonly TimeSpan MoveWait = TimeSpan.FromSeconds(70);
 
     /// <summary>
     /// 定位 claude.exe、按全局设置解析代理（启用却取不到时抛出 <see cref="UpstreamProxyUnavailableException"/>），建好受保护的配置目录后运行 <c>claude auth login</c> 等它结束；
@@ -129,13 +134,45 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         for (var attempt = 0; attempt < 25 && RemoveDirectory(directory); attempt++) Thread.Sleep(200);
     }
 
-    /// <summary>同一账户同时只跑一次刷新，且两次之间至少隔 <see cref="RefreshInterval"/>；否则返回上一次的任务。已删除的账户不再刷新。</summary>
+    /// <summary>
+    /// 导出即搬走：先记为已搬走（此后不再起刷新），等这些账户正在跑的刷新自己结束（最多 <see cref="MoveWait"/>，不取消，免得 CLI 死在改写凭据文件的半途），
+    /// 再按顺序读出各自的凭据文件原文交给 <paramref name="commit"/>（加密打包并在库里记为已导出）。读不到凭据、等不完刷新或 <paramref name="commit"/> 抛出时，
+    /// 本次新记的账户恢复续期，异常原样抛出；读出的文件字节无论成败都清零。账户目录不删。
+    /// </summary>
+    public T Export<T>(IReadOnlyList<string> accountIds, Func<IReadOnlyList<byte[]>, T> commit)
+    {
+        var directories = accountIds.Select(Directory).ToArray();
+        var added = new List<string>(); var running = new List<Task>();
+        // 记已搬走与取出正在跑的刷新在同一把锁里：否则刷新可能在两步之间登记，搬走之后又换一次令牌，导出的那份就作废了。
+        lock (refreshes)
+            foreach (var id in accountIds)
+            {
+                if (moved.Add(id)) added.Add(id);
+                if (refreshes.TryGetValue(id, out var last) && !last.Task.IsCompleted) running.Add(last.Task);
+            }
+        var files = new List<byte[]>();
+        try
+        {
+            // 并行等所有正在跑的刷新：它们写完凭据文件再读，导出的才是最新令牌；等不完就不导出，免得拿到马上作废的旧令牌。
+            if (!Task.WhenAll(running).Wait(MoveWait))
+                throw new InvalidOperationException("要导出的官方账户正在续期，还没结束。请过一分钟再按「导出加密文件」。");
+            foreach (var directory in directories)
+                files.Add(ReadFile(directory) ?? throw new InvalidOperationException("要导出的官方账户里有一家的登录凭据已经不在了。请不勾选它再导出，或者删除它后重新登录。"));
+            return commit(files);
+        }
+        // 没导出成：本次新记的账户照常续期，之前就已搬走的保持原样。
+        catch { lock (refreshes) foreach (var id in added) moved.Remove(id); throw; }
+        // 登录文件里有访问令牌和刷新令牌：交出去加密以后无论成败都清零。
+        finally { foreach (var file in files) CryptographicOperations.ZeroMemory(file); }
+    }
+
+    /// <summary>同一账户同时只跑一次刷新，且两次之间至少隔 <see cref="RefreshInterval"/>；否则返回上一次的任务。已删除或已搬走的账户不再刷新。</summary>
     private Task Refresh(string accountId, string directory)
     {
         // 并发请求同时发现令牌快到期：查上一次刷新与登记新刷新必须在同一把锁里，否则会各起一个 CLI 同时改写凭据文件。
         lock (refreshes)
         {
-            if (removed.Contains(accountId)) return Task.CompletedTask;
+            if (removed.Contains(accountId) || moved.Contains(accountId)) return Task.CompletedTask;
             if (refreshes.TryGetValue(accountId, out var last) && (!last.Task.IsCompleted || clock.GetUtcNow() - last.StartedAt < RefreshInterval)) return last.Task;
             var stop = new CancellationTokenSource();
             var task = Task.Run(() => RunRefresh(accountId, directory, stop.Token));
@@ -231,6 +268,26 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
             // 半截正文或文件被占用：最多重读三次，之后按没有凭据处理。
             catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
             { if (attempt == 3) return null; Thread.Sleep(50); }
+        }
+    }
+
+    /// <summary>读凭据文件原文并确认里面有访问令牌；CLI 正在改写时稍等重读，三次仍不行、文件不存在或没有访问令牌时返回 null。</summary>
+    private static byte[]? ReadFile(string directory)
+    {
+        var path = Path.Combine(directory, OfficialCredential.FileName);
+        for (var attempt = 1; ; attempt++)
+        {
+            byte[]? content = null;
+            try
+            {
+                if (!File.Exists(path)) return null;
+                content = File.ReadAllBytes(path);
+                if (OfficialCredential.Parse(content) is not null) return content;
+                CryptographicOperations.ZeroMemory(content); return null;
+            }
+            // 半截正文或文件被占用：清掉读到的半截，最多重读三次，之后按没有凭据处理。
+            catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
+            { if (content is not null) CryptographicOperations.ZeroMemory(content); if (attempt == 3) return null; Thread.Sleep(50); }
         }
     }
 

@@ -16,6 +16,7 @@ using Tests;
 if (args.FirstOrDefault() == "--real-upstream-browser") return await RealUpstreamValidation.Run(args);
 if (args.FirstOrDefault() == "--real-detection-browser") return await RealDetectionValidation.Run(args);
 if (args.FirstOrDefault() == "--real-import-browser") return await RealImportValidation.Run(args);
+if (args.FirstOrDefault() == "--real-transfer-browser") return await RealTransferValidation.Run(args);
 if (args.FirstOrDefault() == "--fake-claude") return FakeClaude.Run(args);
 if (Path.GetFileNameWithoutExtension(Environment.ProcessPath)?.Equals("claude", StringComparison.OrdinalIgnoreCase) == true) return FakeClaude.RunAsClaude(args);
 
@@ -124,6 +125,11 @@ var tests = new (string Name, Func<Task> Test)[]
     ("upstream failover: all failed hands the last response to the client", UpstreamFailoverTests.AllFailHandsOverLast),
     ("upstream failover: usage and price belong to the serving upstream", UpstreamFailoverTests.PricesTheServingUpstream),
     ("upstream failover: schema v6 upgrade rolls back and rekeys prices", UpstreamFailoverTests.SchemaUpgrade),
+    ("upstream transfer: export two API upstreams and an official account, import keeps order, untested, login bytes and keys", UpstreamTransferTests.RoundTrip),
+    ("upstream transfer: wrong password, tampered byte, unknown version and foreign file each read a reason and write nothing", UpstreamTransferTests.ImportRefusals),
+    ("upstream transfer: mismatched, short or missing export input and missing CSRF move nothing", UpstreamTransferTests.ExportRefusals),
+    ("upstream transfer: an exported official account never forwards or refreshes; pages read the next step", UpstreamTransferTests.MovedAccountStops),
+    ("upstream transfer: schema v7 upgrade rolls back and keeps upstreams unexported", UpstreamTransferTests.SchemaUpgrade),
     ("private certificate lifecycle, version conflicts and expired startup rejection", PrivateCertificateTests.Lifecycle),
     ("private certificate web creation, CSRF and public-only trust download", PrivateCertificateTests.WebJourney),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)

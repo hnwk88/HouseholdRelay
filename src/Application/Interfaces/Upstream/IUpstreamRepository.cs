@@ -8,7 +8,7 @@ public interface IUpstreamRepository
     /// <summary>读取活动上游原始行（含关联的已保存上游主键与当前名称）；行缺失时为空。</summary>
     StoredUpstream? ReadActive();
 
-    /// <summary>读取在用那一家以外、测试通过的已保存上游（含加密凭据），按创建先后；版本记为此刻的活动版本。</summary>
+    /// <summary>读取在用那一家以外、测试通过且没有导出搬走的已保存上游（含加密凭据），按创建先后；版本记为此刻的活动版本。</summary>
     IReadOnlyList<StoredUpstream> ListStandby();
 
     /// <summary>打开或关闭自动切换；只改活动上游行上的开关，不改版本、不换在用的那一家。</summary>
@@ -25,6 +25,12 @@ public interface IUpstreamRepository
 
     /// <summary>按主键读取已保存上游的非秘密部分；不存在时为空。</summary>
     StoredCandidate? ReadCandidate(string id);
+
+    /// <summary>按主键读取已保存上游的加密凭据（导出用）；不存在时提示重新加载。</summary>
+    byte[] ReadCandidateCredential(string id);
+
+    /// <summary>在一个写事务里给这些已保存上游记下导出搬走的时刻（已记过的保留原时刻）；有一个不存在就整批不记，提示重新加载。</summary>
+    void MarkExported(IReadOnlyCollection<string> ids);
 
     /// <summary>活动版本仍为 <paramref name="expectedVersion"/> 时写入一个带名称的未测试上游，否则提示重新加载。</summary>
     void InsertCandidate(string id, long expectedVersion, string name, string optionsJson, byte[] protectedCredential);

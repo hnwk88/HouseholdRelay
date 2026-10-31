@@ -10,16 +10,20 @@ using Core.Upstream;
 namespace Application.Services.Upstream;
 
 /// <summary>网页和 CLI 共用的上游保存、获取模型、诊断、改名和原子切换服务。</summary>
-public sealed class UpstreamService(IUpstreamRepository repository, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts) : IUpstreamService
+public sealed class UpstreamService(IUpstreamRepository repository, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts, IPasswordCipher cipher) : IUpstreamService
 {
+    /// <summary>导出文件的大小上限；几十家上游连同登录文件也远小于它，再大就不是导出文件。</summary>
+    public const int MaxImportBytes = 1024 * 1024;
+
     /// <summary>
     /// 读取活动上游组成快照（含关联的已保存上游主键与名称）：官方登录上游读它配置目录里的最新令牌，其余解密库中凭据；
     /// 活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>，未配置凭据（或登录凭据已不在）时快照的凭据为 null。
+    /// 来源的官方账户已导出搬走时也为 null：不读令牌也就不触发续期，转发按「未配置」处理（自动切换开着时换到备用上游）。
     /// </summary>
     public UpstreamSnapshot ReadActive()
     {
         var (row, options) = Active();
-        var credential = row.ProtectedCredential is null ? null
+        var credential = row.ProtectedCredential is null || row.Exported ? null
             : options.OfficialLogin ? row.CandidateId is { } account ? officialAccounts.ReadAccessToken(account) : null : Decrypt(row.ProtectedCredential);
         return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name, row.Failover);
     }
@@ -48,12 +52,12 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
 
     /// <summary>
     /// 读取活动上游的非秘密部分供页面展示：不解密、不读令牌，官方登录上游的「已配置」只看账户目录里有没有凭据文件，不等刷新；
-    /// 「已配置」与 <see cref="ReadActive"/> 的 <see cref="UpstreamSnapshot.Configured"/> 同一口径。活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>。
+    /// 「已配置」与 <see cref="ReadActive"/> 的 <see cref="UpstreamSnapshot.Configured"/> 同一口径（已导出搬走的读作未配置）。活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
     public UpstreamOverview ReadOverview()
     {
         var (row, options) = Active();
-        var configured = row.ProtectedCredential is not null && (!options.OfficialLogin || row.CandidateId is { } account && officialAccounts.HasCredential(account));
+        var configured = row.ProtectedCredential is not null && !row.Exported && (!options.OfficialLogin || row.CandidateId is { } account && officialAccounts.HasCredential(account));
         return new(row.Version, options, configured, Report(row), row.CandidateId, row.Name, row.Failover);
     }
 
@@ -179,6 +183,80 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     /// <summary>把检测通过的上游原子地切换为新的活动版本；检测结果与活动版本的核对都在仓储的同一事务内完成。</summary>
     public void Activate(string id, long? expectedVersion = null) => repository.Activate(id, expectedVersion);
 
+    /// <summary>
+    /// 把勾选的上游（按上游页顺序）加密导出：API 密钥与贴进来的账户令牌解密后放进文件，登录得到的官方账户放它账户目录里的登录文件原文；
+    /// 整个文件用 <paramref name="password"/> 加密，密码不保存。官方账户经 <see cref="IOfficialAccountLogin.Export"/> 停掉续期、读出登录文件，
+    /// 加密成功后在库里记为已导出，此后本实例不再用它转发、不再续期；任一步失败都不记、照常续期。明文正文用完清零。
+    /// 密码不在 12–128 个字符、一家都没勾、勾的上游已不在时抛出 <see cref="InvalidOperationException"/> 读出原因。
+    /// </summary>
+    public UpstreamExport Export(IReadOnlyCollection<string> ids, string password)
+    {
+        if (password.Length is < 12 or > 128) throw new InvalidOperationException("导出密码需要 12 至 128 个字符。导入时要输入同一个密码，请记牢。");
+        var wanted = ids.ToHashSet(StringComparer.Ordinal);
+        if (wanted.Count == 0) throw new InvalidOperationException("请至少勾选一家要导出的上游，再按「导出加密文件」。");
+        var chosen = ListCandidates().Where(item => wanted.Contains(item.Id)).ToArray();
+        if (chosen.Length != wanted.Count) throw new InvalidOperationException("要导出的上游有一家已经不在了，请重新加载页面后再导出。");
+        var officials = chosen.Where(item => item.Options.OfficialLogin).ToArray();
+        return officialAccounts.Export(officials.Select(item => item.Id).ToArray(), files =>
+        {
+            var logins = officials.Select((item, index) => (item.Id, File: files[index])).ToDictionary(pair => pair.Id, pair => pair.File, StringComparer.Ordinal);
+            var archive = new UpstreamArchive(chosen.Select(item => item.Options.OfficialLogin
+                ? new ExportedUpstream(item.Name, item.Options, null, logins[item.Id])
+                : new ExportedUpstream(item.Name, item.Options, Decrypt(repository.ReadCandidateCredential(item.Id)), null)).ToArray());
+            var plain = JsonSerializer.SerializeToUtf8Bytes(archive, ConfigurationFiles.Json);
+            try
+            {
+                var file = cipher.Seal(plain, password);
+                repository.MarkExported(officials.Select(item => item.Id).ToArray());
+                return new UpstreamExport(file, chosen.Select(item => item.Name).ToArray(), officials.Select(item => item.Name).ToArray());
+            }
+            // 明文正文里有全部密钥和登录文件：加密成败都清零。
+            finally { CryptographicOperations.ZeroMemory(plain); }
+        });
+    }
+
+    /// <summary>
+    /// 用 <paramref name="password"/> 解开导出文件，按文件里的顺序逐家加成未测试上游，排在已有上游后面：API 密钥与账户令牌走 <see cref="SaveCandidate"/>，
+    /// 官方账户的登录文件走 <see cref="ImportOfficial"/>（同一套校验、各自的账户目录），名称照文件。
+    /// 文件超过 <see cref="MaxImportBytes"/>、不是导出文件、格式版本不认识、密码不对、文件被改过、读不懂或活动版本已变化时抛出 <see cref="InvalidOperationException"/>，一家都不写；
+    /// 解开以后某一家被拒（例如本机没装 Claude Code）只记在它自己的结果里，其余照导。解开的正文和登录文件用完清零。
+    /// </summary>
+    public async Task<IReadOnlyList<UpstreamImportOutcome>> Import(long expectedVersion, byte[] file, string password, CancellationToken cancellation)
+    {
+        if (file.Length > MaxImportBytes) throw new InvalidOperationException("选的文件超过 1 MB，不是上游导出文件。请选旧电脑上按「导出加密文件」下载的那个文件。");
+        if (password.Length is 0 or > 128) throw new InvalidOperationException("请输入导出时设的那个密码（12 至 128 个字符），再按「导入上游」。");
+        var plain = cipher.Open(file, password);
+        UpstreamArchive? archive;
+        try { archive = JsonSerializer.Deserialize<UpstreamArchive>(plain, ConfigurationFiles.Json); }
+        // 密码对、校验也过了却读不懂：只会是两边版本不一样；解析错误的消息里可能带正文片段，只读出结论。
+        catch (JsonException) { archive = null; }
+        // 解开的正文里有全部密钥和登录文件：读完即清零。
+        finally { CryptographicOperations.ZeroMemory(plain); }
+        try
+        {
+            if (archive?.Upstreams is not { Count: > 0 } upstreams || upstreams.Any(item => item?.Options is null))
+                throw new InvalidOperationException("导出文件解开了，但里面的上游读不懂或是空的。请把两边的中转升级到同一版本，再导出、导入一次。");
+            if (repository.ReadActive()?.Version != expectedVersion) throw new InvalidOperationException("活动配置已改变，请重新加载后再导入。");
+            var outcomes = new List<UpstreamImportOutcome>();
+            foreach (var item in upstreams)
+            {
+                var name = string.IsNullOrWhiteSpace(item.Name) ? "没有名称的上游" : item.Name;
+                try
+                {
+                    var id = item.Options.OfficialLogin
+                        ? await ImportOfficial(expectedVersion, item.Options, item.LoginFile ?? throw new InvalidOperationException("文件里缺少这个官方账户的登录文件。"), item.Name, cancellation)
+                        : SaveCandidate(expectedVersion, item.Options, item.Credential ?? throw new InvalidOperationException("文件里缺少这家上游的密钥。"), item.Name);
+                    outcomes.Add(new(name, id, null));
+                }
+                // 这一家被拒（名称、地址不合规则，没装 Claude Code，代理取不到等）：记下原因，其余照导。
+                catch (InvalidOperationException error) { outcomes.Add(new(name, null, error.Message)); }
+            }
+            return outcomes;
+        }
+        // 登录文件里有访问令牌和刷新令牌：放进账户目录以后无论成败都清零。
+        finally { foreach (var item in archive?.Upstreams ?? []) if (item?.LoginFile is { } login) CryptographicOperations.ZeroMemory(login); }
+    }
+
     /// <summary>校验供应商名称：去掉首尾空白后须为 1–40 个字符且不含控制字符，否则抛出 <see cref="InvalidOperationException"/> 读出要求。</summary>
     private static string ValidName(string name)
     {
@@ -221,7 +299,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
 
     /// <summary>把库中的已保存上游行解析成可展示的对象。</summary>
     private static UpstreamCandidate ToCandidate(StoredCandidate row) => new(row.Id, row.Name, row.ExpectedVersion, Parse<UpstreamOptions>(row.OptionsJson), row.State,
-        row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson), row.Deletable);
+        row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson), row.Deletable, row.ExportedAt is { } at ? DateTimeOffset.FromUnixTimeMilliseconds(at) : null);
 
     /// <summary>按统一 JSON 选项序列化配置或报告。</summary>
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, ConfigurationFiles.Json);
@@ -231,9 +309,10 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
 
     /// <summary>
     /// 官方登录上游在标记检测开始之前先读它配置目录里的最新令牌，取不到时抛出 <see cref="InvalidOperationException"/> 提示重新登录，上游状态不变；
-    /// 其余上游返回 null，由调用方解密库中凭据。
+    /// 已导出搬走的不读令牌（读令牌可能触发续期，把新电脑上那份挤掉），直接拒绝。其余上游返回 null，由调用方解密库中凭据。
     /// </summary>
     private string? LoginToken(UpstreamCandidate candidate) => !candidate.Options.OfficialLogin ? null
+        : candidate.ExportedAt is not null ? throw new InvalidOperationException($"「{candidate.Name}」已经导出搬走，本机不再用它，也不再获取模型或测试。不再需要它时可以删除。")
         : officialAccounts.ReadAccessToken(candidate.Id) ?? throw new InvalidOperationException("这个官方账户的登录凭据已经不在了，请重新按「登录官方账户」。");
 
     /// <summary>解密凭据并返回 UTF-8 字符串，解密出的字节缓冲在返回前清零。</summary>

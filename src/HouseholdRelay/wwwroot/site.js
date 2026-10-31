@@ -15,6 +15,9 @@ window.addEventListener('pageshow', event => {
     if (event.persisted && document.querySelector('[data-sensitive]')) location.replace('/Users');
 });
 
+// 导出成功的页面打开时自动下载一次；读屏先读出结果，下载链接留在页面上，没自动下载时可以手动按。
+document.querySelectorAll('[data-auto-download]').forEach(link => link.click());
+
 // 原生表单提交时给键盘和读屏使用者反馈，检测期间不保存秘密输入副本。
 document.querySelectorAll('form[method="post"]').forEach(form => {
     form.addEventListener('submit', () => {

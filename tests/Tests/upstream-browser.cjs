@@ -282,6 +282,47 @@ async function relay(url, token, stream = false) {
     assert.ok(calls.some(call => call.mode === 'import' && call.path.includes('/messages')));
     steps.push('导入登录文件（没有刷新令牌）时读出：' + importRefused + ' 没有新增上游、没有多出账户目录。');
     steps.push('导入登录文件（合格、名称留空）时读出：' + imported + ' 随后测试、按名称切换，转发用导入文件里的令牌。');
+    // 导出与导入：在用的是登录得到的官方账户，导出表单事先读出勾它会怎样；只勾「浏览器 API」，输两遍密码，页面读出结果并自动下载加密文件，文件里找不到密钥。
+    // 再把文件导入回本实例：先输错密码，读出原因、不新增；再输对，按原顺序排到最后、尚未测试。官方账户没勾，照常转发。
+    const exportPassword = 'fixture-browser-export-password';
+    await page.goto(url + '/Upstream');
+    const transfer = page.locator('section', { has: page.getByRole('heading', { name: '搬到另一套中转：导出与导入', exact: true }) });
+    const exportWarning = (await transfer.locator('p.status').textContent()).trim();
+    assert.ok(exportWarning.startsWith(`在用的「${loginEmail}」是登录得到的官方账户，勾选它导出后它就搬走了：自动切换开着`), exportWarning);
+    for (const box of await transfer.getByRole('checkbox').all()) await box.uncheck();
+    await transfer.getByLabel('「浏览器 API」，API 密钥', { exact: true }).check();
+    await transfer.getByLabel('导出密码（12 到 128 个字符，导入时要用，不会保存）', { exact: true }).fill(exportPassword);
+    await transfer.getByLabel('再输入一次导出密码', { exact: true }).fill(exportPassword);
+    const downloading = page.waitForEvent('download');
+    await transfer.getByRole('button', { name: '导出加密文件', exact: true }).click();
+    const download = await downloading;
+    const exportedText = (await page.getByRole('status').filter({ hasText: '已导出 1 家上游' }).textContent()).trim();
+    assert.ok(exportedText.startsWith('已导出 1 家上游：「浏览器 API」。浏览器正在下载「household-relay-upstreams-') && !exportedText.includes('已经搬走'), exportedText);
+    const exportPath = path.join(output, download.suggestedFilename()); await download.saveAs(exportPath);
+    const exportFile = await fs.readFile(exportPath);
+    assert.equal(exportFile.subarray(0, 10).toString('ascii'), 'HRUPSTREAM'); assert.equal(exportFile.includes(Buffer.from(apiSecret)), false);
+    assert.equal((await page.content()).includes(apiSecret), false);
+    await readingOrder(page, '24-upstream-exported'); await screenshot(page, '24-upstream-exported');
+    const beforeImport = await savedCount();
+    async function importUpstreams(password, expected) {
+        await page.goto(url + '/Upstream');
+        await transfer.getByLabel('导出文件', { exact: true }).setInputFiles(exportPath);
+        await transfer.getByLabel('导出时设的密码', { exact: true }).fill(password);
+        await transfer.getByRole('button', { name: '导入上游', exact: true }).click();
+        const said = page.getByRole('status').filter({ hasText: expected }).or(page.getByRole('alert').filter({ hasText: expected }));
+        await said.first().waitFor(); return (await said.first().textContent()).trim();
+    }
+    const wrongPassword = await importUpstreams('fixture-browser-wrong-password', '导出密码不对');
+    assert.equal(wrongPassword, '导出密码不对。请输入导出时设的那个密码再试；确认密码没错的话，这个文件可能被改过，请回旧电脑重新导出一份。');
+    assert.equal(await savedCount(), beforeImport);
+    const importedUpstreams = await importUpstreams(exportPassword, '已导入');
+    assert.equal(importedUpstreams, '已导入 1 家上游：「浏览器 API」，都排在已有上游后面，尚未测试。下一步：逐家按「选择模型并测试」，测试通过后再切换。');
+    assert.equal(await savedCount(), beforeImport + 1);
+    const lastSaved = (await page.locator('article.saved-upstream h3').last().textContent()).trim(); assert.equal(lastSaved, '浏览器 API');
+    assert.equal((await page.content()).includes(apiSecret), false); assert.equal((await relay(url, token)).status, 200);
+    await readingOrder(page, '25-upstream-imported'); await screenshot(page, '25-upstream-imported');
+    steps.push('导出表单事先读出：' + exportWarning + ' 只勾「浏览器 API」导出时读出：' + exportedText + ' 浏览器自动下载了加密文件，文件头 HRUPSTREAM，里面找不到密钥。');
+    steps.push('导入同一个文件：输错密码读出「' + wrongPassword + '」，已保存数量不变；输对读出「' + importedUpstreams + `」，已保存数量 ${beforeImport} → ${beforeImport + 1}，新的一家排在最后。`);
     await page.goto(url + '/Connection'); assert.equal(await page.getByText('fixture-model', { exact: false }).count() > 0, true);
     assert.equal((await page.content()).includes(accountSecret), false); assert.equal((await page.content()).includes(token), false);
     await screenshot(page, '10-connection');

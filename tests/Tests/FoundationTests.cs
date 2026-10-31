@@ -22,7 +22,7 @@ static partial class FoundationTests
         settings.Read().Value.Validate();
         using (var connection = database.Open())
         {
-            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 6);
+            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 7);
             Check((string?)RelayDatabase.Scalar(connection, null, "PRAGMA journal_mode") == "wal");
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA synchronous")) == 2);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA foreign_keys")) == 1);

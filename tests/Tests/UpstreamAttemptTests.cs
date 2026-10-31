@@ -181,7 +181,7 @@ static class UpstreamAttemptTests
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_requests WHERE request_id='kept' AND input_tokens=3")) == 1);
         }
         var upgraded = new TestProcess(home.Path);
-        using (var connection = upgraded.Database.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 6);
+        using (var connection = upgraded.Database.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 7);
         Check(upgraded.Usage.Query(new()).Rows.Single().Tokens == new UsageTokens(3, 4));
     }
 

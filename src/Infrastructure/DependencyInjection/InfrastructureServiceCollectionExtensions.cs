@@ -33,13 +33,14 @@ public static class InfrastructureServiceCollectionExtensions
         configure(options);
         services.AddSingleton(options);
 
-        // 数据库构造时依次执行这些步骤；登记顺序与 Order 一致：旧数据导入、上游架构、用量架构、上游命名与全局代理、上游尝试记录、自动切换与按上游计价。
+        // 数据库构造时依次执行这些步骤；登记顺序与 Order 一致：旧数据导入、上游架构、用量架构、上游命名与全局代理、上游尝试记录、自动切换与按上游计价、上游导出。
         services.AddSingleton<IDatabaseMigration, LegacyImport>();
         services.AddSingleton<IDatabaseMigration, UpstreamSchema>();
         services.AddSingleton<IDatabaseMigration, UsageSchema>();
         services.AddSingleton<IDatabaseMigration, UpstreamNamingSchema>();
         services.AddSingleton<IDatabaseMigration, UsageAttemptSchema>();
         services.AddSingleton<IDatabaseMigration, UpstreamFailoverSchema>();
+        services.AddSingleton<IDatabaseMigration, UpstreamExportSchema>();
         services.AddSingleton<RelayDatabase>();
         services.AddSingleton<IRelayInstance>(provider => provider.GetRequiredService<RelayDatabase>());
         services.AddSingleton<IServingLock, ServingLockFile>();
@@ -53,6 +54,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IUsagePriceRepository, UsagePriceRepository>();
 
         services.AddSingleton<ISecretProtector, DpapiSecretProtector>();
+        services.AddSingleton<IPasswordCipher, PasswordFileCipher>();
         services.AddSingleton<ICertificateFactory, CertificateFactory>();
         services.AddSingleton<ICertificateService, CertificateService>();
         services.AddSingleton<IClientTrustPackage, ClientTrustPackage>();

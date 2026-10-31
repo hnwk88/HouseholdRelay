@@ -17,30 +17,30 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     /// <summary>不在检测窗口内（不是检测中，或检测已开始超过 <see cref="TestWindowSeconds"/>）；检测、删除与列表里的「能不能删」共用这一句，参数 <c>$expired</c> 由 <see cref="Expired"/> 给出。</summary>
     private const string Idle = "(state!='testing' OR test_started_at<$expired)";
     private const string CandidateColumns = "id,name,expected_version,options_json,state,report_json,"
-        + "(" + Idle + " AND id IS NOT (SELECT candidate_id FROM upstream WHERE id=1)) AS deletable";
+        + "(" + Idle + " AND id IS NOT (SELECT candidate_id FROM upstream WHERE id=1)) AS deletable,exported_at";
 
-    /// <summary>读取活动上游原始行，并按 candidate_id 取出它来自的已保存上游的当前名称。</summary>
+    /// <summary>读取活动上游原始行，并按 candidate_id 取出它来自的已保存上游的当前名称与是否已导出搬走。</summary>
     public StoredUpstream? ReadActive()
     {
         using var connection = database.Open();
         using var command = Command(connection, null, """
-            SELECT u.version,u.options_json,u.credential,u.report_json,u.candidate_id,c.name,u.failover
+            SELECT u.version,u.options_json,u.credential,u.report_json,u.candidate_id,c.name,u.failover,c.exported_at IS NOT NULL
             FROM upstream u LEFT JOIN upstream_candidates c ON c.id=u.candidate_id WHERE u.id=1
             """);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
         return new(reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : (byte[])reader[2], reader.IsDBNull(3) ? null : reader.GetString(3),
-            reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetBoolean(6));
+            reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetBoolean(6), reader.GetBoolean(7));
     }
 
-    /// <summary>按创建先后列出测试通过、且不是活动上游来源的已保存上游，版本记为此刻的活动版本；与上游页列表同一顺序。</summary>
+    /// <summary>按创建先后列出测试通过、没有导出搬走、且不是活动上游来源的已保存上游，版本记为此刻的活动版本；与上游页列表同一顺序。</summary>
     public IReadOnlyList<StoredUpstream> ListStandby()
     {
         using var connection = database.Open();
         using var command = Command(connection, null, """
             SELECT u.version,c.options_json,c.credential,c.report_json,c.id,c.name
             FROM upstream_candidates c JOIN upstream u ON u.id=1
-            WHERE c.state='passed' AND c.id IS NOT u.candidate_id ORDER BY c.created_at,c.rowid
+            WHERE c.state='passed' AND c.exported_at IS NULL AND c.id IS NOT u.candidate_id ORDER BY c.created_at,c.rowid
             """);
         using var reader = command.ExecuteReader();
         var rows = new List<StoredUpstream>();
@@ -83,6 +83,24 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
         using var reader = command.ExecuteReader();
         return reader.Read() ? Candidate(reader) : null;
     }
+
+    /// <summary>按主键读取已保存上游的加密凭据。</summary>
+    public byte[] ReadCandidateCredential(string id)
+    {
+        using var connection = database.Open();
+        return Scalar(connection, null, "SELECT credential FROM upstream_candidates WHERE id=$id", ("$id", id)) as byte[]
+            ?? throw new InvalidOperationException("这个上游不存在，请重新加载页面。");
+    }
+
+    /// <summary>在一个写事务里给这些已保存上游记下导出搬走的时刻；已记过的保留最早那次，有一个不存在就整批不记。</summary>
+    public void MarkExported(IReadOnlyCollection<string> ids) => database.Write((connection, transaction) =>
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var id in ids)
+            if (Execute(connection, transaction, "UPDATE upstream_candidates SET exported_at=COALESCE(exported_at,$now) WHERE id=$id", ("$now", now), ("$id", id)) != 1)
+                throw new InvalidOperationException("要导出的上游有一家已经不在了，请重新加载页面后再导出。");
+        return 0;
+    });
 
     /// <summary>活动版本匹配时写入带名称的未测试上游。</summary>
     public void InsertCandidate(string id, long expectedVersion, string name, string optionsJson, byte[] protectedCredential) => database.Write((connection, transaction) =>
@@ -142,14 +160,16 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
         "UPDATE upstream_candidates SET state=$state,report_json=$json,options_json=$options WHERE id=$id",
         ("$state", state), ("$json", reportJson), ("$options", optionsJson), ("$id", id)));
 
-    /// <summary>核对检测结果与活动版本后写为新的活动版本并记下来源主键；候选自身的检测状态不变，之后仍可切回。</summary>
+    /// <summary>核对检测结果、没有导出搬走与活动版本后写为新的活动版本并记下来源主键；候选自身的检测状态不变，之后仍可切回。</summary>
     public void Activate(string id, long? expectedVersion) => database.Write((connection, transaction) =>
     {
-        using var command = Command(connection, transaction, "SELECT expected_version,options_json,credential,report_json,state FROM upstream_candidates WHERE id=$id", ("$id", id));
+        using var command = Command(connection, transaction, "SELECT expected_version,options_json,credential,report_json,state,exported_at FROM upstream_candidates WHERE id=$id", ("$id", id));
         long version; string json, reportJson; byte[] credential;
         using (var reader = command.ExecuteReader())
         {
-            if (!reader.Read() || reader.GetString(4) != "passed" || reader.IsDBNull(3)) throw new InvalidOperationException("这个上游还没有通过最小模型调用测试，不能切换。请先测试。");
+            var found = reader.Read();
+            if (found && !reader.IsDBNull(5)) throw new InvalidOperationException("这个官方账户已经导出搬走，本机不再用它，不能切换过去。要在本机继续用，请删除它后重新登录或导入登录文件。");
+            if (!found || reader.GetString(4) != "passed" || reader.IsDBNull(3)) throw new InvalidOperationException("这个上游还没有通过最小模型调用测试，不能切换。请先测试。");
             version = expectedVersion ?? reader.GetInt64(0); json = reader.GetString(1); credential = (byte[])reader[2]; reportJson = reader.GetString(3);
         }
         if (!Parse<UpstreamReport>(reportJson).CanActivate) throw new InvalidOperationException("这个上游的测试没有通过，不能切换。");
@@ -165,7 +185,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
 
     /// <summary>按 <see cref="CandidateColumns"/> 的列顺序读出一行已保存上游。</summary>
     private static StoredCandidate Candidate(SqliteDataReader reader) => new(reader.GetString(0), reader.GetString(1), reader.GetInt64(2), reader.GetString(3),
-        reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetBoolean(6));
+        reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetBoolean(6), reader.IsDBNull(7) ? null : reader.GetInt64(7));
 
     /// <summary>检测窗口的起点：此刻减去 <see cref="TestWindowSeconds"/>（Unix 秒，与 <c>test_started_at</c> 同单位）。</summary>
     private static long Expired() => DateTimeOffset.UtcNow.ToUnixTimeSeconds() - TestWindowSeconds;

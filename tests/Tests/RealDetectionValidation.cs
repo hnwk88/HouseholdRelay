@@ -25,9 +25,9 @@ static class RealDetectionValidation
 
     /// <summary>
     /// 两份真实验证脚本共用的材料：从 <paramref name="source"/>（现有实例的 relay.db，或经用户同意的 MyCoAI account-vault.json）只读取出 aitoll 与 sftoken 的名称、地址和密钥。
-    /// 实例库以 SQLite 只读模式打开，绝不用本程序的迁移打开，免得把旧程序的库升级。
+    /// 实例库以 SQLite 只读模式打开，绝不用本程序的迁移打开，免得把旧程序的库升级。<paramref name="only"/> 给出时只取这一家（aitoll 或 sftoken），另一家不读、不核对。
     /// </summary>
-    public static object[] Providers(string source)
+    public static object[] Providers(string source, string? only = null)
     {
         object Read(string host, string name)
         {
@@ -68,9 +68,13 @@ static class RealDetectionValidation
             }
             throw new InvalidOperationException("MyCoAI 账户库里没有「" + entryName + "」。");
         }
-        return source.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
-            ? [Vault("AIToll中转", "https://aitoll.net/v1/cc", "aitoll"), Vault("顺风中转", "https://api.sftoken.top", "sftoken")]
-            : [Read("aitoll.net", "aitoll"), Read("api.sftoken.top", "sftoken")];
+        var vault = source.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+        var all = new (string Name, Func<object> Load)[]
+        {
+            ("aitoll", () => vault ? Vault("AIToll中转", "https://aitoll.net/v1/cc", "aitoll") : Read("aitoll.net", "aitoll")),
+            ("sftoken", () => vault ? Vault("顺风中转", "https://api.sftoken.top", "sftoken") : Read("api.sftoken.top", "sftoken"))
+        };
+        return all.Where(item => only is null || item.Name == only).Select(item => item.Load()).ToArray();
     }
 
     /// <summary>按名称不区分大小写读 JSON 对象的字符串属性；缺失或不是字符串时为 null。</summary>

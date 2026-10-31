@@ -26,6 +26,13 @@ public interface IOfficialAccountLogin
     /// <summary>读取 <paramref name="accountId"/> 目录里最新的访问令牌；快到期时让 CLI 刷新，已过期时等刷新结束（有上限）再读。没有凭据时返回 null。</summary>
     string? ReadAccessToken(string accountId);
 
+    /// <summary>
+    /// 导出即搬走：这些账户此后不再续期（正在跑的续期先等它结束），按顺序读出各自的 <c>.credentials.json</c> 原文交给 <paramref name="commit"/>（加密打包、在库里记为已导出），返回它的结果；
+    /// 读出的字节在返回后清零，<paramref name="commit"/> 要用就当场用完。凭据不在、续期迟迟不结束或 <paramref name="commit"/> 抛出时恢复续期并抛出（读出的原因不含文件内容）。
+    /// 账户目录不删，等管理员按「删除」。
+    /// </summary>
+    T Export<T>(IReadOnlyList<string> accountIds, Func<IReadOnlyList<byte[]>, T> commit);
+
     /// <summary>删除 <paramref name="accountId"/> 的配置目录（上游被删除时调用）：先结束该账户正在跑的刷新（有上限）再删，之后不再刷新它；目录不存在或删不掉时不抛出，残留的只是一个不再被引用的目录。</summary>
     void Remove(string accountId);
 }

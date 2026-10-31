@@ -250,7 +250,7 @@ static class UpstreamFailoverTests
         Check(Count(process.Database, "PRAGMA user_version") == 5 && Count(process.Database, "SELECT COUNT(*) FROM pragma_table_info('upstream') WHERE name='failover'") == 0);
         Check(Count(process.Database, "SELECT COUNT(*) FROM usage_prices WHERE upstream_version IS NOT NULL") == 2, "Old prices stay untouched after rollback");
         var upgraded = new TestProcess(home.Path);
-        Check(Count(upgraded.Database, "PRAGMA user_version") == 6 && Count(upgraded.Database, "SELECT failover FROM upstream WHERE id=1") == 1);
+        Check(Count(upgraded.Database, "PRAGMA user_version") == 7 &&Count(upgraded.Database, "SELECT failover FROM upstream WHERE id=1") == 1);
         var prices = upgraded.Pricing.List("active-upstream");
         Check(prices is [{ Id: "current", CandidateId: "active-upstream", InputPerMillion: 1 }] && Count(upgraded.Database, "SELECT COUNT(*) FROM usage_prices") == 1, "Current-version prices move to the active upstream");
         using (var connection = upgraded.Database.Open())
