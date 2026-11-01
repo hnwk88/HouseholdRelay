@@ -24,7 +24,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         var options = snapshot.Options;
         try
         {
-            var identity = options.OfficialAccount ? await identities.Current(timeout.Token) : null;
+            var identity = options.OfficialAccount ? await identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token) : null;
             var catalog = await Catalog(snapshot, UpstreamDetection.AuthenticationOrder(options), identity, timeout.Token);
             var manual = options.AuthenticationManual && options.Mode != "oauth" ? "（手动指定）" : "";
             return catalog.Status switch
@@ -68,7 +68,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         using var timeout = Limit(cancellation, 60);
         try
         {
-            var identity = options.OfficialAccount ? await identities.Current(timeout.Token) : null;
+            var identity = options.OfficialAccount ? await identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token) : null;
             var order = UpstreamDetection.AuthenticationOrder(options);
             // 获取模型已确认的认证方式排在最前，其余按固定顺序在后。
             order = [.. order.Where(item => item == options.Authentication), .. order.Where(item => item != options.Authentication)];

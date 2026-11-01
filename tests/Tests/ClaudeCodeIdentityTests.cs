@@ -23,15 +23,21 @@ static class ClaudeCodeIdentityTests
     { "Authorization", "Host", "Content-Length", "Content-Type", "Accept-Encoding", "Connection", "anthropic-version", "anthropic-beta", "X-Claude-Code-Session-Id" };
 
     /// <summary>
-    /// 抓包对照（D-011 的自查）：先让本机真 claude.exe 直接打一个模拟端点，记下它实际发出的请求头；再让两台标识完全不同的模拟客户端经中转打官方账户上游。
-    /// 两边发到上游的身份头必须逐项相同，且都等于真 claude.exe 的那一份；客户端自己的标识和没见过的头一个都不带出去；设备编号统一成中转的设备编号。
+    /// 抓包对照（D-011 的自查，按用户 2026-11-01 定的「同一入口完全相同」）：先让本机真 claude.exe 用交互模式与 <c>--print</c> 各直接打一次模拟端点，记下它实际发出的请求头；
+    /// 再让两台标识完全不同的终端客户端（入口 cli）和一台 SDK 宿主（入口 sdk-cli）经中转打官方账户上游。两台终端客户端发到上游的头逐项相同，且等于真 claude.exe 交互模式那一份；
+    /// SDK 宿主的等于 <c>--print</c> 那一份；两份只差 User-Agent 里的入口。客户端自己的标识和没见过的头一个都不带出去；设备编号统一成中转的设备编号。
+    /// 客户端自报的版本都不比本机的新，这个用例里不起后台升级。
     /// </summary>
     public static async Task AccountForwardingUsesOneIdentity()
     {
-        var native = await Native();
-        var identity = native.Headers.Where(header => !PerRequest.Contains(header.Key)).ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
+        var interactive = Identity(await Native(true)); var print = Identity(await Native(false));
+        Check(interactive["User-Agent"].EndsWith("(external, cli)", StringComparison.Ordinal) && print["User-Agent"].EndsWith("(external, sdk-cli)", StringComparison.Ordinal),
+            interactive["User-Agent"] + " / " + print["User-Agent"]);
+        Check(interactive.Keys.Order(StringComparer.OrdinalIgnoreCase).SequenceEqual(print.Keys.Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase)
+            && interactive.All(header => header.Key == "User-Agent" || print[header.Key] == header.Value), "The two modes of real claude.exe differ only in the User-Agent entrypoint");
+        var identity = interactive;
         Check(identity.ContainsKey("User-Agent") && identity.ContainsKey("x-app") && identity.Keys.Any(name => name.StartsWith("x-stainless-", StringComparison.OrdinalIgnoreCase)),
-            "Real claude.exe must send its identity: " + string.Join(", ", native.Headers.Keys));
+            "Real claude.exe must send its identity: " + string.Join(", ", identity.Keys));
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock, services => services.AddSingleton<IClaudeCodeIdentitySource>(provider =>
@@ -40,11 +46,11 @@ static class ClaudeCodeIdentityTests
             return new ClaudeCodeIdentitySource(launcher, new ClaudeCodeProbe(launcher, provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<IUpstreamProxy>()), TimeProvider.System);
         }));
         var study = web.Identities.Create("书房"); var bedroom = web.Identities.Create("卧室");
-        using (var first = await Send(web, study.Token, new string('a', 64), ("User-Agent", "claude-cli/9.9.9 (external, cli)"), ("x-app", "cli"), ("X-Stainless-OS", "MacOS"),
+        using (var first = await Send(web, study.Token, new string('a', 64), ("User-Agent", "claude-cli/1.9.9 (external, cli)"), ("x-app", "cli"), ("X-Stainless-OS", "MacOS"),
             ("X-Stainless-Arch", "arm64"), ("X-Stainless-Runtime-Version", "v22.1.0"), ("X-Stainless-Package-Version", "0.99.0"), ("X-Claude-Code-Session-Id", "session-study"),
             ("X-Device-Hint", "study-laptop"), ("anthropic-version", "2023-06-01"), ("anthropic-beta", "claude-code-20250219")))
             Check(first.StatusCode == HttpStatusCode.OK, await first.Content.ReadAsStringAsync());
-        using (var second = await Send(web, bedroom.Token, new string('b', 64), ("User-Agent", "claude-cli/1.0.0 (external, claude-vscode)"), ("x-app", "vscode"), ("X-Stainless-OS", "Linux"),
+        using (var second = await Send(web, bedroom.Token, new string('b', 64), ("User-Agent", "claude-cli/1.0.0 (external, cli)"), ("x-app", "vscode"), ("X-Stainless-OS", "Linux"),
             ("X-Stainless-Arch", "x64"), ("X-Stainless-Runtime-Version", "v18.0.0"), ("X-Stainless-Lang", "python"), ("X-Claude-Code-Session-Id", "session-bedroom"),
             ("anthropic-dangerous-direct-browser-access", "false"), ("anthropic-version", "2023-06-01"), ("anthropic-beta", "claude-code-20250219")))
             Check(second.StatusCode == HttpStatusCode.OK, await second.Content.ReadAsStringAsync());
@@ -60,8 +66,20 @@ static class ClaudeCodeIdentityTests
         Check(relayed[0].Headers.Keys.Order(StringComparer.OrdinalIgnoreCase).SequenceEqual(relayed[1].Headers.Keys.Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase));
         Check(relayed[0].Headers["X-Claude-Code-Session-Id"] == "session-study" && relayed[1].Headers["X-Claude-Code-Session-Id"] == "session-bedroom", "Session ids follow the request body");
         Check(!relayed.Any(call => call.Body.Contains(new string('a', 64), StringComparison.Ordinal) || call.Body.Contains(new string('b', 64), StringComparison.Ordinal)));
-        Console.WriteLine($"Identity compared: {identity.Count} headers from real claude.exe ({identity["User-Agent"]}), {shared.Length} headers equal across two clients.");
+        var host = web.Identities.Create("MyCoAI 宿主");
+        using (var third = await Send(web, host.Token, new string('c', 64), ("User-Agent", "claude-cli/0.7.7 (external, sdk-cli)"), ("x-app", "cli"), ("X-Stainless-OS", "Windows"),
+            ("X-Claude-Code-Session-Id", "session-host"), ("anthropic-version", "2023-06-01")))
+            Check(third.StatusCode == HttpStatusCode.OK, await third.Content.ReadAsStringAsync());
+        var sdk = mock.Calls.Last();
+        foreach (var (name, value) in print) Check(sdk.Headers.TryGetValue(name, out var sent) && sent == value, $"sdk-cli {name}: sent {sent}, real claude.exe --print sends {value}");
+        Check(sdk.Headers.Keys.All(name => print.ContainsKey(name) || PerRequest.Contains(name)), "Only the sdk-cli identity may leave: " + string.Join(", ", sdk.Headers.Keys));
+        Console.WriteLine($"Identity compared: {identity.Count} headers per mode from real claude.exe (cli {identity["User-Agent"]}; sdk-cli {print["User-Agent"]}), "
+            + $"{shared.Length} headers equal across two cli clients, {print.Count} headers equal to --print for the sdk-cli client.");
     }
+
+    /// <summary>从一次实抓里取出身份头：去掉跟着每次请求或连接走的头。</summary>
+    private static Dictionary<string, string> Identity(UpstreamCall call) =>
+        call.Headers.Where(header => !PerRequest.Contains(header.Key)).ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 身份缺失时不发：官方账户在用，本机 Claude Code 被卸掉；客户端拿到 503 和「找不到 Claude Code」的读句，模拟上游一个请求都没收到，
@@ -174,9 +192,13 @@ static class ClaudeCodeIdentityTests
         Check(!report.Message.Contains(Token, StringComparison.Ordinal) && quote.Length <= "上游原话：".Length + 200 + 1 && quote.EndsWith("…。", StringComparison.Ordinal), quote);
     }
 
-    /// <summary>让本机真 claude.exe 直接打一个模拟端点（不经中转、不碰官方），返回它发出的第一个请求；隔离配置目录，用完删掉。</summary>
-    private static async Task<UpstreamCall> Native()
+    /// <summary>
+    /// 让本机真 claude.exe 直接打一个模拟端点（不经中转、不碰官方），返回它发出的第一个请求；隔离配置目录，用完删掉。
+    /// <paramref name="interactive"/> 为真时用中转同一套交互模式参数在伪控制台里跑（不开窗口），否则自己组 <c>--print</c> 参数跑。
+    /// </summary>
+    private static async Task<UpstreamCall> Native(bool interactive)
     {
+        if (interactive) return await NativeInteractive();
         await using var native = await UpstreamFixture.Create();
         native.Handler = context =>
         {
@@ -207,6 +229,30 @@ static class ClaudeCodeIdentityTests
         // 文件仍被占用：放弃清理，不让用例因此失败。
         catch (IOException) { }
         Check(!native.Calls.IsEmpty, "Real claude.exe must send one request to the local endpoint");
+        return native.Calls.First();
+    }
+
+    /// <summary>本机真 claude.exe 的交互模式：参数与预写配置用中转的 <see cref="ClaudeCodeProbe.Start"/>，在伪控制台里跑，抓到第一个请求就结束。</summary>
+    private static async Task<UpstreamCall> NativeInteractive()
+    {
+        await using var native = await UpstreamFixture.Create();
+        native.Handler = context =>
+        {
+            context.Response.StatusCode = 400;
+            return context.Response.WriteAsJsonAsync(new { type = "error", error = new { type = "invalid_request_error", message = "capture only" } });
+        };
+        var directory = Directory.CreateTempSubdirectory("hr-native-claude-").FullName;
+        var start = ClaudeCodeProbe.Start(new ClientLauncher().FindClaude(), directory, native.Url, "fixture-native-token", null, new ProxyRoute(null, "127.0.0.1,localhost", "直连"), "cli");
+        using (var terminal = PseudoConsoleProcess.Start(start, new Dictionary<string, string> { ["Press Enter to continue"] = "\r" }))
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(60);
+            while (native.Calls.IsEmpty && !terminal.Process.HasExited && DateTime.UtcNow < deadline) await Task.Delay(100);
+        }
+        // 只删本用例在系统临时目录下建的隔离目录；子进程刚退出还占着文件时放弃，残留的只是临时配置。
+        try { Directory.Delete(directory, true); }
+        // 文件仍被占用：放弃清理，不让用例因此失败。
+        catch (IOException) { }
+        Check(!native.Calls.IsEmpty, "Real claude.exe in interactive mode must send one request to the local endpoint");
         return native.Calls.First();
     }
 

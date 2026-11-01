@@ -50,37 +50,70 @@ static class FakeClaude
             if (scenario == "slow-refresh") Thread.Sleep(TimeSpan.FromSeconds(30));
             Write(directory, RefreshedToken, 60); Console.WriteLine("{}"); return 0;
         }
-        if (args.Contains("--print")) return Print(scenario, args).GetAwaiter().GetResult();
+        if (command == "--version") { Console.WriteLine(OwnVersion() + " (Claude Code)"); return 0; }
+        if (command == "update") return Update(scenario);
+        // --print 是非交互；带 --strict-mcp-config 却没有 --print 的是中转抓 cli 身份时起的交互模式。
+        if (args.Contains("--print") || args.Contains("--strict-mcp-config")) return Print(scenario, args).GetAwaiter().GetResult();
         return 2;
     }
+
+    /// <summary>claude.cmd 里写的自身路径；假升级据此改写自己的版本行。</summary>
+    public const string SelfVariable = "HOUSEHOLD_FAKE_CLAUDE_SELF";
+
+    /// <summary>claude.cmd 里写的「升级到哪个版本」；没写时假升级不改版本（等于已是最新）。</summary>
+    public const string UpdateToVariable = "HOUSEHOLD_FAKE_CLAUDE_UPDATE_TO";
+
+    /// <summary>
+    /// 扮演 <c>claude update</c>：每次在 claude.cmd 旁的 <c>.updates</c> 文件里记一行，停 1.5 秒（让并发请求撞上「正在升级」）；update-fail 下往标准错误写一句带代理凭据的报错、退出码 1；
+    /// 其余场景把 claude.cmd 的版本行改成 <see cref="UpdateToVariable"/> 的值（没有时不改），退出码 0。
+    /// </summary>
+    private static int Update(string scenario)
+    {
+        var self = Environment.GetEnvironmentVariable(SelfVariable) ?? throw new InvalidOperationException(SelfVariable + " missing");
+        File.AppendAllText(self + ".updates", OwnVersion() + "\n");
+        Thread.Sleep(1500);
+        if (scenario == "update-fail") { Console.Error.WriteLine("npm ERR! code EBUSY fixture-update-failure via http://family:fixture-proxy-secret@127.0.0.1:7897"); return 1; }
+        if (Environment.GetEnvironmentVariable(UpdateToVariable) is { Length: > 0 } target)
+        {
+            File.WriteAllText(self, File.ReadAllText(self).Replace($"{VersionVariable}={OwnVersion()}", $"{VersionVariable}={target}", StringComparison.Ordinal));
+            Console.WriteLine($"Successfully updated from {OwnVersion()} to version {target}");
+        }
+        else Console.WriteLine("Claude Code is up to date (" + OwnVersion() + ")");
+        return 0;
+    }
+
+    /// <summary>假 Claude Code 此刻的版本：取 <see cref="VersionVariable"/>，没有时取本程序文件版本的前三段。</summary>
+    private static string OwnVersion() => Environment.GetEnvironmentVariable(VersionVariable) is { Length: > 0 } set ? set
+        : System.Text.RegularExpressions.Regex.Match(FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductVersion ?? "", @"^\d+\.\d+\.\d+") is { Success: true } own ? own.Value : "0.0.0";
 
     /// <summary>假 Claude Code 自带的身份版本从这个环境变量读；定位器写进 claude.cmd，改版本就是「升级」。不以 CLAUDE_ 或 ANTHROPIC_ 开头，隔离环境不会清掉它。</summary>
     public const string VersionVariable = "HOUSEHOLD_FAKE_CLAUDE_VERSION";
 
-    /// <summary>假 Claude Code 发请求时带的身份头；<paramref name="version"/> 进 User-Agent。用例拿它核对发往官方的就是这一份。</summary>
-    public static KeyValuePair<string, string>[] Identity(string version) =>
+    /// <summary>假 Claude Code 以入口 <paramref name="entrypoint"/> 发请求时带的身份头；<paramref name="version"/> 与入口进 User-Agent。用例拿它核对发往官方的就是这一份。</summary>
+    public static KeyValuePair<string, string>[] Identity(string version, string entrypoint = "sdk-cli") =>
     [
-        new("User-Agent", $"claude-cli/{version} (external, sdk-cli)"), new("x-app", "cli"), new("X-Stainless-OS", "FakeOS"), new("X-Stainless-Arch", "fake64"),
+        new("User-Agent", $"claude-cli/{version} (external, {entrypoint})"), new("x-app", "cli"), new("X-Stainless-OS", "FakeOS"), new("X-Stainless-Arch", "fake64"),
         new("X-Stainless-Runtime-Version", "v0.0.0-fixture"), new("anthropic-dangerous-direct-browser-access", "true")
     ];
 
     /// <summary>
-    /// 扮演 <c>claude --print</c>：向 <c>ANTHROPIC_BASE_URL</c> 发一次带假身份头的 Messages 请求，2xx 时退出码 0、否则 1；no-identity 下一个请求都不发、退出码 3（模拟本机 Claude Code 坏了）。
-    /// 身份版本取 <see cref="VersionVariable"/>，没有时取本程序文件版本的前三段。
+    /// 扮演 <c>claude --print</c> 或交互模式：向 <c>ANTHROPIC_BASE_URL</c> 发一次带假身份头的 Messages 请求，2xx 时退出码 0、否则 1；no-identity 下一个请求都不发、退出码 3（模拟本机 Claude Code 坏了）。
+    /// 入口照真 claude.exe 的规则：有 CLAUDE_CODE_ENTRYPOINT 用它；否则 --print 或输出被重定向（不是真终端）时为 sdk-cli，在真终端里为 cli。入口与版本同时写进 User-Agent 和正文计费头。
     /// </summary>
     private static async Task<int> Print(string scenario, string[] args)
     {
         if (scenario == "no-identity") return 3;
-        var version = Environment.GetEnvironmentVariable(VersionVariable) is { Length: > 0 } set ? set
-            : System.Text.RegularExpressions.Regex.Match(FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductVersion ?? "", @"^\d+\.\d+\.\d+") is { Success: true } own ? own.Value : "0.0.0";
+        var version = OwnVersion();
+        var entrypoint = Environment.GetEnvironmentVariable("CLAUDE_CODE_ENTRYPOINT") is { Length: > 0 } named ? named
+            : args.Contains("--print") || Console.IsOutputRedirected ? "sdk-cli" : "cli";
         var index = Array.IndexOf(args, "--model"); var model = index >= 0 && index + 1 < args.Length ? args[index + 1] : "fixture-model";
         using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false });
         using var request = new HttpRequestMessage(HttpMethod.Post, Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL") + "/v1/messages?beta=true")
         {
-            Content = new StringContent(JsonSerializer.Serialize(new { model, max_tokens = 16, stream = false, system = new[] { new { type = "text", text = "fixture system" } },
+            Content = new StringContent(JsonSerializer.Serialize(new { model, max_tokens = 16, stream = false, system = new[] { new { type = "text", text = $"x-anthropic-billing-header: cc_version={version}.abc; cc_entrypoint={entrypoint};" }, new { type = "text", text = "fixture system" } },
                 messages = new[] { new { role = "user", content = "Reply with OK." } }, tools = Array.Empty<object>() }), System.Text.Encoding.UTF8, "application/json")
         };
-        foreach (var header in Identity(version)) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        foreach (var header in Identity(version, entrypoint)) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
         request.Headers.Authorization = new("Bearer", Environment.GetEnvironmentVariable("ANTHROPIC_AUTH_TOKEN"));
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01"); request.Headers.TryAddWithoutValidation("anthropic-beta", "claude-code-20250219");
         using var response = await http.SendAsync(request);
@@ -129,8 +162,15 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
     private readonly string directory = Directory.CreateTempSubdirectory("hr-fake-claude-").FullName;
     private string version = "1.0.0";
 
-    /// <summary>假 Claude Code 此刻的身份版本；<see cref="Reinstall"/> 改它。</summary>
-    public string Version => version;
+    /// <summary>假 Claude Code 此刻的身份版本；<see cref="Reinstall"/> 或假升级改它（假升级直接改写 claude.cmd 的版本行）。</summary>
+    public string Version => File.Exists(Path.Combine(directory, "claude.cmd"))
+        && System.Text.RegularExpressions.Regex.Match(File.ReadAllText(Path.Combine(directory, "claude.cmd")), FakeClaude.VersionVariable + @"=(\S+)") is { Success: true } found ? found.Groups[1].Value : version;
+
+    /// <summary>假 <c>claude update</c> 要升到的版本；为空时假升级不改版本。要在第一次定位之前设好（写进 claude.cmd）。</summary>
+    public string UpdateTo { get; set; } = "";
+
+    /// <summary>假 <c>claude update</c> 被跑了几次（每次在 claude.cmd 旁的 .updates 文件里记一行）。</summary>
+    public int Updates => File.Exists(Path.Combine(directory, "claude.cmd.updates")) ? File.ReadAllLines(Path.Combine(directory, "claude.cmd.updates")).Length : 0;
 
     /// <summary>
     /// 模拟本机 Claude Code 升级或重装：换场景和身份版本，重写 claude.cmd（大小或修改时间随之改变，统一身份据此重取）；场景改成 missing 等于卸掉。
@@ -159,13 +199,14 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
             var host = Environment.ProcessPath!;
             var command = Path.GetFileNameWithoutExtension(host).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
                 ? $"\"{host}\" \"{typeof(FakeClaude).Assembly.Location}\"" : $"\"{host}\"";
-            File.WriteAllText(path, $"@set {FakeClaude.VersionVariable}={version}\r\n@{command} --fake-claude {scenario} %*\r\n");
+            File.WriteAllText(path, $"@set {FakeClaude.VersionVariable}={version}\r\n@set {FakeClaude.SelfVariable}=%~f0\r\n@set {FakeClaude.UpdateToVariable}={UpdateTo}\r\n@{command} --fake-claude {scenario} %*\r\n");
         }
         return path;
     }
 
-    /// <summary>登录测试用不到。</summary>
-    public Task<string> DetectUserAgent() => Task.FromResult("claude-cli/0.0.0 (external, cli)");
+    /// <summary>照真定位器读 <c>claude --version</c> 的结果组成请求特征：版本取 claude.cmd 里此刻写着的那个；场景为 missing 时照真定位器抛未安装。</summary>
+    public Task<string> DetectUserAgent() => scenario == "missing" ? throw new InvalidOperationException("未找到 Claude Code 原生 claude.exe，请先安装官方客户端。")
+        : Task.FromResult($"claude-cli/{Version} (external, cli)");
 
     /// <summary>登录测试用不到。</summary>
     public ProcessStartInfo Prepare(string bundleDirectory, IEnumerable<string> arguments) => throw new NotSupportedException();

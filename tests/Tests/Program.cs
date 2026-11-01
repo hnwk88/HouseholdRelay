@@ -137,6 +137,11 @@ var tests = new (string Name, Func<Task> Test)[]
     ("official identity: API key and compatible account requests stay byte-for-byte as before", ClaudeCodeIdentityTests.OtherModesUnchanged),
     ("official identity: the official test runs real Claude Code only and discovery carries the identity", ClaudeCodeIdentityTests.OfficialTestUsesClaudeCodeOnly),
     ("official identity: a rejected test quotes the upstream type and message, redacted and clipped", ClaudeCodeIdentityTests.FailureQuotesUpstream),
+    ("official alignment: the User-Agent entrypoint and version follow the body billing header; cli comes from interactive mode", ClaudeCodeAlignmentTests.EntrypointFollowsBody),
+    ("official alignment: the environment section, tools and body bytes reach the upstream unchanged", ClaudeCodeAlignmentTests.EnvironmentUnchanged),
+    ("official alignment: a newer client upgrades the relay Claude Code once for concurrent requests, then the new identity is sent", ClaudeCodeAlignmentTests.NewerClientUpgradesOnce),
+    ("official alignment: a failed upgrade reads its redacted output, keeps forwarding, waits an hour, and the button retries with CSRF", ClaudeCodeAlignmentTests.UpgradeFailureReadsOutput),
+    ("official alignment: an older client never downgrades and the page asks to upgrade that computer", ClaudeCodeAlignmentTests.OlderClientNoUpgrade),
     ("private certificate lifecycle, version conflicts and expired startup rejection", PrivateCertificateTests.Lifecycle),
     ("private certificate web creation, CSRF and public-only trust download", PrivateCertificateTests.WebJourney),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)

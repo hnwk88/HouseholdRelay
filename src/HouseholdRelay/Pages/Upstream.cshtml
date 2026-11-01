@@ -142,6 +142,9 @@
 </section>
 <section class="card" aria-labelledby="account-heading"><h2 id="account-heading">官方账户</h2>
     <p class="status" data-claude-identity>@Model.IdentityText</p>
+    <p data-claude-update>@Model.UpdateText</p>
+    <form method="post" asp-page-handler="UpgradeClaudeCode"><button type="submit" class="secondary">升级中转的 Claude Code</button></form>
+    <p>@UpstreamModel.EnvironmentNote</p>
     <h3 id="account-login-heading">登录官方账户</h3>
     <p>按「登录官方账户」后，程序会让本机的 Claude Code 打开浏览器登录页（任务栏里会多一个最小化的 Claude Code 窗口，不用管它）。在浏览器里登录完，这一页会自动显示结果并读取模型目录。登录凭据只存在中转自己的数据目录里，不碰本机 Claude Code 自己的登录；到期前自动刷新，不用重新粘贴。</p>
     <form method="post" asp-page-handler="LoginAccount" class="settings" aria-labelledby="account-login-heading"><input type="hidden" asp-for="Version" />

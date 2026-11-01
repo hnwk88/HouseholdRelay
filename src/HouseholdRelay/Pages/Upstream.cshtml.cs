@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Security.Cryptography;
 using Application.Interfaces.ClaudeCode;
+using Application.Interfaces.Identity;
 using Application.Interfaces.Upstream;
 using Application.Services.Upstream;
 using Core.Upstream;
@@ -10,7 +11,7 @@ using Infrastructure.ExternalSources.ClaudeCode;
 namespace HouseholdRelay.Pages;
 
 /// <summary>上游接入页：起名字、填地址、贴密钥、获取模型、按写明费用的按钮测试，再按名称切换；认证方式与检测方式由程序探测。</summary>
-public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upstreamPool, IClaudeCodeIdentitySource identities) : PageModel
+public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upstreamPool, IClaudeCodeIdentitySource identities, IClaudeCodeUpdater updater, IIdentityService people) : PageModel
 {
     /// <summary>「API 供应商」表单。</summary>
     [BindProperty] public UpstreamInput Api { get; set; } = new();
@@ -40,6 +41,10 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public string RoutingText { get; private set; } = "";
     /// <summary>发往官方账户的请求用的是哪份身份、此刻取没取到，读成一句话；取不到时是与客户端、用量页同一句原因与下一步。</summary>
     public string IdentityText { get; private set; } = "";
+    /// <summary>中转与客户端的 Claude Code 版本、谁新、上次升级的时间与结果，读成一段话。</summary>
+    public string UpdateText { get; private set; } = "";
+    /// <summary>官方账户小节里关于系统提示环境段的提醒：中转不改写它，官方看得到客户端的系统和目录。</summary>
+    public const string EnvironmentNote = "官方能从系统提示里看到客户端的系统、命令行和工作目录（中转不改写它们，改了模型会按错的目录和系统给命令）。官方账户宜在与中转同一种系统的电脑上用。";
     /// <summary>在用的那一家已导出搬走时读出的说明与下一步；没有搬走时为 null。</summary>
     public string? MovedText { get; private set; }
     /// <summary>在用的是登录得到、还没搬走的官方账户时，导出表单里事先读出「勾选它导出后会怎样」；否则为 null。</summary>
@@ -134,6 +139,14 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         }
         // 没测通过或活动版本已被别处改动：读出原因，活动上游保持原样。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        Load(null); return Page();
+    }
+
+    /// <summary>升级中转的 Claude Code（需已登录且通过防 CSRF 校验）：用本机安装方式自带的升级，后台已在升级时等那一次；页面读出结果，失败时带升级命令原话。</summary>
+    public async Task<IActionResult> OnPostUpgradeClaudeCodeAsync(CancellationToken cancellation)
+    {
+        ModelState.Clear();
+        Notice = await updater.Update(cancellation);
         Load(null); return Page();
     }
 
@@ -288,6 +301,8 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
             ? $"上游冷却中，约 {state.CooldownSeconds} 秒后重试" : Active.Report?.CanActivate == true ? "已通过最小调用检测" : "已迁移凭据，调用尚未检测";
         RoutingText = RoutingSentence(upstreamPool, Active, Saved);
         IdentityText = identities.Describe();
+        var users = people.List();
+        UpdateText = updater.Describe(id => users.FirstOrDefault(user => user.Id == id)?.DisplayName ?? "已删除的使用者");
     }
 
     /// <summary>上游页与概览共用的走法读句：名称按主键从已保存上游里查，查不到时读「已删除的上游」，在用的不是从已保存上游切换来的读「未命名上游」。</summary>

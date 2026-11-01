@@ -25,6 +25,7 @@ public sealed class RelayServer : IDisposable
     private readonly RelayConfiguration config;
     private readonly IRelayEventLog log;
     private readonly IClaudeCodeIdentitySource? identities;
+    private readonly IClaudeCodeUpdater? updater;
     private long completed;
     /// <summary>个人令牌鉴权名单；每个请求在入口、排队后、上传后和发往上游前都会重新核验，令牌被停用或轮换后尽快拒绝。</summary>
     public ClientRegistry Clients { get; }
@@ -39,19 +40,26 @@ public sealed class RelayServer : IDisposable
 
     /// <summary>
     /// 用量服务可选：独立中转模式不登记用量服务，此时不记录用量，个人用量入口返回 503。
-    /// 统一身份来源可选：独立中转模式不登记，此时发往官方账户的请求一律不发，读出原因。
+    /// 统一身份来源可选：独立中转模式不登记，此时发往官方账户的请求一律不发，读出原因。升级器可选：不登记时不跟客户端版本。
     /// </summary>
     public RelayServer(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUsageService? usage = null,
-        IClaudeCodeIdentitySource? identities = null)
+        IClaudeCodeIdentitySource? identities = null, IClaudeCodeUpdater? updater = null)
     {
         config.Validate();
-        this.config = config; this.log = log; this.identities = identities;
+        this.config = config; this.log = log; this.identities = identities; this.updater = updater;
         Clients = clients; Admission = admission; Upstreams = upstreams; Usage = usage;
     }
 
-    /// <summary>取发往官方账户的统一身份；没有登记身份来源时按「没取到」抛出，请求不发。</summary>
-    private Task<ClaudeCodeIdentity> Identity(CancellationToken cancellation) =>
-        identities?.Current(cancellation) ?? throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.Missing);
+    /// <summary>
+    /// 取发往官方账户的统一身份：按客户端自报的入口取同一种模式的那一份，请求头与正文的入口一致；没有登记身份来源时按「没取到」抛出，请求不发。
+    /// 取到后把客户端版本与这份身份的版本交给升级器，客户端更新时中转在后台升级，这次请求照常用当前身份发。
+    /// </summary>
+    private async Task<ClaudeCodeIdentity> Identity(ClaudeCodeClient client, string clientId, CancellationToken cancellation)
+    {
+        var identity = await (identities?.Current(client.IdentityEntrypoint, cancellation) ?? throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.Missing));
+        updater?.Observe(client.Version, identity.Version, clientId);
+        return identity;
+    }
 
     /// <summary>构建对外中转宿主（只构建不启动，由调用方启动）：正式服务必须提供证书并监听所有网卡上的 <see cref="RelayConfiguration.ListenPort"/>；只有测试可传 <paramref name="testPort"/> 改为监听本机回环且允许不启用 HTTPS。限制请求体、请求头大小与超时，所有请求交给 <see cref="Handle"/>。</summary>
     public WebApplication Build(X509Certificate2? certificate, int? testPort = null, X509Certificate2Collection? certificateChain = null)
@@ -144,6 +152,8 @@ public sealed class RelayServer : IDisposable
             byte[] Body(IUpstreamLease target) => method == "POST" && target.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata
                 ? normalized ??= DeviceMetadata.Normalize(body, config.DeviceId) : body;
             var upstream = route.Next(model)!;
+            // 客户端自报的 Claude Code 版本与入口，第一次发往官方账户时才读一次。
+            ClaudeCodeClient? caller = null;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
             // 总超时与客户端断开共用同一个令牌：客户端断开时立即取消上游调用，超时时也会取消，二者在下方 catch 里按 RequestAborted 区分。
             // 换家时不重新计时，几家加起来也不超过同一个总超时。
@@ -167,7 +177,7 @@ public sealed class RelayServer : IDisposable
                         try
                         {
                             // 官方账户只带中转所在电脑 Claude Code 的统一身份；取不到就不组装、不发出，下面按可切换的失败处理。
-                            var identity = upstream.Snapshot.Options.OfficialAccount ? await Identity(timeout.Token) : null;
+                            var identity = upstream.Snapshot.Options.OfficialAccount ? await Identity(caller ??= ClaudeCodeClient.Read(body, context.Request.Headers.UserAgent), client.Id, timeout.Token) : null;
                             request = upstream.Request(path, context.Request.QueryString.ToString(), Body(upstream), method, config.UpstreamUserAgent, context.Request.Headers, identity);
                             response = await upstream.Send(request, timeout.Token);
                         }

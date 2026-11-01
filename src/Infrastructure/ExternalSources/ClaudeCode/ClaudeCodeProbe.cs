@@ -2,6 +2,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using Application.Contracts.Upstream;
 using Application.Interfaces.ClaudeCode;
 using Application.Interfaces.Security;
@@ -35,7 +36,7 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     /// 代理已启用却取不到地址时在启动子进程前抛出 <see cref="Core.Upstream.UpstreamProxyUnavailableException"/>。
     /// </summary>
     public Task<ProbeReply> Run(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) =>
-        Session<ProbeReply>(transport.Snapshot.Options.Model, new Uri(transport.Snapshot.Options.BaseUrl), async (context, completion) =>
+        Session<ProbeReply>(transport.Snapshot.Options.Model, null, new Uri(transport.Snapshot.Options.BaseUrl), async (context, completion) =>
         {
             try
             {
@@ -59,11 +60,11 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
         }, reply => (int)reply.Status is >= 200 and < 300, cancellation);
 
     /// <summary>
-    /// 让隔离的 Claude Code 向本机临时端点发一次请求，只记下它带的请求头（去掉认证头）就回 400 结束会话；不转发、不碰任何上游，不计费。
-    /// 子进程的代理变量按官方地址的全局代理设置写，与登录、续期的子进程是同一个环境。
+    /// 让隔离的 Claude Code 以入口 <paramref name="entrypoint"/> 那种模式向本机临时端点发一次请求，只记下它带的请求头（去掉认证头）就回 400 结束会话；不转发、不碰任何上游，不计费。
+    /// cli 在伪控制台里跑交互模式（不开窗口，配置目录预写首次运行设置），其余用 <c>--print</c>。子进程的代理变量按官方地址的全局代理设置写，与登录、续期的子进程是同一个环境。
     /// </summary>
-    public Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(CancellationToken cancellation) =>
-        Session<IReadOnlyList<KeyValuePair<string, string>>>(null, OfficialAccountLogin.OfficialTarget, (context, completion) =>
+    public Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(string entrypoint, CancellationToken cancellation) =>
+        Session<IReadOnlyList<KeyValuePair<string, string>>>(null, entrypoint, OfficialAccountLogin.OfficialTarget, (context, completion) =>
         {
             completion.TrySetResult([.. context.Request.Headers.Where(header => !header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
                 .SelectMany(header => header.Value.Select(value => KeyValuePair.Create(header.Key, value ?? "")))]);
@@ -73,9 +74,9 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     /// <summary>
     /// 起一个只认一次性本地令牌的本机临时端点，再以隔离环境启动 Claude Code 指向它；第一个合格请求交给 <paramref name="handle"/>，之后的一律 429，SDK 重试也不会多发。
     /// 等到 <paramref name="handle"/> 给出结果就返回；<paramref name="settle"/> 对结果为真时还要等子进程正常退出并排空输出，确认客户端完整走完一次会话。
-    /// 先找 claude.exe 再按 <paramref name="target"/> 解析代理，两步失败都在启动子进程之前抛出。
+    /// 先找 claude.exe 再按 <paramref name="target"/> 解析代理，两步失败都在启动子进程之前抛出。<paramref name="entrypoint"/> 为 null 时是检测（<c>--print</c>），否则是按这个入口抓身份。
     /// </summary>
-    private async Task<T> Session<T>(string? model, Uri target, Func<HttpContext, TaskCompletionSource<T>, Task> handle, Func<T, bool> settle, CancellationToken cancellation)
+    private async Task<T> Session<T>(string? model, string? entrypoint, Uri target, Func<HttpContext, TaskCompletionSource<T>, Task> handle, Func<T, bool> settle, CancellationToken cancellation)
     {
         var executable = launcher.FindClaude();
         var route = proxy.Resolve(target);
@@ -96,15 +97,26 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
             if (Interlocked.CompareExchange(ref dispatched, 1, 0) != 0) { context.Response.StatusCode = 429; return; }
             await handle(context, completion);
         });
-        Process? child = null;
+        Process? child = null; PseudoConsoleProcess? terminal = null;
         try
         {
             await app.StartAsync(cancellation);
-            var start = Start(executable, directory, app.Urls.Single(), localToken, model, route);
-            child = Process.Start(start) ?? throw new InvalidOperationException("无法启动隔离的 Claude Code 检测。");
-            child.PriorityClass = ProcessPriorityClass.BelowNormal; child.StandardInput.Close();
-            var output = child.StandardOutput.BaseStream.CopyToAsync(Stream.Null, cancellation);
-            var errors = child.StandardError.BaseStream.CopyToAsync(Stream.Null, cancellation);
+            var start = Start(executable, directory, app.Urls.Single(), localToken, model, route, entrypoint);
+            Task output, errors;
+            if (entrypoint == "cli")
+            {
+                // 交互模式要真终端：在伪控制台里起，首次运行的安全须知按一次回车；屏幕输出由它自己读掉。
+                terminal = PseudoConsoleProcess.Start(start, new Dictionary<string, string> { ["Press Enter to continue"] = "\r" });
+                child = terminal.Process; output = terminal.Drained; errors = Task.CompletedTask;
+            }
+            else
+            {
+                child = Process.Start(start) ?? throw new InvalidOperationException("无法启动隔离的 Claude Code 检测。");
+                child.StandardInput.Close();
+                output = child.StandardOutput.BaseStream.CopyToAsync(Stream.Null, cancellation);
+                errors = child.StandardError.BaseStream.CopyToAsync(Stream.Null, cancellation);
+            }
+            child.PriorityClass = ProcessPriorityClass.BelowNormal;
             var exited = child.WaitForExitAsync(cancellation);
             // 同时等候选请求完成和子进程退出：子进程没发请求就退出时立即报错，不必干等到取消。
             var finished = await Task.WhenAny(completion.Task, exited);
@@ -123,7 +135,8 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
         // 无论成败都结束子进程树、停掉临时端点并删除隔离目录，防止残留进程或临时配置留在本机。
         finally
         {
-            if (child is not null)
+            if (terminal is not null) terminal.Dispose();
+            else if (child is not null)
             {
                 if (!child.HasExited) { child.Kill(true); await child.WaitForExitAsync(); }
                 child.Dispose();
@@ -144,13 +157,26 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     /// <summary>
     /// 组装隔离检测用的子进程启动参数：清掉继承的 Anthropic、Claude 和证书相关环境变量，代理变量先清后按全局设置写入，只指向本机临时端点和一次性本地令牌，并以安全模式、单轮、无工具方式运行；
     /// <paramref name="model"/> 为 null 时不传 <c>--model</c>（只抓请求头时用它自己的默认模型）。
+    /// <paramref name="entrypoint"/> 是 cli 时改成交互模式的参数（初始提示作为位置参数），并在配置目录预写「已完成引导、已选主题、已信任工作目录」，免得停在首次运行界面；
+    /// 是 sdk-cli 以外的其他入口时设 CLAUDE_CODE_ENTRYPOINT，让真 claude.exe 自己按这个入口发。
     /// </summary>
-    internal static ProcessStartInfo Start(string executable, string directory, string url, string token, string? model, Core.Upstream.ProxyRoute route)
+    internal static ProcessStartInfo Start(string executable, string directory, string url, string token, string? model, Core.Upstream.ProxyRoute route, string? entrypoint = null)
     {
         var start = new ProcessStartInfo(executable) { WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        IsolatedClaudeEnvironment.Apply(start, Path.Combine(directory, "config"), route);
+        var config = Path.Combine(directory, "config");
+        IsolatedClaudeEnvironment.Apply(start, config, route);
         start.Environment["ANTHROPIC_BASE_URL"] = url; start.Environment["ANTHROPIC_AUTH_TOKEN"] = token;
+        if (entrypoint == "cli")
+        {
+            Directory.CreateDirectory(config);
+            var trusted = new JsonObject { ["hasTrustDialogAccepted"] = true, ["hasCompletedProjectOnboarding"] = true };
+            File.WriteAllText(Path.Combine(config, ".claude.json"), new JsonObject { ["hasCompletedOnboarding"] = true, ["theme"] = "dark",
+                ["projects"] = new JsonObject { [directory] = trusted.DeepClone(), [directory.Replace('\\', '/')] = trusted.DeepClone() } }.ToJsonString());
+            foreach (var argument in new[] { "--strict-mcp-config", "--setting-sources", "", "Reply with OK." }) start.ArgumentList.Add(argument);
+            return start;
+        }
+        if (entrypoint is not null && entrypoint != ClaudeCodeClient.DefaultEntrypoint) start.Environment["CLAUDE_CODE_ENTRYPOINT"] = entrypoint;
         string[] chosen = model is null ? [] : ["--model", model];
         string[] arguments = ["--safe-mode", "--no-session-persistence", "--strict-mcp-config", "--no-chrome", "--tools", "",
             "--setting-sources", "", .. chosen, "--max-turns", "1", "--output-format", "json", "--print", "Reply with OK."];

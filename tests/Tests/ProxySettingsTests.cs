@@ -138,14 +138,14 @@ static class ProxySettingsTests
         /// <summary>不应被调用；被调用即抛出。</summary>
         public Task<Application.Contracts.Upstream.ProbeReply> Run(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) => throw new InvalidOperationException("未安装");
         /// <summary>不应被调用；被调用即抛出。</summary>
-        public Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(CancellationToken cancellation) => throw new InvalidOperationException("未安装");
+        public Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(string entrypoint, CancellationToken cancellation) => throw new InvalidOperationException("未安装");
     }
 
     /// <summary>本机没装 Claude Code 时的统一身份来源：API 上游用不到，被问到就读「找不到」。</summary>
     private sealed class AbsentIdentity : Application.Interfaces.ClaudeCode.IClaudeCodeIdentitySource
     {
         /// <summary>始终按找不到 Claude Code 抛出。</summary>
-        public Task<ClaudeCodeIdentity> Current(CancellationToken cancellation) => throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.NotFound);
+        public Task<ClaudeCodeIdentity> Current(string entrypoint, CancellationToken cancellation) => throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.NotFound);
         /// <summary>读「找不到」。</summary>
         public string Describe() => ClaudeCodeIdentity.NotFound;
     }
