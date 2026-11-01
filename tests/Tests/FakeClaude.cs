@@ -28,6 +28,8 @@ static class FakeClaude
     {
         var scenario = args[1]; var command = string.Join(' ', args.Skip(2));
         var directory = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") ?? throw new InvalidOperationException("CLAUDE_CONFIG_DIR missing");
+        // 真 Claude Code 自己建配置目录；检测与抓身份给的是还不存在的子目录。
+        Directory.CreateDirectory(directory);
         File.AppendAllText(Path.Combine(directory, "fake-calls.log"), command + "\n");
         var inherited = Environment.GetEnvironmentVariables().Keys.Cast<string>()
             .Where(key => key.StartsWith("ANTHROPIC_", StringComparison.OrdinalIgnoreCase)
@@ -48,7 +50,42 @@ static class FakeClaude
             if (scenario == "slow-refresh") Thread.Sleep(TimeSpan.FromSeconds(30));
             Write(directory, RefreshedToken, 60); Console.WriteLine("{}"); return 0;
         }
+        if (args.Contains("--print")) return Print(scenario, args).GetAwaiter().GetResult();
         return 2;
+    }
+
+    /// <summary>假 Claude Code 自带的身份版本从这个环境变量读；定位器写进 claude.cmd，改版本就是「升级」。不以 CLAUDE_ 或 ANTHROPIC_ 开头，隔离环境不会清掉它。</summary>
+    public const string VersionVariable = "HOUSEHOLD_FAKE_CLAUDE_VERSION";
+
+    /// <summary>假 Claude Code 发请求时带的身份头；<paramref name="version"/> 进 User-Agent。用例拿它核对发往官方的就是这一份。</summary>
+    public static KeyValuePair<string, string>[] Identity(string version) =>
+    [
+        new("User-Agent", $"claude-cli/{version} (external, sdk-cli)"), new("x-app", "cli"), new("X-Stainless-OS", "FakeOS"), new("X-Stainless-Arch", "fake64"),
+        new("X-Stainless-Runtime-Version", "v0.0.0-fixture"), new("anthropic-dangerous-direct-browser-access", "true")
+    ];
+
+    /// <summary>
+    /// 扮演 <c>claude --print</c>：向 <c>ANTHROPIC_BASE_URL</c> 发一次带假身份头的 Messages 请求，2xx 时退出码 0、否则 1；no-identity 下一个请求都不发、退出码 3（模拟本机 Claude Code 坏了）。
+    /// 身份版本取 <see cref="VersionVariable"/>，没有时取本程序文件版本的前三段。
+    /// </summary>
+    private static async Task<int> Print(string scenario, string[] args)
+    {
+        if (scenario == "no-identity") return 3;
+        var version = Environment.GetEnvironmentVariable(VersionVariable) is { Length: > 0 } set ? set
+            : System.Text.RegularExpressions.Regex.Match(FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductVersion ?? "", @"^\d+\.\d+\.\d+") is { Success: true } own ? own.Value : "0.0.0";
+        var index = Array.IndexOf(args, "--model"); var model = index >= 0 && index + 1 < args.Length ? args[index + 1] : "fixture-model";
+        using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false });
+        using var request = new HttpRequestMessage(HttpMethod.Post, Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL") + "/v1/messages?beta=true")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new { model, max_tokens = 16, stream = false, system = new[] { new { type = "text", text = "fixture system" } },
+                messages = new[] { new { role = "user", content = "Reply with OK." } }, tools = Array.Empty<object>() }), System.Text.Encoding.UTF8, "application/json")
+        };
+        foreach (var header in Identity(version)) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        request.Headers.Authorization = new("Bearer", Environment.GetEnvironmentVariable("ANTHROPIC_AUTH_TOKEN"));
+        request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01"); request.Headers.TryAddWithoutValidation("anthropic-beta", "claude-code-20250219");
+        using var response = await http.SendAsync(request);
+        Console.WriteLine("{}");
+        return response.IsSuccessStatusCode ? 0 : 1;
     }
 
     /// <summary>
@@ -90,6 +127,20 @@ static class FakeClaude
 sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
 {
     private readonly string directory = Directory.CreateTempSubdirectory("hr-fake-claude-").FullName;
+    private string version = "1.0.0";
+
+    /// <summary>假 Claude Code 此刻的身份版本；<see cref="Reinstall"/> 改它。</summary>
+    public string Version => version;
+
+    /// <summary>
+    /// 模拟本机 Claude Code 升级或重装：换场景和身份版本，重写 claude.cmd（大小或修改时间随之改变，统一身份据此重取）；场景改成 missing 等于卸掉。
+    /// </summary>
+    public void Reinstall(string newScenario, string newVersion)
+    {
+        scenario = newScenario; version = newVersion;
+        // 只删本定位器自己临时目录里的那个小脚本，下次定位时按新场景和版本重写。
+        File.Delete(Path.Combine(directory, "claude.cmd"));
+    }
 
     /// <summary>把本定位器与不建窗口的登录参数登记进网页主机，覆盖正式登记。</summary>
     public void Register(IServiceCollection services)
@@ -108,7 +159,7 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
             var host = Environment.ProcessPath!;
             var command = Path.GetFileNameWithoutExtension(host).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
                 ? $"\"{host}\" \"{typeof(FakeClaude).Assembly.Location}\"" : $"\"{host}\"";
-            File.WriteAllText(path, $"@{command} --fake-claude {scenario} %*\r\n");
+            File.WriteAllText(path, $"@set {FakeClaude.VersionVariable}={version}\r\n@{command} --fake-claude {scenario} %*\r\n");
         }
         return path;
     }

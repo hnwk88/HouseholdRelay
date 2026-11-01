@@ -33,7 +33,7 @@ public sealed class UpstreamAttempt(int number, string? candidateId, long versio
     public int? UpstreamStatus { get; private set; }
     /// <summary>上游响应头里的请求编号（request-id 或 x-request-id），格式不合或含秘密时为 null。</summary>
     public string? UpstreamRequestId { get; private set; }
-    /// <summary>错误类型：上游给的 error.type 原值，或本中转的分类（unreadable、unrecognized、connection_failed、timeout、interrupted、protocol、cancelled、relay_error）；成功时为 null。</summary>
+    /// <summary>错误类型：上游给的 error.type 原值，或本中转的分类（unreadable、unrecognized、connection_failed、timeout、interrupted、protocol、cancelled、identity_unavailable、relay_error）；成功时为 null。</summary>
     public string? ErrorType { get; private set; }
     /// <summary>上游给的 error.message，已去掉上游凭据与个人令牌并截到 <see cref="MessageLimit"/> 字以内；没有时为 null。</summary>
     public string? ErrorMessage { get; private set; }
@@ -45,8 +45,9 @@ public sealed class UpstreamAttempt(int number, string? candidateId, long versio
     /// <summary>
     /// 自动切换时这一次失败该不该换下一家（只在还没向客户端写出任何字节时问）：连不上（含建连超时、TLS 失败）、上游 5xx（含 529）、429、401、403 换；
     /// 代理不可用不换（代理是全局的，换一家也一样连不上），400、404、413 等请求本身的问题和中转自己的拒绝也不换。
+    /// 官方账户取不到本机 Claude Code 的统一身份时换（这一家根本没发出，别家不受影响），但不暂避、不暂停、不冷却。
     /// </summary>
-    public bool Switchable => ErrorType == "connection_failed" ? ConnectFailure != "proxy" : UpstreamStatus is >= 500 and < 600 or 429 or 401 or 403;
+    public bool Switchable => ErrorType == "connection_failed" ? ConnectFailure != "proxy" : ErrorType == "identity_unavailable" || UpstreamStatus is >= 500 and < 600 or 429 or 401 or 403;
 
     /// <summary>换掉这一家时要不要让它暂避 5 分钟：连不上与 5xx 要；429 沿用 Retry-After 冷却、401 与 403 沿用认证暂停，不另加暂避。</summary>
     public bool Avoids => ErrorType == "connection_failed" || UpstreamStatus is >= 500 and < 600;
@@ -76,6 +77,7 @@ public sealed class UpstreamAttempt(int number, string? candidateId, long versio
         (ErrorType, ConnectFailure) = error switch
         {
             OperationCanceledException when clientAborted => ("cancelled", null),
+            ClaudeCodeIdentityUnavailableException => ("identity_unavailable", null),
             _ when Find<UpstreamProxyUnavailableException>(error) is not null => ("connection_failed", "proxy"),
             // SocketsHttpHandler 的建连超时（含 TLS 握手）抛出带 TimeoutException 的取消；中转自己的总超时不带。
             OperationCanceledException when Find<TimeoutException>(error) is not null => ("connection_failed", "connect_timeout"),
@@ -85,8 +87,8 @@ public sealed class UpstreamAttempt(int number, string? candidateId, long versio
             RelayFailure => ("protocol", null),
             _ => ("relay_error", null)
         };
-        // 中转自己的固定提示（跳转、内容编码、超限）可以原样记；其他异常的消息可能带地址或底层细节，不记。
-        ErrorMessage = error is RelayFailure failure ? Clip(failure.Message, redact) : null;
+        // 中转自己的固定提示（跳转、内容编码、超限、取不到统一身份）可以原样记；其他异常的消息可能带地址或底层细节，不记。
+        ErrorMessage = error is RelayFailure or ClaudeCodeIdentityUnavailableException ? Clip(error.Message, redact) : null;
     }
 
     /// <summary>从 HTTP 建连异常链里分出域名解析、拒绝连接、TLS、建连超时，其余归「其他」。</summary>

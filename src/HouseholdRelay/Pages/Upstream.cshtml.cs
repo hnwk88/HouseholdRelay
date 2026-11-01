@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Security.Cryptography;
+using Application.Interfaces.ClaudeCode;
 using Application.Interfaces.Upstream;
 using Application.Services.Upstream;
 using Core.Upstream;
@@ -9,7 +10,7 @@ using Infrastructure.ExternalSources.ClaudeCode;
 namespace HouseholdRelay.Pages;
 
 /// <summary>上游接入页：起名字、填地址、贴密钥、获取模型、按写明费用的按钮测试，再按名称切换；认证方式与检测方式由程序探测。</summary>
-public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upstreamPool) : PageModel
+public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upstreamPool, IClaudeCodeIdentitySource identities) : PageModel
 {
     /// <summary>「API 供应商」表单。</summary>
     [BindProperty] public UpstreamInput Api { get; set; } = new();
@@ -37,6 +38,8 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public string RuntimeStatus { get; private set; } = "";
     /// <summary>此刻实际走的是哪家、哪家暂避到几点、为什么，按读屏顺序读成一句话。</summary>
     public string RoutingText { get; private set; } = "";
+    /// <summary>发往官方账户的请求用的是哪份身份、此刻取没取到，读成一句话；取不到时是与客户端、用量页同一句原因与下一步。</summary>
+    public string IdentityText { get; private set; } = "";
     /// <summary>在用的那一家已导出搬走时读出的说明与下一步；没有搬走时为 null。</summary>
     public string? MovedText { get; private set; }
     /// <summary>在用的是登录得到、还没搬走的官方账户时，导出表单里事先读出「勾选它导出后会怎样」；否则为 null。</summary>
@@ -284,6 +287,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         RuntimeStatus = MovedText is not null ? "已导出搬走，本机不再用它" : !Active.Configured ? "未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0
             ? $"上游冷却中，约 {state.CooldownSeconds} 秒后重试" : Active.Report?.CanActivate == true ? "已通过最小调用检测" : "已迁移凭据，调用尚未检测";
         RoutingText = RoutingSentence(upstreamPool, Active, Saved);
+        IdentityText = identities.Describe();
     }
 
     /// <summary>上游页与概览共用的走法读句：名称按主键从已保存上游里查，查不到时读「已删除的上游」，在用的不是从已保存上游切换来的读「未命名上游」。</summary>

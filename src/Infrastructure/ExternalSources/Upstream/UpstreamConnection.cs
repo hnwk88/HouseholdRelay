@@ -46,10 +46,16 @@ internal sealed class UpstreamConnection : IUpstreamLease
         var seconds = CooldownSeconds;
         if (seconds > 0) throw new RelayFailure(429, "Upstream cooldown is active.", seconds);
     }
-    /// <summary>按客户端请求组装发往上游的请求：剔除认证、Cookie、逐跳、转发类和 x-stainless 等私有请求头，仅 api-key 模式转发客户端 User-Agent，补齐 anthropic-version，按 OAuth 设置过滤或追加 anthropic-beta，最后写入本版本的上游凭据。返回的请求由调用方释放。</summary>
-    public HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null)
+    /// <summary>
+    /// 按客户端请求组装发往上游的请求：剔除认证、Cookie、逐跳、转发类和 x-stainless 等私有请求头，仅 api-key 模式转发客户端 User-Agent，补齐 anthropic-version，按 OAuth 设置过滤或追加 anthropic-beta，最后写入本版本的上游凭据。
+    /// 发往官方账户时客户端的头只留协议版本、内容类型和会话编号，User-Agent、<c>x-stainless-*</c>、<c>x-app</c> 等一律换成 <paramref name="identity"/>；没带身份就抛
+    /// <see cref="ClaudeCodeIdentityUnavailableException"/>，请求不组装、不发出。返回的请求由调用方释放。
+    /// </summary>
+    public HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null, ClaudeCodeIdentity? identity = null)
     {
         var options = Snapshot.Options;
+        // 官方只能看到中转所在的那一台设备：统一身份没到手宁可不发，不退回客户端自己的标识，也不用设置里的固定字符串。
+        var unified = options.OfficialAccount ? identity ?? throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.Missing) : null;
         var request = new HttpRequestMessage(new HttpMethod(method), UpstreamAddress.Endpoint(options, route, query))
         { Content = new ByteArrayContent(body), Version = HttpVersion.Version20, VersionPolicy = HttpVersionPolicy.RequestVersionOrLower };
         var connectionHeaders = (headers is null ? "" : Header(headers, "Connection").ToString()).Split(',').Select(value => value.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -58,13 +64,19 @@ internal sealed class UpstreamConnection : IUpstreamLease
             {
                 if (PrivateHeaders.Contains(header.Key) || connectionHeaders.Contains(header.Key)
                     || header.Key.StartsWith("x-forwarded-", StringComparison.OrdinalIgnoreCase) || header.Key.StartsWith("x-stainless-", StringComparison.OrdinalIgnoreCase)) continue;
+                if (unified is not null && (!ClaudeCodeIdentity.RequestHeaders.Contains(header.Key) || unified.Has(header.Key))) continue;
                 if (!request.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray())) request.Content.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
             }
-        // API 上游可能校验客户端请求特征；账户模式仍统一使用部署配置的身份。
-        var clientAgent = headers is null ? null : Header(headers, "User-Agent").ToString();
-        var forwardedAgent = options.Mode == "api-key" && !connectionHeaders.Contains("User-Agent")
-            && clientAgent is { Length: > 0 and <= 256 } && !clientAgent.Any(char.IsControl) ? clientAgent : userAgent;
-        request.Headers.TryAddWithoutValidation("User-Agent", forwardedAgent); request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
+        if (unified is not null) foreach (var header in unified.Headers) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        else
+        {
+            // API 上游可能校验客户端请求特征；兼容中转的账户模式仍统一使用部署配置的身份。
+            var clientAgent = headers is null ? null : Header(headers, "User-Agent").ToString();
+            var forwardedAgent = options.Mode == "api-key" && !connectionHeaders.Contains("User-Agent")
+                && clientAgent is { Length: > 0 and <= 256 } && !clientAgent.Any(char.IsControl) ? clientAgent : userAgent;
+            request.Headers.TryAddWithoutValidation("User-Agent", forwardedAgent);
+        }
+        request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
         if (!request.Headers.Contains("anthropic-version")) request.Headers.Add("anthropic-version", "2023-06-01");
         var betas = (headers is null ? "" : Header(headers, "anthropic-beta").ToString()).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(value => options.Mode == "oauth" && options.OAuthBeta || !value.StartsWith("oauth-", StringComparison.OrdinalIgnoreCase));

@@ -67,7 +67,7 @@ static class ProxySettingsTests
         using var response = await fixture.Send(); var body = await response.Content.ReadAsStringAsync();
         Check((int)response.StatusCode == 502 && body.Contains("proxy is enabled but unavailable") && fixture.Calls.IsEmpty, body);
         await using var mock = await UpstreamFixture.Create();
-        var probe = new UpstreamProbe(new AbsentClaudeCode(), unavailable);
+        var probe = new UpstreamProbe(new AbsentClaudeCode(), unavailable, new AbsentIdentity());
         var catalog = await probe.Discover(new UpstreamSnapshot(1, mock.Options() with { AuthenticationManual = false }, "fixture-proxy-secret"), CancellationToken.None);
         Check(catalog.Status == "failed" && catalog.Message.Contains("已选择自动检测系统代理") && mock.Calls.IsEmpty, catalog.Message);
     }
@@ -136,6 +136,17 @@ static class ProxySettingsTests
         /// <summary>始终报告没有安装。</summary>
         public bool IsAvailable => false;
         /// <summary>不应被调用；被调用即抛出。</summary>
-        public Task<Application.Contracts.Upstream.ProbeReply> Run(IUpstreamLease transport, CancellationToken cancellation) => throw new InvalidOperationException("未安装");
+        public Task<Application.Contracts.Upstream.ProbeReply> Run(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) => throw new InvalidOperationException("未安装");
+        /// <summary>不应被调用；被调用即抛出。</summary>
+        public Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(CancellationToken cancellation) => throw new InvalidOperationException("未安装");
+    }
+
+    /// <summary>本机没装 Claude Code 时的统一身份来源：API 上游用不到，被问到就读「找不到」。</summary>
+    private sealed class AbsentIdentity : Application.Interfaces.ClaudeCode.IClaudeCodeIdentitySource
+    {
+        /// <summary>始终按找不到 Claude Code 抛出。</summary>
+        public Task<ClaudeCodeIdentity> Current(CancellationToken cancellation) => throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.NotFound);
+        /// <summary>读「找不到」。</summary>
+        public string Describe() => ClaudeCodeIdentity.NotFound;
     }
 }

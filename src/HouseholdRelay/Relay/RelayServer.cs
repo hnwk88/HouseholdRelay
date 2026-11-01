@@ -3,12 +3,14 @@ using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using Application.Interfaces.ClaudeCode;
 using Application.Interfaces.Relay;
 using Application.Interfaces.Upstream;
 using Application.Interfaces.Usage;
 using Core.Configuration;
 using Core.Identity;
 using Core.Relay;
+using Core.Upstream;
 using Core.Usage;
 using Infrastructure.ExternalSources.Upstream;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -22,6 +24,7 @@ public sealed class RelayServer : IDisposable
     { ["/v1/messages"] = "POST", ["/v1/messages/count_tokens"] = "POST", ["/v1/models"] = "GET" };
     private readonly RelayConfiguration config;
     private readonly IRelayEventLog log;
+    private readonly IClaudeCodeIdentitySource? identities;
     private long completed;
     /// <summary>个人令牌鉴权名单；每个请求在入口、排队后、上传后和发往上游前都会重新核验，令牌被停用或轮换后尽快拒绝。</summary>
     public ClientRegistry Clients { get; }
@@ -34,13 +37,21 @@ public sealed class RelayServer : IDisposable
     /// <summary>用量服务；为空时不记录用量，个人用量数据接口返回 503。</summary>
     public IUsageService? Usage { get; }
 
-    /// <summary>用量服务可选：独立中转模式不登记用量服务，此时不记录用量，个人用量入口返回 503。</summary>
-    public RelayServer(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUsageService? usage = null)
+    /// <summary>
+    /// 用量服务可选：独立中转模式不登记用量服务，此时不记录用量，个人用量入口返回 503。
+    /// 统一身份来源可选：独立中转模式不登记，此时发往官方账户的请求一律不发，读出原因。
+    /// </summary>
+    public RelayServer(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUsageService? usage = null,
+        IClaudeCodeIdentitySource? identities = null)
     {
         config.Validate();
-        this.config = config; this.log = log;
+        this.config = config; this.log = log; this.identities = identities;
         Clients = clients; Admission = admission; Upstreams = upstreams; Usage = usage;
     }
+
+    /// <summary>取发往官方账户的统一身份；没有登记身份来源时按「没取到」抛出，请求不发。</summary>
+    private Task<ClaudeCodeIdentity> Identity(CancellationToken cancellation) =>
+        identities?.Current(cancellation) ?? throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.Missing);
 
     /// <summary>构建对外中转宿主（只构建不启动，由调用方启动）：正式服务必须提供证书并监听所有网卡上的 <see cref="RelayConfiguration.ListenPort"/>；只有测试可传 <paramref name="testPort"/> 改为监听本机回环且允许不启用 HTTPS。限制请求体、请求头大小与超时，所有请求交给 <see cref="Handle"/>。</summary>
     public WebApplication Build(X509Certificate2? certificate, int? testPort = null, X509Certificate2Collection? certificateChain = null)
@@ -152,16 +163,23 @@ public sealed class RelayServer : IDisposable
                         // 尝试记录里的说明先去掉这一家的上游凭据和个人令牌，再截断落库；每家只用自己的凭据，不会带到别家。
                         var secret = upstream.Snapshot.Credential!;
                         redact = value => UpstreamResponses.Redact(UpstreamResponses.Redact(value, secret), token!);
-                        using var request = upstream.Request(path, context.Request.QueryString.ToString(), Body(upstream), method, config.UpstreamUserAgent, context.Request.Headers);
-                        HttpResponseMessage response;
-                        try { response = await upstream.Send(request, timeout.Token); }
-                        // 先按原始异常给这次尝试分类；连不上（含建连超时、TLS 失败）且顺序里还有下一家时让这家暂避、换下一家，否则原样抛给下面的转换，返回给客户端的内容不变。
+                        HttpRequestMessage? request = null; HttpResponseMessage response;
+                        try
+                        {
+                            // 官方账户只带中转所在电脑 Claude Code 的统一身份；取不到就不组装、不发出，下面按可切换的失败处理。
+                            var identity = upstream.Snapshot.Options.OfficialAccount ? await Identity(timeout.Token) : null;
+                            request = upstream.Request(path, context.Request.QueryString.ToString(), Body(upstream), method, config.UpstreamUserAgent, context.Request.Headers, identity);
+                            response = await upstream.Send(request, timeout.Token);
+                        }
+                        // 先按原始异常给这次尝试分类；连不上（含建连超时、TLS 失败）或取不到统一身份，且顺序里还有下一家时换下一家（连不上的那家暂避），否则原样抛给下面的转换，返回给客户端的内容不变。
                         catch (Exception error)
                         {
+                            request?.Dispose();
                             attempt.Failed(error, context.RequestAborted.IsCancellationRequested, redact); classified = true;
                             if (!attempt.Switchable || route.Next(model) is not { } after) throw;
                             attempt.PassOn(); route.Avoid(upstream, attempt); upstream = after; continue;
                         }
+                        using (request)
                         using (response)
                         {
                             upstreamStatus = (int)response.StatusCode;
@@ -194,10 +212,14 @@ public sealed class RelayServer : IDisposable
             { throw new RelayFailure(504, "Upstream request timed out."); }
             // 代理已启用却取不到地址：建连前就拒绝，请求没有发出，用量记成未发出的失败（发送标记在此之前已写，结束记录会按这里改回）；
             // 之前已经换过家时前面那几次确实发出过，仍记为已发送。固定提示让使用者知道去找管理员查代理，不透出代理地址。
-            catch (HttpRequestException error) when (ProxyUnavailable(error))
+            // 给官方账户取统一身份时本机 Claude Code 也按全局代理起，同样在发出之前就拒绝。
+            catch (Exception error) when (error is UpstreamProxyUnavailableException || error is HttpRequestException && ProxyUnavailable(error))
             { dispatched = attempts.Count > 1; throw new RelayFailure(502, "Upstream proxy is enabled but unavailable; the request was not sent. Ask the administrator to check proxy settings in local management."); }
             // 连不上上游时只回固定的 502 提示，不透出上游地址或底层网络错误细节。
             catch (HttpRequestException) { throw new RelayFailure(502, "Upstream connection failed. Check host connectivity."); }
+            // 官方账户取不到中转所在电脑 Claude Code 的统一身份：这一家没有发出，回 503 并读出原因与下一步（与用量页、上游页同一句）；不是官方的问题，不进认证暂停也不进冷却。
+            // 之前已经换过家时前面那几次确实发出过，仍记为已发送。
+            catch (ClaudeCodeIdentityUnavailableException error) { dispatched = attempts.Count > 1; throw new RelayFailure(503, error.Message); }
         }
         // 客户端主动断开：记为 cancelled 并直接中止连接，不再尝试写错误响应。
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { outcome = "cancelled"; context.Abort(); }

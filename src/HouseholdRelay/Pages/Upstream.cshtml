@@ -19,6 +19,7 @@
         <p>@UpstreamModel.AccessText(Model.Active.Options) · 认证用 @UpstreamDetection.AuthenticationLabel(Model.Active.Options.Authentication) · 按 @UpstreamDetection.DiagnosticLabel(Model.Active.Options.Diagnostic) 方式检测 · 模型 @(Model.Active.Options.Model.Length == 0 ? "未填写" : Model.Active.Options.Model)</p>
         <p>Messages 地址：<code>@UpstreamAddress.Endpoint(Model.Active.Options, "/v1/messages")</code></p>
         <p>@(Model.Active.Options.OfficialLogin ? "凭据：由登录得到，Claude Code 到期前自动刷新，不用重新粘贴。" : "凭据：已配置；到期时间未知。")</p>
+        @if (Model.Active.Options.OfficialAccount) { <p>@Model.IdentityText</p> }
     }
     else
     {
@@ -140,6 +141,7 @@
     </form>
 </section>
 <section class="card" aria-labelledby="account-heading"><h2 id="account-heading">官方账户</h2>
+    <p class="status" data-claude-identity>@Model.IdentityText</p>
     <h3 id="account-login-heading">登录官方账户</h3>
     <p>按「登录官方账户」后，程序会让本机的 Claude Code 打开浏览器登录页（任务栏里会多一个最小化的 Claude Code 窗口，不用管它）。在浏览器里登录完，这一页会自动显示结果并读取模型目录。登录凭据只存在中转自己的数据目录里，不碰本机 Claude Code 自己的登录；到期前自动刷新，不用重新粘贴。</p>
     <form method="post" asp-page-handler="LoginAccount" class="settings" aria-labelledby="account-login-heading"><input type="hidden" asp-for="Version" />

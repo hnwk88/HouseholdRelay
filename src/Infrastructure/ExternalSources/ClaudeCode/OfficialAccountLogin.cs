@@ -26,8 +26,8 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
     /// <summary>删除账户时最多等被取消的刷新结束这么久，再删目录。</summary>
     private static readonly TimeSpan RemoveWait = TimeSpan.FromSeconds(10);
-    /// <summary>登录与刷新按官方接口地址解析代理。</summary>
-    private static readonly Uri OfficialTarget = new("https://" + UpstreamDetection.OfficialHost);
+    /// <summary>登录、刷新与抓取统一身份按官方接口地址解析代理。</summary>
+    internal static readonly Uri OfficialTarget = new("https://" + UpstreamDetection.OfficialHost);
     // 取消源只取消不释放：没有计时器也不取等待句柄，不占非托管资源；释放了反而会让删除时的取消撞上已释放的对象。
     private readonly Dictionary<string, (Task Task, DateTimeOffset StartedAt, CancellationTokenSource Stop)> refreshes = new(StringComparer.Ordinal);
     /// <summary>已删除的账户主键；与 <see cref="refreshes"/> 同一把锁，删除后不再起刷新，刷新结束时发现已删除就再删一次目录。</summary>

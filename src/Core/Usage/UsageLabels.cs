@@ -27,7 +27,7 @@ public static class UsageLabels
         "permission_error" => "上游拒绝访问", "not_found_error" => "上游找不到", "invalid_request_error" => "请求无效", "request_too_large" => "请求过大",
         "billing_error" => "上游计费问题", "timeout_error" => "上游超时",
         "unreadable" => "错误正文无法解析", "unrecognized" => "错误格式不认识", "connection_failed" => "连不上上游", "timeout" => "等待上游超时",
-        "interrupted" => "回传中断", "protocol" => "上游协议异常", "cancelled" => "客户端已取消", "relay_error" => "中转内部错误", _ => value
+        "interrupted" => "回传中断", "protocol" => "上游协议异常", "cancelled" => "客户端已取消", "identity_unavailable" => "本机 Claude Code 身份不可用", "relay_error" => "中转内部错误", _ => value
     };
 
     /// <summary>连接失败分类的中文名；未知值原样返回。</summary>

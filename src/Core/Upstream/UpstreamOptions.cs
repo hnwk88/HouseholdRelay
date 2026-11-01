@@ -1,4 +1,5 @@
-﻿using Core.Configuration;
+﻿using System.Text.Json.Serialization;
+using Core.Configuration;
 
 namespace Core.Upstream;
 
@@ -37,6 +38,13 @@ public sealed record UpstreamOptions
 
     /// <summary>为 true 表示检测方式由管理员在高级设置里手动指定：测试只用这一种，标准调用被拒时不自动改用 Claude Code。</summary>
     public bool DiagnosticManual { get; init; }
+
+    /// <summary>
+    /// 是否发往官方账户：官方账户登录（含导入的登录文件），或账户模式指向官方接口（贴的官方账户令牌）。这类上游的每个请求都只带中转所在电脑 Claude Code 的统一身份，
+    /// 测试直接用真 Claude Code。按地址主机直接推，不信 <see cref="Preset"/>（没经过 <see cref="Validated"/> 的选项里它还是默认值）；不进库也不进导出文件。
+    /// </summary>
+    [JsonIgnore]
+    public bool OfficialAccount => OfficialLogin || Mode == "oauth" && Uri.TryCreate(BaseUrl, UriKind.Absolute, out var address) && UpstreamDetection.Preset(address) == "anthropic";
 
     /// <summary>
     /// 校验各枚举取值、凭据组合与模型名（最多 200 字符，仅字母数字和 <c>- _ . / :</c>），规范化地址并按地址主机推出预设，返回新的副本；原对象不变。

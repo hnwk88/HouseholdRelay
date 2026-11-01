@@ -130,6 +130,13 @@ var tests = new (string Name, Func<Task> Test)[]
     ("upstream transfer: mismatched, short or missing export input and missing CSRF move nothing", UpstreamTransferTests.ExportRefusals),
     ("upstream transfer: an exported official account never forwards or refreshes; pages read the next step", UpstreamTransferTests.MovedAccountStops),
     ("upstream transfer: schema v7 upgrade rolls back and keeps upstreams unexported", UpstreamTransferTests.SchemaUpgrade),
+    ("official identity: two different clients reach the official upstream with the one identity real claude.exe sends", ClaudeCodeIdentityTests.AccountForwardingUsesOneIdentity),
+    ("official identity: missing Claude Code sends nothing; client, usage page and upstream page read the same reason", ClaudeCodeIdentityTests.MissingIdentityNeverSends),
+    ("official identity: an upgraded Claude Code is recaptured automatically and the new identity is sent", ClaudeCodeIdentityTests.UpgradeRecapturesIdentity),
+    ("official identity: a failed recapture sends nothing and reads the same reason everywhere", ClaudeCodeIdentityTests.RecaptureFailureReadsSame),
+    ("official identity: API key and compatible account requests stay byte-for-byte as before", ClaudeCodeIdentityTests.OtherModesUnchanged),
+    ("official identity: the official test runs real Claude Code only and discovery carries the identity", ClaudeCodeIdentityTests.OfficialTestUsesClaudeCodeOnly),
+    ("official identity: a rejected test quotes the upstream type and message, redacted and clipped", ClaudeCodeIdentityTests.FailureQuotesUpstream),
     ("private certificate lifecycle, version conflicts and expired startup rejection", PrivateCertificateTests.Lifecycle),
     ("private certificate web creation, CSRF and public-only trust download", PrivateCertificateTests.WebJourney),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)

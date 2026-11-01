@@ -18,8 +18,11 @@ public interface IUpstreamLease : IDisposable
     /// <summary>未配置、已暂停或冷却中时抛出对应的中转失败。</summary>
     void CheckState();
 
-    /// <summary>按允许的路由构造上游请求：去掉私有和逐跳头，附加部署凭据与必要的协议头。</summary>
-    HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null);
+    /// <summary>
+    /// 按允许的路由构造上游请求：去掉私有和逐跳头，附加部署凭据与必要的协议头。发往官方账户时只带 <paramref name="identity"/> 这份统一身份，
+    /// 没带就抛 <see cref="ClaudeCodeIdentityUnavailableException"/> 不发；其余上游忽略它。
+    /// </summary>
+    HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null, ClaudeCodeIdentity? identity = null);
 
     /// <summary>发送请求并拒绝任何跳转响应。</summary>
     Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken cancellation);

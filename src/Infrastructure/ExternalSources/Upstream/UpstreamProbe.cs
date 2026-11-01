@@ -1,23 +1,31 @@
 ﻿using System.Net;
 using System.Text.Json;
 using Application.Contracts.Upstream;
+using Application.Interfaces.ClaudeCode;
 using Application.Interfaces.Upstream;
 using Core.Relay;
 using Core.Upstream;
 
 namespace Infrastructure.ExternalSources.Upstream;
 
-/// <summary>独立诊断已保存上游：读模型目录时探测认证方式，最小调用被拒时按需改用 Claude Code；仅完成有效 Messages 调用后允许切换。</summary>
-internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy proxy) : IUpstreamProbe
+/// <summary>
+/// 独立诊断已保存上游：读模型目录时探测认证方式，最小调用被拒时按需改用 Claude Code；仅完成有效 Messages 调用后允许切换。
+/// 官方账户读模型目录与测试都只带本机 Claude Code 的统一身份，测试直接用真 Claude Code，不发标准调用。
+/// </summary>
+internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy proxy, IClaudeCodeIdentitySource identities) : IUpstreamProbe
 {
-    /// <summary>只读模型目录（30 秒上限），按 <see cref="UpstreamDetection.AuthenticationOrder"/> 逐个尝试认证方式，把结果读成一句话；网络、代理和协议失败都折成 <c>failed</c>，不抛给页面。</summary>
+    /// <summary>失败读句里引用上游原话的最大字符数（含截断时补的省略号）。</summary>
+    private const int QuoteLimit = 200;
+
+    /// <summary>只读模型目录（30 秒上限），按 <see cref="UpstreamDetection.AuthenticationOrder"/> 逐个尝试认证方式，把结果读成一句话；网络、代理、协议失败与取不到统一身份都折成 <c>failed</c>，不抛给页面。</summary>
     public async Task<ModelCatalog> Discover(UpstreamSnapshot snapshot, CancellationToken cancellation)
     {
         using var timeout = Limit(cancellation, 30);
         var options = snapshot.Options;
         try
         {
-            var catalog = await Catalog(snapshot, UpstreamDetection.AuthenticationOrder(options), timeout.Token);
+            var identity = options.OfficialAccount ? await identities.Current(timeout.Token) : null;
+            var catalog = await Catalog(snapshot, UpstreamDetection.AuthenticationOrder(options), identity, timeout.Token);
             var manual = options.AuthenticationManual && options.Mode != "oauth" ? "（手动指定）" : "";
             return catalog.Status switch
             {
@@ -30,6 +38,10 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
                 _ => catalog with { Message = $"获取模型失败，上游返回 HTTP {catalog.Message}。请检查地址是否填对。" }
             };
         }
+        // 官方账户取不到本机 Claude Code 的统一身份：不发请求，读出原因与下一步。
+        catch (ClaudeCodeIdentityUnavailableException error) { return Failed(error.Message); }
+        // 取统一身份时本机 Claude Code 要按全局代理起：代理已启用却取不到地址，读出代理原因，子进程没有启动。
+        catch (UpstreamProxyUnavailableException error) { return Failed(error.Message); }
         // 区分管理员主动取消与超时，都只读出原因、不抛给页面。
         catch (OperationCanceledException) { return Failed(cancellation.IsCancellationRequested ? "获取模型已取消。" : "获取模型超时（30 秒），请检查网络和代理后重试。"); }
         // 建连、TLS 或代理失败：读出代理原因或固定说明，不回显底层细节。
@@ -43,7 +55,8 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     /// <summary>
     /// 诊断一次（60 秒上限，可能跑两次 Claude Code）：先读模型目录确定认证方式，再按认证顺序做最小调用；
     /// 检测方式自动时先发标准 Messages，非 2xx 且不是 401、429 时，本机装有 Claude Code 就改用实际客户端再测；手动指定的认证方式和检测方式只用那一种。
-    /// 返回不含秘密的报告与实际采用的配置。
+    /// 官方账户先取本机 Claude Code 的统一身份，读目录与调用都只带它，调用直接用真 Claude Code，不发标准 Messages；取不到身份就一个请求都不发。
+    /// 调用被拒或限流时读句末尾带上游原话（error.type 与 message，去秘密、限 200 字）。返回不含秘密的报告与实际采用的配置。
     /// </summary>
     public async Task<ProbeResult> Run(UpstreamSnapshot snapshot, CancellationToken cancellation)
     {
@@ -55,10 +68,11 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         using var timeout = Limit(cancellation, 60);
         try
         {
+            var identity = options.OfficialAccount ? await identities.Current(timeout.Token) : null;
             var order = UpstreamDetection.AuthenticationOrder(options);
             // 获取模型已确认的认证方式排在最前，其余按固定顺序在后。
             order = [.. order.Where(item => item == options.Authentication), .. order.Where(item => item != options.Authentication)];
-            var catalog = await Catalog(snapshot, order, timeout.Token);
+            var catalog = await Catalog(snapshot, order, identity, timeout.Token);
             connection = "passed"; models = catalog.Models;
             discovery = catalog.Status switch { "passed" => "passed", "unsupported" => "unsupported", _ => "failed" };
             if (catalog.Status == "rejected") { authentication = "reconnect"; return Result("failed", UpstreamDetection.Rejected(options)); }
@@ -68,21 +82,23 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
             {
                 var attempt = options with { Authentication = method };
                 using var transport = new UpstreamConnection(new(snapshot.Version, attempt, snapshot.Credential), proxy, 1);
-                var (reply, diagnostic, triedClaude) = await Call(transport, attempt, timeout.Token);
+                var (reply, diagnostic, triedClaude) = await Call(transport, attempt, identity, timeout.Token);
                 used = attempt with { Diagnostic = diagnostic };
                 // 401/403 说明这种认证方式不被接受，换下一种；全部用完再判失败。
                 if (reply.Status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) continue;
                 authentication = "passed";
-                if (reply.Status == HttpStatusCode.TooManyRequests) return Result("cooldown", "最小模型调用受到上游限流，请稍后重新测试。");
-                if ((int)reply.Status is < 200 or >= 300) return Result("failed", Refused((int)reply.Status, attempt, diagnostic, triedClaude));
+                if (reply.Status == HttpStatusCode.TooManyRequests) return Result("cooldown", "最小模型调用受到上游限流，请稍后重新测试。" + Quote(reply, snapshot.Credential!));
+                if ((int)reply.Status is < 200 or >= 300) return Result("failed", Refused((int)reply.Status, attempt, diagnostic, triedClaude) + Quote(reply, snapshot.Credential!));
                 verifiedModel = ProbeMessage.Read(reply.Body, reply.Streaming, snapshot.Credential!);
                 if (verifiedModel is null) return Result("failed", "上游未返回有效的 Anthropic Messages 回复，不能标记调用成功。");
                 return Result("passed", UpstreamDetection.Passed(used, verifiedModel)
-                    + (diagnostic == "claude-code" ? "Claude Code 能调用不代表通用 API 请求也被这家接受。" : "") + "此检测为管理员诊断，不计入个人业务用量；凭据到期时间未知。");
+                    + (diagnostic == "claude-code" && !options.OfficialAccount ? "Claude Code 能调用不代表通用 API 请求也被这家接受。" : "") + "此检测为管理员诊断，不计入个人业务用量；凭据到期时间未知。");
             }
             authentication = "reconnect"; used = options;
             return Result("failed", UpstreamDetection.Rejected(options));
         }
+        // 官方账户取不到本机 Claude Code 的统一身份：一个请求都没发，读出原因与下一步，候选不激活。
+        catch (ClaudeCodeIdentityUnavailableException error) { used = options; return Result("failed", error.Message); }
         // 区分调用方主动取消与超时，两种情况都只返回报告、不激活候选，也不把异常抛给管理页。
         catch (OperationCanceledException) { used = options; return Result(cancellation.IsCancellationRequested ? "cancelled" : "failed", "检测已取消或超时，这个上游没有切换。"); }
         // 建连、地址校验、TLS 或代理失败：标记连接未通过，读出代理原因或固定说明。
@@ -105,14 +121,15 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     /// 读模型目录：按 <paramref name="order"/> 逐个认证方式请求 <c>/v1/models</c>，第一个被接受的就是结果。照 MyCoAI 的判断：
     /// 400、401、403 且还有下一种方式时换下一种（部分中转缺认证头时回 400）；最后一种也是 401/403、或试过两种以上仍是 400 时判为都被拒。
     /// 404/405 视为不提供目录；其余非 2xx 为 <c>failed</c>（此时 <see cref="ModelCatalog.Message"/> 暂存状态码，由调用方改写成句子）。
+    /// 官方账户的目录请求只带 <paramref name="identity"/> 这份统一身份，其余上游为 null、照旧用中转自己的 User-Agent。
     /// </summary>
-    private async Task<ModelCatalog> Catalog(UpstreamSnapshot snapshot, string[] order, CancellationToken cancellation)
+    private async Task<ModelCatalog> Catalog(UpstreamSnapshot snapshot, string[] order, ClaudeCodeIdentity? identity, CancellationToken cancellation)
     {
         for (var index = 0; index < order.Length; index++)
         {
             var method = order[index];
             using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options with { Authentication = method }, snapshot.Credential), proxy, 1);
-            using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0");
+            using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0", identity: identity);
             using var response = await transport.Send(request, cancellation);
             var refused = response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
             if (refused && index + 1 < order.Length) continue;
@@ -136,15 +153,19 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         throw new InvalidOperationException("至少要有一种认证方式。");
     }
 
-    /// <summary>按检测方式做一次最小调用：手动 Claude Code 直接跑实际客户端；手动标准只发标准调用；自动时标准调用非 2xx（401、429 除外）且本机装有 Claude Code 再跑一次实际客户端。返回最后一次回复、采用的检测方式和是否跑过 Claude Code。</summary>
-    private async Task<(ProbeReply Reply, string Diagnostic, bool TriedClaude)> Call(UpstreamConnection transport, UpstreamOptions attempt, CancellationToken cancellation)
+    /// <summary>
+    /// 按检测方式做一次最小调用：官方账户只跑实际客户端、带统一身份，不发标准调用；手动 Claude Code 直接跑实际客户端；手动标准只发标准调用；
+    /// 自动时标准调用非 2xx（401、429 除外）且本机装有 Claude Code 再跑一次实际客户端。返回最后一次回复、采用的检测方式和是否先发过标准调用又跑了 Claude Code。
+    /// </summary>
+    private async Task<(ProbeReply Reply, string Diagnostic, bool TriedClaude)> Call(UpstreamConnection transport, UpstreamOptions attempt, ClaudeCodeIdentity? identity, CancellationToken cancellation)
     {
-        if (attempt.DiagnosticManual && attempt.Diagnostic == "claude-code") return (await claudeCode.Run(transport, cancellation), "claude-code", true);
+        if (attempt.OfficialAccount) return (await claudeCode.Run(transport, identity, cancellation), "claude-code", false);
+        if (attempt.DiagnosticManual && attempt.Diagnostic == "claude-code") return (await claudeCode.Run(transport, null, cancellation), "claude-code", true);
         var standard = await StandardCall(transport, cancellation);
         if (attempt.DiagnosticManual || Accepted(standard, transport.Snapshot.Credential!) || standard.Status is HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
             return (standard, "messages", false);
         if (!claudeCode.IsAvailable) return (standard, "messages", false);
-        return (await claudeCode.Run(transport, cancellation), "claude-code", true);
+        return (await claudeCode.Run(transport, null, cancellation), "claude-code", true);
     }
 
     /// <summary>标准调用是否已经成功：2xx 且正文是真实的 Messages 回复；正文无法解析时视为未成功。</summary>
@@ -163,7 +184,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     private string Refused(int status, UpstreamOptions attempt, string diagnostic, bool triedClaude) =>
         status >= 500 ? (triedClaude ? $"标准 Messages 和 Claude Code 实际调用都没有通过（最后一次 HTTP {status}）。" : $"最小模型调用返回 HTTP {status}。") + Unavailable()
         : attempt.DiagnosticManual && diagnostic == "messages" ? $"最小模型调用返回 HTTP {status}，请检查模型权限和上游配置。若这家只接受 Claude Code，可在高级设置把检测方式改回自动判断。"
-        : attempt.DiagnosticManual ? $"Claude Code 实际调用返回 HTTP {status}，请检查模型名称和权限。"
+        : attempt.DiagnosticManual || attempt.OfficialAccount ? $"Claude Code 实际调用返回 HTTP {status}，请检查模型名称和权限。"
         : triedClaude ? $"标准 Messages 和 Claude Code 实际调用都没有通过（最后一次 HTTP {status}），请检查模型名称和权限。"
         : claudeCode.IsAvailable ? $"最小模型调用返回 HTTP {status}，请检查模型名称和权限。"
         : $"标准 Messages 调用被上游拒绝（HTTP {status}），本机没有安装 Claude Code，无法再用实际客户端测试。请检查模型权限，或在本机安装 Claude Code 后重试。";
@@ -178,6 +199,33 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         using var result = await transport.Send(call, cancellation);
         await using var content = await result.Content.ReadAsStreamAsync(cancellation);
         return new(result.StatusCode, await UpstreamResponses.ReadBounded(content, 1024 * 1024, cancellation), result.Content.Headers.ContentType?.MediaType == "text/event-stream");
+    }
+
+    /// <summary>
+    /// 上游错误正文里的原话，读成「上游原话：类型：说明。」接在失败读句后面：取 JSON 顶层 <c>error.type</c> 与 <c>error.message</c>，先去掉这家的凭据，
+    /// 控制字符换成空格，再截到 <see cref="QuoteLimit"/> 字以内；正文不是这种格式（含流式正文）时为空串。
+    /// </summary>
+    private static string Quote(ProbeReply reply, string secret)
+    {
+        try
+        {
+            using var body = JsonDocument.Parse(reply.Body);
+            if (body.RootElement.ValueKind != JsonValueKind.Object || !body.RootElement.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object) return "";
+            var said = string.Join("：", new[] { "type", "message" }
+                .Select(name => error.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null)
+                .Where(value => !string.IsNullOrWhiteSpace(value)));
+            var text = new string(UpstreamResponses.Redact(said, secret).Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+            if (text.Length == 0) return "";
+            if (text.Length > QuoteLimit)
+            {
+                var cut = QuoteLimit - 1;
+                if (char.IsHighSurrogate(text[cut - 1])) cut--;
+                text = text[..cut] + "…";
+            }
+            return $"上游原话：{text}。";
+        }
+        // 错误正文不是 JSON（例如网关的 HTML 页面）：没有原话可引，读句照旧。
+        catch (JsonException) { return ""; }
     }
 
     /// <summary>建连失败的读句：代理取不到时读出代理原因，其余给固定说明，不回显底层网络细节。</summary>
