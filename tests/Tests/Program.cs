@@ -132,6 +132,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("upstream transfer: an exported official account never forwards or refreshes; pages read the next step", UpstreamTransferTests.MovedAccountStops),
     ("upstream transfer: schema v7 upgrade rolls back and keeps upstreams unexported", UpstreamTransferTests.SchemaUpgrade),
     ("official identity: two different clients reach the official upstream with the one identity real claude.exe sends", ClaudeCodeIdentityTests.AccountForwardingUsesOneIdentity),
+    ("official identity: only stable headers are cached; retry count and agent ids follow each request; unclassified headers are not sent and are read out", ClaudeCodeIdentityTests.PerRequestHeadersFollowEachRequest),
     ("official identity: missing Claude Code sends nothing; client, usage page and upstream page read the same reason", ClaudeCodeIdentityTests.MissingIdentityNeverSends),
     ("official identity: an upgraded Claude Code is recaptured automatically and the new identity is sent", ClaudeCodeIdentityTests.UpgradeRecapturesIdentity),
     ("official identity: a failed recapture sends nothing and reads the same reason everywhere", ClaudeCodeIdentityTests.RecaptureFailureReadsSame),

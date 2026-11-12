@@ -26,7 +26,8 @@ static class ClaudeCodeIdentityTests
     private static readonly string NativeDevice = new('d', 64);
     /// <summary>不算身份、跟着每次请求或连接走的头：认证、主机、长度、协议版本、beta、内容类型、编码和会话编号。</summary>
     private static readonly HashSet<string> PerRequest = new(StringComparer.OrdinalIgnoreCase)
-    { "Authorization", "Host", "Content-Length", "Content-Type", "Accept-Encoding", "Connection", "anthropic-version", "anthropic-beta", "X-Claude-Code-Session-Id" };
+    { "Authorization", "Host", "Content-Length", "Content-Type", "Accept-Encoding", "Connection", "anthropic-version", "anthropic-beta", "X-Claude-Code-Session-Id",
+        "X-Stainless-Retry-Count", "X-Claude-Code-Agent-Id", "X-Claude-Code-Parent-Agent-Id" };
 
     /// <summary>
     /// 抓包对照（D-011 的自查，按用户 2026-11-01 定的「同一入口完全相同」）：先让本机真 claude.exe 用交互模式与 <c>--print</c> 各直接打一次模拟端点，记下它实际发出的请求头；
@@ -44,6 +45,9 @@ static class ClaudeCodeIdentityTests
         var identity = interactive;
         Check(identity.ContainsKey("User-Agent") && identity.ContainsKey("x-app") && identity.Keys.Any(name => name.StartsWith("x-stainless-", StringComparison.OrdinalIgnoreCase)),
             "Real claude.exe must send its identity: " + string.Join(", ", identity.Keys));
+        // 本机这一版真 claude.exe 的每个身份头都已逐项分类；出现白名单外的头说明 Claude Code 加了新头，要先分类再发。
+        Check(identity.Keys.Concat(print.Keys).All(ClaudeCodeIdentity.StableHeaders.Contains), "Real claude.exe sent an unclassified header: "
+            + string.Join(", ", identity.Keys.Concat(print.Keys).Where(name => !ClaudeCodeIdentity.StableHeaders.Contains(name)).Distinct(StringComparer.OrdinalIgnoreCase)));
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock, services => services.AddSingleton<IClaudeCodeIdentitySource>(provider =>
@@ -92,6 +96,41 @@ static class ClaudeCodeIdentityTests
     /// <summary>从一次实抓里取出身份头：去掉跟着每次请求或连接走的头。</summary>
     private static Dictionary<string, string> Identity(UpstreamCall call) =>
         call.Headers.Where(header => !PerRequest.Contains(header.Key)).ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 请求头分类（用户 2026-11-12 定的甲）：实抓只缓存稳定白名单；SDK 重试次数与子代理编号按客户端这一次的值发往官方，客户端不带就不带、不补造；
+    /// 实抓里白名单外的头不缓存、不发往官方（客户端带了同名头也不放行），上游页读出「发现未分类请求头」与下一步，其余照常发送。
+    /// </summary>
+    public static async Task PerRequestHeadersFollowEachRequest()
+    {
+        var plain = FakeClaude.Identity("1.0.0");
+        var parsed = ClaudeCodeIdentity.From([.. plain, new("X-Stainless-Retry-Count", "0"), new("X-Claude-Code-Agent-Id", "captured-agent"), new(FakeClaude.UnclassifiedHeader, "frozen")],
+            "1.0.0", "sdk-cli", DateTimeOffset.UnixEpoch);
+        Check(parsed.Headers.Count == plain.Length && parsed.Headers.All(header => ClaudeCodeIdentity.StableHeaders.Contains(header.Key)), "Only stable headers are cached: " + string.Join(", ", parsed.Headers.Select(header => header.Key)));
+        Check(parsed.Unclassified.SequenceEqual([FakeClaude.UnclassifiedHeader]), "Unclassified: " + string.Join(", ", parsed.Unclassified));
+        using var claude = new FakeClaudeLauncher("extra-headers");
+        await using var mock = await UpstreamFixture.Create();
+        await using var web = await Official(claude, mock);
+        var person = web.Identities.Create("书房");
+        using (var first = await Send(web, person.Token, new string('a', 64), ("X-Stainless-Retry-Count", "2"), ("X-Claude-Code-Agent-Id", "agent-one"),
+            ("X-Claude-Code-Parent-Agent-Id", "agent-root"), (FakeClaude.UnclassifiedHeader, "client-value")))
+            Check(first.StatusCode == HttpStatusCode.OK, await first.Content.ReadAsStringAsync());
+        var retried = mock.Calls.Last().Headers;
+        Check(retried["X-Stainless-Retry-Count"] == "2" && retried["X-Claude-Code-Agent-Id"] == "agent-one" && retried["X-Claude-Code-Parent-Agent-Id"] == "agent-root",
+            "Per-request headers carry this request's values: " + string.Join(", ", retried.Select(header => header.Key + "=" + header.Value)));
+        using (var second = await Send(web, person.Token, new string('a', 64), ("X-Stainless-Retry-Count", "0"))) Check(second.StatusCode == HttpStatusCode.OK);
+        var main = mock.Calls.Last().Headers;
+        Check(main["X-Stainless-Retry-Count"] == "0" && !main.ContainsKey("X-Claude-Code-Agent-Id") && !main.ContainsKey("X-Claude-Code-Parent-Agent-Id"), "A main-session request carries no agent ids");
+        using (var third = await Send(web, person.Token, new string('a', 64))) Check(third.StatusCode == HttpStatusCode.OK);
+        Check(!mock.Calls.Last().Headers.ContainsKey("X-Stainless-Retry-Count"), "A retry count the client did not send must not be invented or replayed from the capture");
+        Check(mock.Calls.All(call => !call.Headers.ContainsKey(FakeClaude.UnclassifiedHeader)), "An unclassified header never reaches the official upstream");
+        Check(mock.Calls.All(call => call.Headers["X-Stainless-OS"] == "FakeOS" && call.Headers["User-Agent"].StartsWith("claude-cli/", StringComparison.Ordinal)), "Stable identity still goes out");
+        await web.Login();
+        var page = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + "/Upstream"));
+        Check(page.Contains("发现未分类请求头 " + FakeClaude.UnclassifiedHeader + "：", StringComparison.Ordinal) && page.Contains("请更新中转。", StringComparison.Ordinal), "The upstream page must read the unclassified notice");
+        Check(!page.Contains("frozen-capture-value", StringComparison.Ordinal) && !page.Contains("client-value", StringComparison.Ordinal), "Header values are never shown");
+        Console.WriteLine($"Header classification: stable_cached={parsed.Headers.Count}; official_requests={mock.Calls.Count}; unclassified_sent=0; retry_counts=2,0,absent; agent_ids_on_main=0.");
+    }
 
     /// <summary>
     /// 身份缺失时不发：官方账户在用，本机 Claude Code 被卸掉；客户端拿到 503 和「找不到 Claude Code」的读句，模拟上游一个请求都没收到，

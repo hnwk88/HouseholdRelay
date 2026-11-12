@@ -91,6 +91,9 @@ static class FakeClaude
     /// <summary>假 Claude Code 自带的身份版本从这个环境变量读；定位器写进 claude.cmd，改版本就是「升级」。不以 CLAUDE_ 或 ANTHROPIC_ 开头，隔离环境不会清掉它。</summary>
     public const string VersionVariable = "HOUSEHOLD_FAKE_CLAUDE_VERSION";
 
+    /// <summary>extra-headers 场景多带的、中转白名单里没有的头名。</summary>
+    public const string UnclassifiedHeader = "X-Claude-Code-Future-Hint";
+
     /// <summary>假 Claude Code 以入口 <paramref name="entrypoint"/> 发请求时带的身份头；<paramref name="version"/> 与入口进 User-Agent。用例拿它核对发往官方的就是这一份。</summary>
     public static KeyValuePair<string, string>[] Identity(string version, string entrypoint = "sdk-cli") =>
     [
@@ -124,6 +127,8 @@ static class FakeClaude
             request.Content = new StringContent(DeviceMetadataPathTests.Sample(scenario.Contains("-json-", StringComparison.Ordinal), new string(scenario[^1], 64), model, version, entrypoint), System.Text.Encoding.UTF8, "application/json");
         }
         foreach (var header in Identity(version, entrypoint)) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        // extra-headers：像真 claude.exe 那样带重试次数，另带一个中转没分类的头，用来核对两者都不被缓存成身份。
+        if (scenario == "extra-headers") { request.Headers.TryAddWithoutValidation("X-Stainless-Retry-Count", "0"); request.Headers.TryAddWithoutValidation(UnclassifiedHeader, "frozen-capture-value"); }
         request.Headers.Authorization = new("Bearer", Environment.GetEnvironmentVariable("ANTHROPIC_AUTH_TOKEN"));
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01"); request.Headers.TryAddWithoutValidation("anthropic-beta", "claude-code-20250219");
         using var response = await http.SendAsync(request);

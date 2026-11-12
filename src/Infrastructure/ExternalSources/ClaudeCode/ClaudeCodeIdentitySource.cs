@@ -75,7 +75,9 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
             var failures = current.Select(item => item.Value.Failure).OfType<string>().Distinct().ToArray();
             var head = taken.Length > 0 ? $"发往官方账户的请求按客户端的入口，用中转所在电脑 Claude Code 的身份：{string.Join("；", taken)}。本机 Claude Code 升级后自动重取。"
                 : "发往官方账户的请求按客户端的入口，用中转所在电脑 Claude Code 的身份，每种入口第一次发往官方时自动从本机取一次。";
-            return string.Join("", failures.Prepend(head));
+            var unclassified = current.SelectMany(item => item.Value.Identity?.Unclassified ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var notice = unclassified.Length == 0 ? [] : new[] { $"发现未分类请求头 {string.Join("、", unclassified)}：本机 Claude Code 发了中转还没分类的头，已暂不发往官方，其余照常发送。请更新中转。" };
+            return string.Join("", notice.Concat(failures).Prepend(head));
         }
         // 本机找不到 Claude Code：读出原因与下一步。
         catch (ClaudeCodeIdentityUnavailableException error) { return error.Message; }

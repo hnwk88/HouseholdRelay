@@ -56,7 +56,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
     }
     /// <summary>
     /// 按客户端请求组装发往上游的请求：剔除认证、Cookie、逐跳、转发类和 x-stainless 等私有请求头，仅 api-key 模式转发客户端 User-Agent，补齐 anthropic-version，按 OAuth 设置过滤或追加 anthropic-beta，最后写入本版本的上游凭据。
-    /// 发往官方账户时客户端的头只留协议版本、内容类型和会话编号，User-Agent、<c>x-stainless-*</c>、<c>x-app</c> 等一律换成 <paramref name="identity"/>；没带身份就抛
+    /// 发往官方账户时客户端的头只留 <see cref="ClaudeCodeIdentity.RequestHeaders"/>（协议版本、内容类型、会话编号、重试次数、代理编号，按当次的值），User-Agent、其余 <c>x-stainless-*</c>、<c>x-app</c> 等一律换成 <paramref name="identity"/>；没带身份就抛
     /// <see cref="ClaudeCodeIdentityUnavailableException"/>，请求不组装、不发出。官方正文还须通过设备规则，<paramref name="deviceId"/> 必须是当前站点编号；其余模式忽略该参数。返回的请求由调用方释放。
     /// </summary>
     public HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null, ClaudeCodeIdentity? identity = null, string? deviceId = null)
@@ -71,9 +71,11 @@ internal sealed class UpstreamConnection : IUpstreamLease
         if (headers is not null)
             foreach (var header in headers)
             {
-                if (PrivateHeaders.Contains(header.Key) || connectionHeaders.Contains(header.Key)
-                    || header.Key.StartsWith("x-forwarded-", StringComparison.OrdinalIgnoreCase) || header.Key.StartsWith("x-stainless-", StringComparison.OrdinalIgnoreCase)) continue;
-                if (unified is not null && (!ClaudeCodeIdentity.RequestHeaders.Contains(header.Key) || unified.Has(header.Key))) continue;
+                // 官方账户只放行说这一次请求的头（含 SDK 的第几次重试），按客户端当次的值；其余模式照旧去掉全部 x-stainless-*。
+                var perRequest = unified is not null && ClaudeCodeIdentity.RequestHeaders.Contains(header.Key) && !unified.Has(header.Key);
+                if (PrivateHeaders.Contains(header.Key) || connectionHeaders.Contains(header.Key) || header.Key.StartsWith("x-forwarded-", StringComparison.OrdinalIgnoreCase)
+                    || header.Key.StartsWith("x-stainless-", StringComparison.OrdinalIgnoreCase) && !perRequest) continue;
+                if (unified is not null && !perRequest) continue;
                 if (!request.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray())) request.Content.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
             }
         if (unified is not null) foreach (var header in unified.Headers) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
