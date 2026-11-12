@@ -18,7 +18,7 @@ static class ProxySettingsTests
     /// </summary>
     public static Task ThreeStates()
     {
-        var config = new RelayConfiguration(); var system = new FakeProxy("http://127.0.0.1:7897");
+        var config = new RelayConfiguration { DeviceId = new string('e', 64) }; var system = new FakeProxy("http://127.0.0.1:7897");
         var proxy = new SystemUpstreamProxy(() => config, system); var target = new Uri("https://api.example.test/");
         var direct = proxy.Resolve(target);
         Check(direct.Address is null && direct.NoProxy.Contains("127.0.0.1") && proxy.Describe() == "不使用代理，直连上游。");
@@ -36,9 +36,9 @@ static class ProxySettingsTests
         Refused(() => proxy.Resolve(target), "不是 HTTP 代理根地址");
         config.ProxyMode = "manual"; config.ProxyUrl = null;
         Refused(() => proxy.Resolve(target), "没有填写代理地址");
-        CheckInvalid(new RelayConfiguration { ProxyMode = "manual" });
-        CheckInvalid(new RelayConfiguration { ProxyMode = "sometimes" });
-        new RelayConfiguration { ProxyMode = "auto" }.Validate();
+        CheckInvalid(new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "manual" });
+        CheckInvalid(new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "sometimes" });
+        new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "auto" }.Validate();
         return Task.CompletedTask;
     }
 
@@ -48,7 +48,7 @@ static class ProxySettingsTests
     /// </summary>
     public static async Task RefusedWhenUnavailable()
     {
-        var switchable = new RelayConfiguration();
+        var switchable = new RelayConfiguration { DeviceId = new string('e', 64) };
         await using (var target = await UpstreamFixture.Create())
         await using (var web = await WebFixture.Create(overrides: services => services.AddSingleton<IUpstreamProxy>(
             new SystemUpstreamProxy(() => switchable, new FakeProxy("http://127.0.0.1:7897") { Bypass = true }))))
@@ -61,7 +61,7 @@ static class ProxySettingsTests
             Check(row is { Outcome: "failed", Dispatched: false, UpstreamStatus: null, StatusCode: 502 } && row.Money.Source == "not_applicable", JsonSerializer.Serialize(row));
         }
 
-        var config = new RelayConfiguration { ProxyMode = "auto" };
+        var config = new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "auto" };
         var unavailable = new SystemUpstreamProxy(() => config, new FakeProxy("http://127.0.0.1:7897") { Bypass = true });
         await using var fixture = await Fixture.Create(context => context.Response.WriteAsync("{}"), proxy: unavailable);
         using var response = await fixture.Send(); var body = await response.Content.ReadAsStringAsync();

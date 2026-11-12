@@ -29,7 +29,7 @@
         <label asp-for="Input.RequestTimeoutSeconds">上游请求超时（秒）</label><input asp-for="Input.RequestTimeoutSeconds" type="number" min="1" max="3600" required />
         <label asp-for="Input.UpstreamUserAgent">上游 User-Agent</label><input asp-for="Input.UpstreamUserAgent" maxlength="256" required aria-describedby="upstream-agent-help" />
         <small id="upstream-agent-help">这个值只用在两种场合：API 密钥上游在客户端没带 User-Agent 时用它；兼容中转的账户令牌总用它。官方账户（登录、导入登录文件或贴官方账户令牌）总用中转所在电脑上 Claude Code 自己的身份，不用这个值。</small>
-        <label class="checkbox"><input asp-for="Input.NormalizeDeviceMetadata" />账户模式下统一已识别的设备元数据（API 模式不处理）</label>
+        <label class="checkbox"><input asp-for="Input.NormalizeDeviceMetadata" />兼容账户上游统一已识别的设备元数据（官方账户始终统一，API 模式不处理）</label>
     </details>
     <button type="submit">保存设置</button>
 </form>

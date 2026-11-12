@@ -32,9 +32,7 @@ internal sealed class CertificateRepository(RelayDatabase database) : ICertifica
     /// <summary>保存导入的可信证书并删除旧私有 CA。</summary>
     public void SaveImported(long settingsVersion, RelayConfiguration config, byte[] protectedPfx, CertificateInfo info) => database.Write((connection, transaction) =>
     {
-        if (Execute(connection, transaction, "UPDATE settings SET version=version+1,json=$json WHERE id=1 AND version=$version",
-            ("$json", SerializeSettings(config)), ("$version", settingsVersion)) != 1)
-            throw new InvalidOperationException("项目设置已经改变，请重新加载再导入证书。");
+        SaveSettings(connection, transaction, settingsVersion, config);
         Execute(connection, transaction, "INSERT INTO secrets VALUES('tls',$value) ON CONFLICT(name) DO UPDATE SET protected=excluded.protected", ("$value", protectedPfx));
         Execute(connection, transaction, "INSERT INTO public_assets VALUES('tls_info',$value) ON CONFLICT(name) DO UPDATE SET value=excluded.value",
             ("$value", JsonSerializer.Serialize(info, ConfigurationFiles.Json)));
@@ -44,9 +42,7 @@ internal sealed class CertificateRepository(RelayDatabase database) : ICertifica
     /// <summary>保存新签发的私有证书与私有 CA 公共 PEM。</summary>
     public void SavePrivate(long settingsVersion, RelayConfiguration config, byte[] protectedPfx, CertificateInfo info, string authorityPem) => database.Write((connection, transaction) =>
     {
-        if (Execute(connection, transaction, "UPDATE settings SET version=version+1,json=$json WHERE id=1 AND version=$version",
-            ("$json", SerializeSettings(config)), ("$version", settingsVersion)) != 1)
-            throw new InvalidOperationException("项目设置已经改变，请重新加载后创建证书。");
+        SaveSettings(connection, transaction, settingsVersion, config);
         Execute(connection, transaction, "INSERT INTO secrets VALUES('tls',$value) ON CONFLICT(name) DO UPDATE SET protected=excluded.protected", ("$value", protectedPfx));
         Execute(connection, transaction, "INSERT INTO public_assets VALUES('tls_info',$value) ON CONFLICT(name) DO UPDATE SET value=excluded.value",
             ("$value", JsonSerializer.Serialize(info, ConfigurationFiles.Json)));

@@ -4,6 +4,7 @@ using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Application.Interfaces.ClaudeCode;
+using Application.Interfaces.Configuration;
 using Application.Interfaces.Relay;
 using Application.Interfaces.Upstream;
 using Application.Interfaces.Usage;
@@ -26,6 +27,9 @@ public sealed class RelayServer : IDisposable
     private readonly IRelayEventLog log;
     private readonly IClaudeCodeIdentitySource? identities;
     private readonly IClaudeCodeUpdater? updater;
+    private readonly ISiteIdentityService? siteIdentity;
+    private readonly IUpstreamService? upstreamService;
+    private readonly IProtocolDiagnostics? diagnostics;
     private long completed;
     /// <summary>个人令牌鉴权名单；每个请求在入口、排队后、上传后和发往上游前都会重新核验，令牌被停用或轮换后尽快拒绝。</summary>
     public ClientRegistry Clients { get; }
@@ -43,10 +47,11 @@ public sealed class RelayServer : IDisposable
     /// 统一身份来源可选：独立中转模式不登记，此时发往官方账户的请求一律不发，读出原因。升级器可选：不登记时不跟客户端版本。
     /// </summary>
     public RelayServer(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUsageService? usage = null,
-        IClaudeCodeIdentitySource? identities = null, IClaudeCodeUpdater? updater = null)
+        IClaudeCodeIdentitySource? identities = null, IClaudeCodeUpdater? updater = null, ISiteIdentityService? siteIdentity = null, IUpstreamService? upstreamService = null, IProtocolDiagnostics? diagnostics = null)
     {
         config.Validate();
         this.config = config; this.log = log; this.identities = identities; this.updater = updater;
+        this.diagnostics = diagnostics; this.siteIdentity = siteIdentity; this.upstreamService = upstreamService;
         Clients = clients; Admission = admission; Upstreams = upstreams; Usage = usage;
     }
 
@@ -101,6 +106,7 @@ public sealed class RelayServer : IDisposable
         var path = context.Request.Path.Value ?? "/"; var outcome = "succeeded";
         UsageAccumulator? usage = null; var recorded = false; var dispatched = false; int? upstreamStatus = null;
         var attempts = new List<UpstreamAttempt>(); string? upstreamName = null;
+        var heldOfficialOperations = new List<IDisposable>();
         try
         {
             if (path == "/healthz" && context.Request.Method == "GET")
@@ -112,9 +118,11 @@ public sealed class RelayServer : IDisposable
             if (path == "/status" && context.Request.Method == "GET")
             {
                 context.Response.Headers.CacheControl = "no-store";
-                using var status = Upstreams.Acquire();
+                var overview = upstreamService?.ReadOverview();
+                using var status = overview is null ? Upstreams.Acquire() : null;
+                var paused = overview is null ? status!.Paused : Upstreams.Status(overview.Version).Paused;
                 await context.Response.WriteAsJsonAsync(new { client = name, active = Admission.Active, queued = Admission.Queued,
-                    upstreamPaused = status.Paused, completed = Interlocked.Read(ref completed) }, context.RequestAborted); return;
+                    upstreamPaused = paused, completed = Interlocked.Read(ref completed) }, context.RequestAborted); return;
             }
             if (path == "/api/hello" && context.Request.Method == "HEAD") { context.Response.StatusCode = 200; return; }
             if (!Routes.TryGetValue(path, out var method)) throw new RelayFailure(404, "Endpoint not exposed by this relay.");
@@ -141,7 +149,7 @@ public sealed class RelayServer : IDisposable
                     if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
                     if (document.RootElement.TryGetProperty("model", out var modelValue) && modelValue.ValueKind == JsonValueKind.String)
                         model = SafeModel(modelValue.GetString(), token, route.Active.Snapshot.Credential);
-                    if (route.Active.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata) normalized = DeviceMetadata.Normalize(body, config.DeviceId);
+                    if (!route.Active.Snapshot.Options.OfficialAccount && route.Active.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata) normalized = DeviceMetadata.Normalize(body, config.DeviceId);
                 }
                 // 请求体不是 JSON 对象时在发往上游之前就以 400 拒绝，不把解析器的内部消息透给客户端。
                 catch (JsonException) { throw new RelayFailure(400, "Expected a JSON object."); }
@@ -149,7 +157,7 @@ public sealed class RelayServer : IDisposable
             // JSON 处理完成后再核验，缩短上传结束与真正发往上游之间的撤销窗口。
             if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked before dispatch.");
             // 每家按自己的接入方式用同一份请求体重建请求：账户模式统一设备元数据，API 模式原样；请求体只读了一次。
-            byte[] Body(IUpstreamLease target) => method == "POST" && target.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata
+            byte[] Body(IUpstreamLease target) => method == "POST" && !target.Snapshot.Options.OfficialAccount && target.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata
                 ? normalized ??= DeviceMetadata.Normalize(body, config.DeviceId) : body;
             var upstream = route.Next(model)!;
             // 客户端自报的 Claude Code 版本与入口，第一次发往官方账户时才读一次。
@@ -164,8 +172,6 @@ public sealed class RelayServer : IDisposable
                 try
                 {
                     timeout.Token.ThrowIfCancellationRequested();
-                    if (recorded) await Usage!.Dispatch(id, upstream.Snapshot.Version, upstream.Snapshot.CandidateId, model);
-                    dispatched = true;
                     while (true)
                     {
                         attempt = new UpstreamAttempt(attempts.Count + 1, upstream.Snapshot.CandidateId, upstream.Snapshot.Version, Usage?.Now ?? DateTimeOffset.UtcNow);
@@ -173,22 +179,50 @@ public sealed class RelayServer : IDisposable
                         // 尝试记录里的说明先去掉这一家的上游凭据和个人令牌，再截断落库；每家只用自己的凭据，不会带到别家。
                         var secret = upstream.Snapshot.Credential!;
                         redact = value => UpstreamResponses.Redact(UpstreamResponses.Redact(value, secret), token!);
+                        SiteIdentitySnapshot? attemptSite = null;
+                        var priorDispatched = dispatched;
+                        var attemptSent = false;
                         HttpRequestMessage? request = null; HttpResponseMessage response;
                         try
                         {
+                            // 准入也处在可换家的区域；维护恰在选中官方后关闭时，仍允许独立 API 备用继续。
+                            var operation = upstream.Snapshot.Options.OfficialAccount ? siteIdentity?.Enter() : null;
+                            if (operation is not null) heldOfficialOperations.Add(operation);
+                            attemptSite = siteIdentity?.Current;
                             // 官方账户只带中转所在电脑 Claude Code 的统一身份；取不到就不组装、不发出，下面按可切换的失败处理。
                             var identity = upstream.Snapshot.Options.OfficialAccount ? await Identity(caller ??= ClaudeCodeClient.Read(body, context.Request.Headers.UserAgent), client.Id, timeout.Token) : null;
-                            request = upstream.Request(path, context.Request.QueryString.ToString(), Body(upstream), method, config.UpstreamUserAgent, context.Request.Headers, identity);
+                            request = upstream.Request(path, context.Request.QueryString.ToString(), Body(upstream), method, config.UpstreamUserAgent, context.Request.Headers, identity, attemptSite?.DeviceId ?? config.DeviceId);
+                            if (upstream.Snapshot.Options.OfficialAccount)
+                            {
+                                diagnostics?.Record(id, "assembled", path, attemptSite?.Version ?? 0, attemptSite?.DeviceId ?? config.DeviceId, identity?.Version, caller?.IdentityEntrypoint);
+                            }
+                            if (!dispatched && recorded) await Usage!.Dispatch(id, upstream.Snapshot.Version, upstream.Snapshot.CandidateId, model);
+                            dispatched = true; attemptSent = true;
+                            if (upstream.Snapshot.Options.OfficialAccount)
+                                diagnostics?.Record(id, "dispatch", path, attemptSite?.Version ?? 0, attemptSite?.DeviceId ?? config.DeviceId, identity?.Version, caller?.IdentityEntrypoint);
                             response = await upstream.Send(request, timeout.Token);
                         }
                         // 先按原始异常给这次尝试分类；连不上（含建连超时、TLS 失败）或取不到统一身份，且顺序里还有下一家时换下一家（连不上的那家暂避），否则原样抛给下面的转换，返回给客户端的内容不变。
                         catch (Exception error)
                         {
                             request?.Dispose();
+                            // 解析代理已明确失败时本次没有建连；保留前面候选真正发送过的标记，不按尝试次数猜测。
+                            if (error is UpstreamProxyUnavailableException || error is HttpRequestException && ProxyUnavailable(error)) dispatched = priorDispatched;
+                            var identityBlocked = error is SiteIdentityUnavailableException or ClaudeConfigurationUnavailableException;
+                            attemptSite ??= siteIdentity?.Current;
+                            if (upstream.Snapshot.Options.OfficialAccount && !attemptSent && (error is RelayFailure or ClaudeCodeIdentityUnavailableException || identityBlocked))
+                                diagnostics?.Record(id, "local_rejection", path, attemptSite?.Version ?? 0, attemptSite?.DeviceId ?? config.DeviceId, error: "local_rejection");
                             attempt.Failed(error, context.RequestAborted.IsCancellationRequested, redact); classified = true;
-                            if (!attempt.Switchable || route.Next(model) is not { } after) throw;
-                            attempt.PassOn(); route.Avoid(upstream, attempt); upstream = after; continue;
+                            if (!attempt.Switchable && !identityBlocked) throw;
+                            IUpstreamLease? after;
+                            // 维护/配置拒绝不通过换另一个官方账户绕过；只允许现有策略中的独立 API 候选。
+                            do { after = route.Next(model); } while (identityBlocked && after?.Snapshot.Options.OfficialAccount == true);
+                            if (after is null) throw;
+                            attempt.PassOn();
+                            if (!identityBlocked) route.Avoid(upstream, attempt);
+                            upstream = after; continue;
                         }
+                        // 官方许可还要覆盖下方最终用量落账，统一在 Handle 的最外层 finally 归还。
                         using (request)
                         using (response)
                         {
@@ -201,11 +235,17 @@ public sealed class RelayServer : IDisposable
                                 var discarded = new UsageAccumulator(kind);
                                 await UpstreamResponses.Inspect(response, secret, discarded, timeout.Token);
                                 attempt.Completed(upstreamStatus.Value, discarded, redact); attempt.PassOn(); route.Avoid(upstream, attempt);
+                                if (upstream.Snapshot.Options.OfficialAccount)
+                                    diagnostics?.Record(id, "response", path, attemptSite?.Version ?? 0, attemptSite?.DeviceId ?? config.DeviceId,
+                                        entrypoint: caller?.IdentityEntrypoint, status: upstreamStatus, error: DiagnosticError(upstreamStatus.Value, discarded));
                                 upstream = next; continue;
                             }
                             // 从这里开始向客户端写状态码和正文，之后出什么错都不再换家。
                             await UpstreamResponses.Copy(response, context.Response, secret, id, timeout.Token, usage);
                             attempt.Completed(upstreamStatus.Value, usage, redact);
+                            if (upstream.Snapshot.Options.OfficialAccount)
+                                diagnostics?.Record(id, "response", path, attemptSite?.Version ?? 0, attemptSite?.DeviceId ?? config.DeviceId,
+                                    entrypoint: caller?.IdentityEntrypoint, status: upstreamStatus, error: DiagnosticError(upstreamStatus.Value, usage));
                             if (!response.IsSuccessStatusCode || usage.Error) outcome = "failed";
                             else if (usage.IsStream && !usage.ProtocolComplete) outcome = "interrupted";
                             else route.Served(upstream);
@@ -220,17 +260,20 @@ public sealed class RelayServer : IDisposable
             // 客户端仍在连接却被取消，只能是总超时触发，转成 504；客户端自己断开的情况留给外层按 cancelled 处理。
             catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
             { throw new RelayFailure(504, "Upstream request timed out."); }
-            // 代理已启用却取不到地址：建连前就拒绝，请求没有发出，用量记成未发出的失败（发送标记在此之前已写，结束记录会按这里改回）；
+            // 代理已启用却取不到地址：建连前拒绝；发送标记只表示已交给发送器，不冒充上游已接收。
             // 之前已经换过家时前面那几次确实发出过，仍记为已发送。固定提示让使用者知道去找管理员查代理，不透出代理地址。
             // 给官方账户取统一身份时本机 Claude Code 也按全局代理起，同样在发出之前就拒绝。
             catch (Exception error) when (error is UpstreamProxyUnavailableException || error is HttpRequestException && ProxyUnavailable(error))
-            { dispatched = attempts.Count > 1; throw new RelayFailure(502, "Upstream proxy is enabled but unavailable; the request was not sent. Ask the administrator to check proxy settings in local management."); }
+            { throw new RelayFailure(502, "Upstream proxy is enabled but unavailable; the request was not sent. Ask the administrator to check proxy settings in local management."); }
             // 连不上上游时只回固定的 502 提示，不透出上游地址或底层网络错误细节。
             catch (HttpRequestException) { throw new RelayFailure(502, "Upstream connection failed. Check host connectivity."); }
             // 官方账户取不到中转所在电脑 Claude Code 的统一身份：这一家没有发出，回 503 并读出原因与下一步（与用量页、上游页同一句）；不是官方的问题，不进认证暂停也不进冷却。
             // 之前已经换过家时前面那几次确实发出过，仍记为已发送。
-            catch (ClaudeCodeIdentityUnavailableException error) { dispatched = attempts.Count > 1; throw new RelayFailure(503, error.Message); }
+            catch (ClaudeCodeIdentityUnavailableException error) { throw new RelayFailure(503, error.Message); }
         }
+        // 站点维护属于本地拒绝，不调用上游 Observe，也不触发认证暂停或冷却。
+        catch (Exception error) when (error is SiteIdentityUnavailableException or ClaudeConfigurationUnavailableException)
+        { outcome = "failed"; await Fail(context, new RelayFailure(503, error.Message)); }
         // 客户端主动断开：记为 cancelled 并直接中止连接，不再尝试写错误响应。
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { outcome = "cancelled"; context.Abort(); }
         // 鉴权、限速、准入、校验等可预期的拒绝，按其状态码和固定消息写回。
@@ -245,17 +288,30 @@ public sealed class RelayServer : IDisposable
         // 事件日志在原有字段之后补上游名称、尝试次数和最后一次错误类型，原有字段与顺序不变。
         finally
         {
-            if (recorded)
-                await Usage!.Finish(id, new UsageEnd(outcome, dispatched, context.Response.StatusCode, upstreamStatus,
-                    stopwatch.ElapsedMilliseconds, usage!.Completeness(dispatched, outcome == "succeeded"), usage.Tokens,
-                    usage.ReportedMoney is { } money ? money with { Completeness = usage.ProtocolComplete && outcome == "succeeded" ? "complete" : "partial" } : null)
-                    { Attempts = attempts });
-            log.Write(new { time = DateTimeOffset.UtcNow, requestId = id, client = name, route = Routes.ContainsKey(path) ? path : "local",
-                status = context.Response.StatusCode, outcome, durationMs = stopwatch.ElapsedMilliseconds,
-                upstream = upstreamName, attempts = attempts.Count, error = attempts.LastOrDefault()?.ErrorType });
+            try
+            {
+                if (recorded)
+                    await Usage!.Finish(id, new UsageEnd(outcome, dispatched, context.Response.StatusCode, upstreamStatus,
+                        stopwatch.ElapsedMilliseconds, usage!.Completeness(dispatched, outcome == "succeeded"), usage.Tokens,
+                        usage.ReportedMoney is { } money ? money with { Completeness = usage.ProtocolComplete && outcome == "succeeded" ? "complete" : "partial" } : null)
+                        { Attempts = attempts });
+                log.Write(new { time = DateTimeOffset.UtcNow, requestId = id, client = name, route = Routes.ContainsKey(path) ? path : "local",
+                    status = context.Response.StatusCode, outcome, durationMs = stopwatch.ElapsedMilliseconds,
+                    upstream = upstreamName, attempts = attempts.Count, error = attempts.LastOrDefault()?.ErrorType });
+            }
+            // SSE 完整结束且尾部用量写入完成后才让维护提交；异常和换家也在此释放，避免提前排空或泄漏许可。
+            finally { for (var index = heldOfficialOperations.Count - 1; index >= 0; index--) heldOfficialOperations[index].Dispose(); }
         }
     }
 
+    /// <summary>只从既有解析结果分类错误，不额外读取或复制正文，也不把错误原话放进诊断样本。</summary>
+    private static string? DiagnosticError(int status, UsageAccumulator usage)
+    {
+        var type = usage.ErrorType ?? ""; var message = usage.ErrorMessage ?? "";
+        if (message.Contains("verification", StringComparison.OrdinalIgnoreCase) || message.Contains("verify", StringComparison.OrdinalIgnoreCase)) return "verification";
+        if (message.Contains("model", StringComparison.OrdinalIgnoreCase) && status is 400 or 403 or 404) return "model_limit";
+        return status switch { 401 => "authentication", 403 => "forbidden", 429 => "rate_limit", _ => type == "rate_limit_error" ? "rate_limit" : null };
+    }
     /// <summary>取上游响应头里的请求编号：先看 Anthropic 的 request-id，再看通用的 x-request-id；都没有时为 null。</summary>
     private static string? UpstreamRequestId(HttpResponseMessage response) =>
         response.Headers.TryGetValues("request-id", out var values) || response.Headers.TryGetValues("x-request-id", out values) ? values.FirstOrDefault() : null;

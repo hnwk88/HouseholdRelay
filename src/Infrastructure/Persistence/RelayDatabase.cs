@@ -21,11 +21,13 @@ public sealed class RelayDatabase : IRelayInstance
     private readonly string marker;
     private readonly string connectionString;
     private readonly ISecretProtector protector;
+    private readonly IDeviceIdGenerator deviceIds;
 
     /// <summary>打开或首次创建实例数据库：用按数据目录命名的跨进程互斥量（最多等 15 秒）串行化初始化；实例标记与数据库必须同时存在或同时缺失，否则拒绝启动而不是重开首次设置；随后检查库版本与完整性，再按顺序执行全部迁移。作为单例由依赖注入创建，任何不一致都抛异常阻止启动。</summary>
-    public RelayDatabase(RelayDataOptions options, ISecretProtector protector, IEnumerable<IDatabaseMigration> migrations)
+    public RelayDatabase(RelayDataOptions options, ISecretProtector protector, IEnumerable<IDatabaseMigration> migrations, IDeviceIdGenerator deviceIds)
     {
         this.protector = protector;
+        this.deviceIds = deviceIds;
         Home = System.IO.Path.GetFullPath(options.Home);
         State = System.IO.Path.Combine(Home, ".state");
         Path = System.IO.Path.Combine(State, "relay.db");
@@ -49,9 +51,10 @@ public sealed class RelayDatabase : IRelayInstance
             if (!Guid.TryParseExact(InstanceId, "N", out _)) throw new InvalidOperationException("实例标记损坏，请恢复备份。");
             using (var connection = Open())
             {
-                if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) is not (1 or 2 or 3 or 4 or 5 or 6 or 7)
+                if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8)
                     || (string?)Scalar(connection, null, "PRAGMA quick_check") != "ok")
                     throw new InvalidOperationException("数据库版本不支持或完整性检查失败，请恢复备份。");
+                _ = ReadSettings(connection, null);
             }
             // 顺序固定为：旧数据导入、上游架构升级、用量架构升级、上游命名与全局代理升级、上游尝试记录升级、自动切换与按上游计价升级、上游导出升级。
             foreach (var migration in migrations.OrderBy(item => item.Order)) migration.Apply(this);
@@ -66,6 +69,9 @@ public sealed class RelayDatabase : IRelayInstance
     /// <summary>首次初始化：先以直写方式新建实例标记，再新建数据库并开启 WAL 与完全同步，在一个事务内建立全部基础表、默认设置和上游行，并生成一次性首次设置码（库中存哈希和 DPAPI 密文）。只在互斥量保护下由构造函数调用。</summary>
     private void Create()
     {
+        // 旧文件必须先通过校验；已有旧号直接沿用，损坏时连新实例标记也不创建。
+        var initial = LegacyImport.ReadInitialConfiguration(State) ?? new RelayConfiguration { DeviceId = deviceIds.Generate() };
+        initial.Validate();
         InstanceId = Guid.NewGuid().ToString("N");
         // 标记在数据库之外；写到一半即停机也不会把旧实例误认为未初始化。
         using (var file = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
@@ -93,7 +99,7 @@ public sealed class RelayDatabase : IRelayInstance
             PRAGMA user_version=1;
             """);
         Execute(connection, transaction, "INSERT INTO metadata VALUES('instance_id',$id),('legacy_imported','0')", ("$id", InstanceId));
-        Execute(connection, transaction, "INSERT INTO settings VALUES(1,1,$json)", ("$json", SerializeSettings(new RelayConfiguration())));
+        Execute(connection, transaction, "INSERT INTO settings VALUES(1,1,$json)", ("$json", SerializeSettings(initial)));
         var code = ConfigurationFiles.NewToken();
         Execute(connection, transaction, "INSERT INTO bootstrap VALUES(1,$hash,$protected)",
             ("$hash", ConfigurationFiles.Hash(code)), ("$protected", protector.Protect(Encoding.UTF8.GetBytes(code))));
@@ -152,5 +158,40 @@ public sealed class RelayDatabase : IRelayInstance
         var copy = JsonSerializer.Deserialize<RelayConfiguration>(JsonSerializer.Serialize(config, ConfigurationFiles.Json), ConfigurationFiles.Json)!;
         copy.Clients = [];
         return JsonSerializer.Serialize(copy, ConfigurationFiles.Json);
+    }
+
+    /// <summary>反序列化并校验设置；缺失或损坏的设备编号只报告恢复，不补造身份。</summary>
+    internal static RelayConfiguration DeserializeSettings(string json)
+    {
+        try
+        {
+            var value = JsonSerializer.Deserialize<RelayConfiguration>(json, ConfigurationFiles.Json)
+                ?? throw new InvalidOperationException("实例配置损坏，请恢复配套备份。");
+            value.Validate();
+            return value;
+        }
+        // JSON 异常可能带原始内容的位置；对外只提供固定的配置恢复提示。
+        catch (JsonException) { throw new InvalidOperationException("实例配置损坏，请恢复配套备份。"); }
+    }
+
+    /// <summary>在调用方连接或事务中读取同一份设置与版本。</summary>
+    internal static SettingsSnapshot ReadSettings(SqliteConnection connection, SqliteTransaction? transaction)
+    {
+        using var command = Command(connection, transaction, "SELECT version,json FROM settings WHERE id=1");
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) throw new InvalidOperationException("实例配置缺失，请恢复配套备份。");
+        return new(reader.GetInt64(0), DeserializeSettings(reader.GetString(1)));
+    }
+
+    /// <summary>普通配置和证书事务共同使用的写入边界：版本匹配且设备编号逐字相同时才保存。</summary>
+    internal static void SaveSettings(SqliteConnection connection, SqliteTransaction transaction, long version, RelayConfiguration config)
+    {
+        config.Validate();
+        var current = ReadSettings(connection, transaction);
+        if (!StringComparer.Ordinal.Equals(current.Value.DeviceId, config.DeviceId))
+            throw new InvalidOperationException("普通设置不能更换站点设备编号，请使用设备维护操作。");
+        if (Execute(connection, transaction, "UPDATE settings SET version=version+1,json=$json WHERE id=1 AND version=$version",
+            ("$json", SerializeSettings(config)), ("$version", version)) != 1)
+            throw new InvalidOperationException("配置已被另一页面或命令修改，请重新加载页面再保存。");
     }
 }

@@ -20,9 +20,9 @@ public interface IUpstreamLease : IDisposable
 
     /// <summary>
     /// 按允许的路由构造上游请求：去掉私有和逐跳头，附加部署凭据与必要的协议头。发往官方账户时只带 <paramref name="identity"/> 这份统一身份，
-    /// 没带就抛 <see cref="ClaudeCodeIdentityUnavailableException"/> 不发；其余上游忽略它。
+    /// 没带就抛 <see cref="ClaudeCodeIdentityUnavailableException"/> 不发；官方设备规则使用当前站点编号 <paramref name="deviceId"/>，其余上游忽略这两个参数。
     /// </summary>
-    HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null, ClaudeCodeIdentity? identity = null);
+    HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null, ClaudeCodeIdentity? identity = null, string? deviceId = null);
 
     /// <summary>发送请求并拒绝任何跳转响应。</summary>
     Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken cancellation);

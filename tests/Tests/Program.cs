@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Tests;
 
+if (args.FirstOrDefault() == "--owned-cli-owner") return await OwnedClaudeProcessTests.RunOwner(args);
 if (args.FirstOrDefault() == "--real-upstream-browser") return await RealUpstreamValidation.Run(args);
 if (args.FirstOrDefault() == "--real-detection-browser") return await RealDetectionValidation.Run(args);
 if (args.FirstOrDefault() == "--real-import-browser") return await RealImportValidation.Run(args);
@@ -142,13 +143,54 @@ var tests = new (string Name, Func<Task> Test)[]
     ("official alignment: a newer client upgrades the relay Claude Code once for concurrent requests, then the new identity is sent", ClaudeCodeAlignmentTests.NewerClientUpgradesOnce),
     ("official alignment: a failed upgrade reads its redacted output, keeps forwarding, waits an hour, and the button retries with CSRF", ClaudeCodeAlignmentTests.UpgradeFailureReadsOutput),
     ("official alignment: an older client never downgrades and the page asks to upgrade that computer", ClaudeCodeAlignmentTests.OlderClientNoUpgrade),
+    ("site identity: persistence and concurrent creation", DeviceIdentityLifecycleTests.Persistence),
+    ("site identity: corruption never creates a replacement", DeviceIdentityLifecycleTests.Corruption),
+    ("site identity: ordinary settings and certificates cannot change device", DeviceIdentityLifecycleTests.SaveProtection),
+    ("site identity: transactional maintenance and permanent idempotency", DeviceIdentityLifecycleTests.Maintenance),
+    ("site identity: pending and migration recovery", DeviceIdentityLifecycleTests.Recovery),
+    ("official metadata: non-device bytes remain verbatim", DeviceMetadataTests.OfficialBytesRemainVerbatim),
+    ("official metadata: invalid formats never dispatch", DeviceMetadataTests.OfficialInvalidMetadataNeverDispatches),
+    ("official metadata: endpoint and API contracts", DeviceMetadataTests.OfficialEndpointContracts),
+    ("private Claude configuration: preserves bytes and ACL", ClaudeConfigurationTests.PreserveBytesAndAcl),
+    ("private Claude configuration: damaged files are refused", ClaudeConfigurationTests.RefuseDamagedConfiguration),
+    ("private Claude configuration: validates before renewal", ClaudeConfigurationTests.ValidateBeforeRefresh),
+    ("private Claude configuration: transient paths are restricted", ClaudeConfigurationTests.RestrictTransientPaths),
+    ("official metadata: business and probe wire matrix", DeviceMetadataPathTests.BusinessAndProbeMatrix),
+    ("private Claude configuration: directory junction is refused", ClaudeConfigurationTests.RefuseDirectoryJunction),
+    ("site maintenance: drains and concurrent retries generate once", SiteIdentityMaintenanceTests.DrainAndConcurrency),
+    ("site maintenance: drain timeout never changes identity", SiteIdentityMaintenanceTests.DrainTimeout),
+    ("site maintenance: failed alignment resumes the same target", SiteIdentityMaintenanceTests.FailureAndResume),
+    ("site maintenance: alignment deadline keeps official paths closed", SiteIdentityMaintenanceTests.AlignmentTimeout),
+    ("site maintenance: preparation and expected generation race", SiteIdentityMaintenanceTests.PreparationAndVersionRace),
+    ("site identity flow: SSE drains, API continues and four tokens remain independent", SiteIdentityFlowTests.SseAndFourClients),
+    ("site identity flow: status and standby never refresh during maintenance", SiteIdentityFlowTests.ReadPathsDoNotRefresh),
+    ("protocol diagnostics: bounded time, samples, stages and secrecy", ProtocolDiagnosticsTests.BudgetsAndSecrecy),
+    ("site identity race: blocked reads preserve connection state and API fallback", UpstreamIdentityRaceTests.BlockedReadsPreserveConnections),
+    ("site identity race: operation and configuration refusals keep API usable", UpstreamIdentityRaceTests.OperationAndConfigurationRefusals),
+    ("protocol performance: legacy and strict normalization on identical load", ProtocolPerformanceTests.CompareNormalization),
+    ("owned CLI processes: startup failures and unknown launch remain explicit", OwnedClaudeProcessTests.StartingAndFailedLaunch),
+    ("owned CLI processes: parent crash preserves the live child guard", OwnedClaudeProcessTests.ParentCrash),
+    ("site identity accounts: login, upgrade, export and both import destinations preserve canonical", DeviceIdentityAccountLifecycleTests.AccountsAndImportsPreserveCanonical),
     ("private certificate lifecycle, version conflicts and expired startup rejection", PrivateCertificateTests.Lifecycle),
     ("private certificate web creation, CSRF and public-only trust download", PrivateCertificateTests.WebJourney),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();
 var failures = 0;
-var selected =tests.Where(item => args.Length == 0 || item.Name.Contains(args[0], StringComparison.OrdinalIgnoreCase)).ToArray();
+var isolatedMocks = args.Contains("--isolated-mocks", StringComparer.Ordinal);
+var filter = args.FirstOrDefault(value => value != "--isolated-mocks");
+var nativeNames = new HashSet<string>(StringComparer.Ordinal)
+{
+    "real Claude Code clients through TLS and a TCP tunnel to mock upstream",
+    "clean native client uses two connection variables and completes a tool conversation",
+    "official identity: two different clients reach the official upstream with the one identity real claude.exe sends"
+};
+var requested = tests.Where(item => filter is null || item.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
+if (isolatedMocks && nativeNames.Any(name => !tests.Any(item => item.Name == name)))
+    throw new InvalidOperationException("真 CLI 测试名称已改变，隔离模拟集的排除清单需要同步核对；本次没有运行任何测试。");
+var notRun = isolatedMocks ? requested.Where(item => nativeNames.Contains(item.Name)).ToArray() : [];
+foreach (var item in notRun) Console.WriteLine("NOT RUN " + item.Name + ": 本轮未建立真 CLI 的系统级非回环出站禁止，不能把代理环境或关闭非必要流量当作硬隔离。");
+var selected = requested.Where(item => !isolatedMocks || !nativeNames.Contains(item.Name)).ToArray();
 foreach (var (name, test) in selected)
 {
     try { await test().WaitAsync(TimeSpan.FromSeconds(75)); Console.WriteLine("PASS " + name); }
@@ -157,7 +199,9 @@ foreach (var (name, test) in selected)
 }
 // 无论成败都清理本次运行新增的测试 CA，否则它们在用户证书存储里越积越多，最终让 TLS 链构建失败。
 Console.WriteLine($"Removed {TestCertificateStore.RemoveAddedSince(certificatesBefore)} test CA certificate(s) added during this run.");
-Console.WriteLine($"{selected.Length - failures}/{selected.Length} passed; model traffic used only local mock servers.");
+Console.WriteLine(isolatedMocks
+    ? $"{selected.Length - failures}/{selected.Length} executed passed; {notRun.Length} not run; selected tests use mock CLI and local mock servers."
+    : $"{selected.Length - failures}/{selected.Length} passed; model traffic used only local mock servers.");
 return failures == 0 ? 0 : 1;
 
 namespace Tests
@@ -411,7 +455,7 @@ static class TestSuite
                 ConfigurationFiles.Write(Path.Combine(folder, "client.json"), new ClientBundle($"https://127.0.0.1:{tunnel.Port}", "hr_" + name + "-test-token"));
                 File.WriteAllText(Path.Combine(folder, "relay-ca.pem"), authorityPem);
                 var debugPath = Path.Combine(folder, "fixture-debug.log");
-                var start = TestProcess.ClientLauncher.Prepare(folder, ["--debug-file", debugPath, "--safe-mode", "--no-session-persistence", "--strict-mcp-config", "--no-chrome", "--tools", "Read", "--model", "claude-sonnet-4-6", "--print", "Reply with " + marker]);
+                var start = TestProcess.IsolatedClientLauncher.Prepare(folder, ["--debug-file", debugPath, "--safe-mode", "--no-session-persistence", "--strict-mcp-config", "--no-chrome", "--tools", "Read", "--model", "claude-sonnet-4-6", "--print", "Reply with " + marker]);
                 start.WorkingDirectory = folder; start.RedirectStandardOutput = true; start.RedirectStandardError = true; start.RedirectStandardInput = true; start.CreateNoWindow = true;
                 using var child = new Process { StartInfo = start }; using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 var stdout = new StringBuilder(); var stderr = new StringBuilder();
@@ -491,7 +535,7 @@ sealed class Fixture : IAsyncDisposable
             try { await handler(context); } catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { /* 中转中止上游请求属于预期行为，只吞掉由请求中止引起的取消，其他异常照常暴露给测试。 */ }
         });
         await upstream.StartAsync();
-        var config = new RelayConfiguration { UpstreamUserAgent = "claude-cli/fixture (external, cli)", Clients =
+        var config = new RelayConfiguration { DeviceId = new string('e', 64), UpstreamUserAgent = "claude-cli/fixture (external, cli)", Clients =
             [new("study", ConfigurationFiles.Hash("study-test-token")), new("bedroom", ConfigurationFiles.Hash("bedroom-test-token")), new("office", ConfigurationFiles.Hash("office-test-token"))] };
         configure?.Invoke(config);
         var services = TestProcess.StandaloneRelay(config, "fixture-upstream-secret", new Uri(upstream.Urls.Single()), clients, new FixtureLog(logs), proxy);

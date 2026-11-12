@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using Application.Interfaces.ClaudeCode;
+using Application.Interfaces.Configuration;
 using Application.Interfaces.Upstream;
 using Core.Upstream;
 
@@ -12,7 +13,8 @@ namespace Infrastructure.ExternalSources.ClaudeCode;
 /// 发往官方账户的统一身份，按入口各一份：某个入口第一次要用时让本机 claude.exe 以那种模式向本机临时端点发一次请求，记下它带的身份头；之后每次要用先核对 claude.exe 的路径、大小和修改时间，
 /// 三样有一样变了（升级、重装、换了位置）就自动重取。并发请求同时撞上重取时只起一个子进程，其余的等它的结果；重取失败记 60 秒，期间直接读出同一句原因，不反复起子进程。
 /// </summary>
-internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaudeCodeProbe probe, TimeProvider clock) : IClaudeCodeIdentitySource
+internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaudeCodeProbe probe, TimeProvider clock,
+    ISiteIdentityService siteIdentity) : IClaudeCodeIdentitySource
 {
     /// <summary>重取失败后这么久之内不再重取，直接读出上次的原因。</summary>
     private static readonly TimeSpan RetryAfter = TimeSpan.FromSeconds(60);
@@ -27,6 +29,7 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
     /// </summary>
     public async Task<ClaudeCodeIdentity> Current(string entrypoint, CancellationToken cancellation)
     {
+        using var operation = siteIdentity.Enter();
         if (!ClaudeCodeClient.CapturableEntrypoints.Contains(entrypoint)) entrypoint = ClaudeCodeClient.DefaultEntrypoint;
         var (executable, fingerprint) = Locate();
         if (Known(entrypoint, fingerprint) is { } known) return known;
@@ -106,7 +109,7 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
             var executable = launcher.FindClaude();
             var file = new FileInfo(executable);
             if (!file.Exists) throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.NotFound);
-            return (executable, string.Join('|', file.FullName, file.Length.ToString(CultureInfo.InvariantCulture), file.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture)));
+            return (executable, string.Join('|', file.FullName, file.Length.ToString(CultureInfo.InvariantCulture), file.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture), siteIdentity.Current.Version.ToString(CultureInfo.InvariantCulture)));
         }
         // 定位器报告没装。
         catch (InvalidOperationException error) when (error is not ClaudeCodeIdentityUnavailableException) { throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.NotFound); }

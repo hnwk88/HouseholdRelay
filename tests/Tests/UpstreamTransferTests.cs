@@ -184,7 +184,7 @@ static class UpstreamTransferTests
         const string Column = "SELECT COUNT(*) FROM pragma_table_info('upstream_candidates') WHERE name='exported_at'";
         Check(Count(process.Database, "PRAGMA user_version") == 6 && Count(process.Database, Column) == 0, "Rollback keeps version 6 without the column");
         var upgraded = new TestProcess(home.Path);
-        Check(Count(upgraded.Database, "PRAGMA user_version") == 7 && Count(upgraded.Database, Column) == 1);
+        Check(Count(upgraded.Database, "PRAGMA user_version") == 8 && Count(upgraded.Database, Column) == 1);
         Check(upgraded.Upstreams.ListCandidates() is [{ Name: "旧上游", ExportedAt: null }], "Existing upstreams read as never exported");
         return Task.CompletedTask;
     }

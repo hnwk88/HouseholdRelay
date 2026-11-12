@@ -31,7 +31,7 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
     /// 按 <paramref name="start"/> 的程序、参数、环境与工作目录在新伪控制台里起进程（<c>.cmd</c> 与 <c>.bat</c> 经 cmd.exe 跑），不用它的重定向设置；
     /// <paramref name="answers"/> 是「屏幕提示 → 要按的键」。系统调用失败时抛 <see cref="Win32Exception"/>，已建的句柄都会释放。
     /// </summary>
-    private PseudoConsoleProcess(ProcessStartInfo start, IReadOnlyDictionary<string, string> answers)
+    private PseudoConsoleProcess(ProcessStartInfo start, IReadOnlyDictionary<string, string> answers, Action? notStarted)
     {
         SafeFileHandle? inputRead = null, inputWrite = null, outputRead = null, outputWrite = null;
         try
@@ -59,16 +59,17 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
             Drained = Task.Run(() => Read(answers));
         }
         // 建到一半失败：关掉已建的管道、伪控制台与内存，再把原因交给调用方。
-        catch
+        catch (Exception error)
         {
             inputRead?.Dispose(); inputWrite?.Dispose(); outputRead?.Dispose(); outputWrite?.Dispose();
             Release();
+            if (processHandle == IntPtr.Zero && error is Win32Exception) notStarted?.Invoke();
             throw;
         }
     }
 
     /// <summary>在新伪控制台里起 <paramref name="start"/> 描述的进程；屏幕出现 <paramref name="answers"/> 的键（提示文字）时按对应的值一次。</summary>
-    public static PseudoConsoleProcess Start(ProcessStartInfo start, IReadOnlyDictionary<string, string> answers) => new(start, answers);
+    public static PseudoConsoleProcess Start(ProcessStartInfo start, IReadOnlyDictionary<string, string> answers, Action? notStarted = null) => new(start, answers, notStarted);
 
     /// <summary>结束整棵进程树、关掉伪控制台与管道，释放句柄与内存；可重复调用。</summary>
     public void Dispose()
@@ -80,7 +81,9 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
         // 进程树里有的进程没有权限结束：已尽力，其余由关掉伪控制台带走。
         catch (Win32Exception) { }
         Release();
-        input.Dispose(); output.Dispose(); Process.Dispose();
+        try { Process.WaitForExit(); }
+        // 真正确认退出后才释放进程对象；调用方的持久登记和官方许可不能提前归还。
+        finally { input.Dispose(); output.Dispose(); Process.Dispose(); }
     }
 
     /// <summary>后台读屏幕：去掉终端控制序列后找提示，每种提示按一次键；只留最后 16 KB 屏幕文字，进程退出后读到头即结束。</summary>

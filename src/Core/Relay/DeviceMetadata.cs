@@ -2,12 +2,24 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Core.Configuration;
 
 namespace Core.Relay;
 
 /// <summary>账户模式下把请求体中可识别的 metadata.user_id 设备段统一为本机设备标识，其余字节原样保留。</summary>
 public static partial class DeviceMetadata
 {
+    /// <summary>
+    /// 官方账户共同出站规则：Messages 只接受本站支持的设备格式并仅替换设备值；models 只接受空正文；
+    /// count_tokens 不添加 metadata，本站暂不支持该端点携带 metadata 扩展。编号缺损时拒绝，不生成替代值。
+    /// </summary>
+    public static byte[] ForOfficial(string route, byte[] body, string? deviceId)
+    {
+        if (!SiteDeviceIdentity.IsValid(deviceId))
+            throw new RelayFailure(503, "Site device identity is unavailable. This request was not sent.");
+        return DeviceMetadataRewrite.Apply(route, body, deviceId!);
+    }
+
     // Only recognized metadata.user_id formats are changed. Session IDs, account IDs,
     // prompts and signed attribution text are never rewritten.
     /// <summary>
@@ -61,5 +73,5 @@ public static partial class DeviceMetadata
 
     /// <summary>匹配旧格式 user_id：<c>user_</c> 加 64 位十六进制设备段，第 1 组捕获其后的 account 与 session 部分以便原样保留。</summary>
     [GeneratedRegex("^user_[a-fA-F0-9]{64}(_account_[a-zA-Z0-9-]*_session_[a-zA-Z0-9-]+)$", RegexOptions.CultureInvariant)]
-    private static partial Regex LegacyId();
+    internal static partial Regex LegacyId();
 }

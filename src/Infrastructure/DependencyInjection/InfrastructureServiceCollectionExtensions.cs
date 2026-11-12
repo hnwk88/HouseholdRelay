@@ -41,11 +41,16 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IDatabaseMigration, UsageAttemptSchema>();
         services.AddSingleton<IDatabaseMigration, UpstreamFailoverSchema>();
         services.AddSingleton<IDatabaseMigration, UpstreamExportSchema>();
+        services.AddSingleton<IDatabaseMigration, SiteIdentitySchema>();
+        services.AddSingleton<IDeviceIdGenerator, RandomDeviceIdGenerator>();
         services.AddSingleton<RelayDatabase>();
         services.AddSingleton<IRelayInstance>(provider => provider.GetRequiredService<RelayDatabase>());
         services.AddSingleton<IServingLock, ServingLockFile>();
 
         services.AddSingleton<IConfigurationRepository, ConfigurationRepository>();
+        services.AddSingleton<ISiteIdentityRepository, SiteIdentityRepository>();
+        services.AddSingleton<IOwnedClaudeProcesses, OwnedClaudeProcesses>();
+        services.AddSingleton<IClaudeConfigurationPreparation, ClaudeConfigurationPreparation>();
         services.AddSingleton<IIdentityRepository, IdentityRepository>();
         services.AddSingleton<IAdministratorRepository, AdministratorRepository>();
         services.AddSingleton<IUpstreamRepository, UpstreamRepository>();

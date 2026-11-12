@@ -145,7 +145,8 @@ async function failover(page, url, enabled) {
 }
 async function relay(url, token, stream = false) {
     return fetch(url + '/v1/messages?beta=true', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'content-type': 'application/json', 'anthropic-beta': 'future-beta' },
-        body: JSON.stringify({ model: 'fixture-model', stream, messages: [{ role: 'user', content: 'fixture-browser-call' }] }) });
+        body: JSON.stringify({ model: 'fixture-model', stream, metadata: { user_id: 'user_' + 'd'.repeat(64) + '_account__session_browser-fixture' },
+            messages: [{ role: 'user', content: 'fixture-browser-call' }] }) });
 }
 (async () => {
     await fs.mkdir(output, { recursive: true }); temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'household-upstream-browser-'));

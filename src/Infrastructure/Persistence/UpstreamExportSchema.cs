@@ -13,7 +13,7 @@ internal sealed class UpstreamExportSchema(RelayDataOptions options) : IDatabase
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version == 7) return;
+        if (version is 7 or 8) return;
         if (version != 6) throw new InvalidOperationException("数据库版本不支持。");
         using var transaction = connection.BeginTransaction();
         // 版本号被改回 6 的库（备份恢复或用例模拟旧库）里新列可能已经在了，重放时跳过，不报重复列。

@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Application.Contracts.Upstream;
 using Application.Interfaces.ClaudeCode;
+using Application.Interfaces.Configuration;
+using Application.Interfaces.Relay;
 using Application.Interfaces.Security;
 using Application.Interfaces.Upstream;
 using Core.Relay;
@@ -18,7 +20,8 @@ using Microsoft.Extensions.Logging;
 namespace Infrastructure.ExternalSources.ClaudeCode;
 
 /// <summary>可选的隔离原生客户端诊断；只允许一次候选生成请求，真实凭据只留在中转进程。</summary>
-internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector protector, IUpstreamProxy proxy) : IClaudeCodeProbe
+internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector protector, IUpstreamProxy proxy,
+    IClaudeConfigurationPreparation configuration, ISiteIdentityService siteIdentity, IOwnedClaudeProcesses ownedProcesses, IProtocolDiagnostics? diagnostics = null) : IClaudeCodeProbe
 {
     /// <summary>本机能否找到原生 claude.exe；找不到时返回 false，不抛异常。</summary>
     public bool IsAvailable
@@ -36,14 +39,23 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     /// 代理已启用却取不到地址时在启动子进程前抛出 <see cref="Core.Upstream.UpstreamProxyUnavailableException"/>。
     /// </summary>
     public Task<ProbeReply> Run(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) =>
-        Session<ProbeReply>(transport.Snapshot.Options.Model, null, new Uri(transport.Snapshot.Options.BaseUrl), async (context, completion) =>
+        Session<ProbeReply>(transport.Snapshot.Options.Model, null, new Uri(transport.Snapshot.Options.BaseUrl), transport.Snapshot.Options.OfficialAccount, async (context, completion) =>
         {
+            var attemptSite = siteIdentity.Current;
+            var official = transport.Snapshot.Options.OfficialAccount;
+            var correlation = Guid.NewGuid().ToString("N");
+            var dispatched = false;
             try
             {
                 var body = await UpstreamResponses.ReadBounded(context.Request.Body, 1024 * 1024, cancellation);
                 using var request = transport.Request("/v1/messages", context.Request.QueryString.ToString(), body, "POST",
-                    context.Request.Headers.UserAgent.ToString(), context.Request.Headers, identity);
+                    context.Request.Headers.UserAgent.ToString(), context.Request.Headers, identity, deviceId: attemptSite.DeviceId);
+                if (official) diagnostics?.Record(correlation, "assembled", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint);
+                if (official) diagnostics?.Record(correlation, "dispatch", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint);
+                dispatched = true;
                 using var response = await transport.Send(request, cancellation);
+                if (official) diagnostics?.Record(correlation, "response", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint,
+                    (int)response.StatusCode, response.StatusCode switch { HttpStatusCode.Unauthorized => "authentication", HttpStatusCode.Forbidden => "forbidden", HttpStatusCode.TooManyRequests => "rate_limit", _ => null });
                 await using var source = await response.Content.ReadAsStreamAsync(cancellation);
                 var bytes = await UpstreamResponses.ReadBounded(source, 1024 * 1024, cancellation);
                 var streaming = response.Content.Headers.ContentType?.MediaType == "text/event-stream";
@@ -56,7 +68,11 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
             }
             // 只接住网络、读写、取消、中转失败和统一身份缺失：把原因交给等待方，并中断本机连接，避免客户端拿到半截响应后继续重试。
             catch (Exception error) when (error is HttpRequestException or IOException or OperationCanceledException or RelayFailure or ClaudeCodeIdentityUnavailableException)
-            { completion.TrySetException(error); context.Abort(); }
+            {
+                if (official && !dispatched && error is RelayFailure or ClaudeCodeIdentityUnavailableException)
+                    diagnostics?.Record(correlation, "local_rejection", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint, error: "local_rejection");
+                completion.TrySetException(error); context.Abort();
+            }
         }, reply => (int)reply.Status is >= 200 and < 300, cancellation);
 
     /// <summary>
@@ -64,7 +80,7 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     /// cli 在伪控制台里跑交互模式（不开窗口，配置目录预写首次运行设置），其余用 <c>--print</c>。子进程的代理变量按官方地址的全局代理设置写，与登录、续期的子进程是同一个环境。
     /// </summary>
     public Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(string entrypoint, CancellationToken cancellation) =>
-        Session<IReadOnlyList<KeyValuePair<string, string>>>(null, entrypoint, OfficialAccountLogin.OfficialTarget, (context, completion) =>
+        Session<IReadOnlyList<KeyValuePair<string, string>>>(null, entrypoint, OfficialAccountLogin.OfficialTarget, true, (context, completion) =>
         {
             completion.TrySetResult([.. context.Request.Headers.Where(header => !header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
                 .SelectMany(header => header.Value.Select(value => KeyValuePair.Create(header.Key, value ?? "")))]);
@@ -76,8 +92,9 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     /// 等到 <paramref name="handle"/> 给出结果就返回；<paramref name="settle"/> 对结果为真时还要等子进程正常退出并排空输出，确认客户端完整走完一次会话。
     /// 先找 claude.exe 再按 <paramref name="target"/> 解析代理，两步失败都在启动子进程之前抛出。<paramref name="entrypoint"/> 为 null 时是检测（<c>--print</c>），否则是按这个入口抓身份。
     /// </summary>
-    private async Task<T> Session<T>(string? model, string? entrypoint, Uri target, Func<HttpContext, TaskCompletionSource<T>, Task> handle, Func<T, bool> settle, CancellationToken cancellation)
+    private async Task<T> Session<T>(string? model, string? entrypoint, Uri target, bool officialOperation, Func<HttpContext, TaskCompletionSource<T>, Task> handle, Func<T, bool> settle, CancellationToken cancellation)
     {
+        using var operation = officialOperation ? siteIdentity.Enter() : null;
         var executable = launcher.FindClaude();
         var route = proxy.Resolve(target);
         var parent = Path.GetFullPath(Path.GetTempPath());
@@ -97,21 +114,26 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
             if (Interlocked.CompareExchange(ref dispatched, 1, 0) != 0) { context.Response.StatusCode = 429; return; }
             await handle(context, completion);
         });
-        Process? child = null; PseudoConsoleProcess? terminal = null;
+        Process? child = null; PseudoConsoleProcess? terminal = null; IOwnedClaudeProcess? owned = null; var registered = false;
         try
         {
             await app.StartAsync(cancellation);
             var start = Start(executable, directory, app.Urls.Single(), localToken, model, route, entrypoint);
+            configuration.PrepareTransient(Path.Combine(directory, "config"));
+            owned = officialOperation ? ownedProcesses.Starting() : null;
             Task output, errors;
             if (entrypoint == "cli")
             {
                 // 交互模式要真终端：在伪控制台里起，首次运行的安全须知按一次回车；屏幕输出由它自己读掉。
-                terminal = PseudoConsoleProcess.Start(start, new Dictionary<string, string> { ["Press Enter to continue"] = "\r" });
-                child = terminal.Process; output = terminal.Drained; errors = Task.CompletedTask;
+                terminal = PseudoConsoleProcess.Start(start, new Dictionary<string, string> { ["Press Enter to continue"] = "\r" }, owned is null ? null : owned.CancelBeforeStart);
+                child = terminal.Process;
+                owned?.Register(child.Id, child.StartTime.ToUniversalTime()); registered = owned is not null;
+                output = terminal.Drained; errors = Task.CompletedTask;
             }
             else
             {
-                child = Process.Start(start) ?? throw new InvalidOperationException("无法启动隔离的 Claude Code 检测。");
+                child = OfficialAccountLogin.StartOwned(start, owned) ?? throw new InvalidOperationException("无法启动隔离的 Claude Code 检测。");
+                owned?.Register(child.Id, child.StartTime.ToUniversalTime()); registered = owned is not null;
                 child.StandardInput.Close();
                 output = child.StandardOutput.BaseStream.CopyToAsync(Stream.Null, cancellation);
                 errors = child.StandardError.BaseStream.CopyToAsync(Stream.Null, cancellation);
@@ -135,12 +157,19 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
         // 无论成败都结束子进程树、停掉临时端点并删除隔离目录，防止残留进程或临时配置留在本机。
         finally
         {
-            if (terminal is not null) terminal.Dispose();
+            if (terminal is not null)
+            {
+                terminal.Dispose();
+                if (registered) owned!.Complete();
+            }
             else if (child is not null)
             {
-                if (!child.HasExited) { child.Kill(true); await child.WaitForExitAsync(); }
+                if (!child.HasExited) child.Kill(true);
+                await child.WaitForExitAsync(CancellationToken.None);
+                if (registered) owned!.Complete();
                 child.Dispose();
             }
+            owned?.Dispose();
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5)); await app.StopAsync(stop.Token);
             if (directory.StartsWith(Path.TrimEndingDirectorySeparator(parent) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             {

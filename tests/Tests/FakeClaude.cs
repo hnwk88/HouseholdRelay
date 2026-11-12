@@ -30,6 +30,8 @@ static class FakeClaude
         var directory = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") ?? throw new InvalidOperationException("CLAUDE_CONFIG_DIR missing");
         // 真 Claude Code 自己建配置目录；检测与抓身份给的是还不存在的子目录。
         Directory.CreateDirectory(directory);
+        var configuration = Path.Combine(directory, ".claude.json");
+        if (!File.Exists(configuration)) File.WriteAllText(configuration, JsonSerializer.Serialize(new { userID = new string('d', 64), machineID = "fixture-machine-unchanged" }));
         File.AppendAllText(Path.Combine(directory, "fake-calls.log"), command + "\n");
         var inherited = Environment.GetEnvironmentVariables().Keys.Cast<string>()
             .Where(key => key.StartsWith("ANTHROPIC_", StringComparison.OrdinalIgnoreCase)
@@ -107,12 +109,20 @@ static class FakeClaude
         var entrypoint = Environment.GetEnvironmentVariable("CLAUDE_CODE_ENTRYPOINT") is { Length: > 0 } named ? named
             : args.Contains("--print") || Console.IsOutputRedirected ? "sdk-cli" : "cli";
         var index = Array.IndexOf(args, "--model"); var model = index >= 0 && index + 1 < args.Length ? args[index + 1] : "fixture-model";
+        using var configuration = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")!, ".claude.json")));
+        var deviceId = configuration.RootElement.GetProperty("userID").GetString();
         using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false });
         using var request = new HttpRequestMessage(HttpMethod.Post, Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL") + "/v1/messages?beta=true")
         {
             Content = new StringContent(JsonSerializer.Serialize(new { model, max_tokens = 16, stream = false, system = new[] { new { type = "text", text = $"x-anthropic-billing-header: cc_version={version}.abc; cc_entrypoint={entrypoint};" }, new { type = "text", text = "fixture system" } },
+                metadata = new { user_id = $"user_{deviceId}_account__session_fixture-session" },
                 messages = new[] { new { role = "user", content = "Reply with OK." } }, tools = Array.Empty<object>() }), System.Text.Encoding.UTF8, "application/json")
         };
+        if (scenario is "metadata-legacy-a" or "metadata-legacy-b" or "metadata-json-a" or "metadata-json-b")
+        {
+            request.Content.Dispose();
+            request.Content = new StringContent(DeviceMetadataPathTests.Sample(scenario.Contains("-json-", StringComparison.Ordinal), new string(scenario[^1], 64), model, version, entrypoint), System.Text.Encoding.UTF8, "application/json");
+        }
         foreach (var header in Identity(version, entrypoint)) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
         request.Headers.Authorization = new("Bearer", Environment.GetEnvironmentVariable("ANTHROPIC_AUTH_TOKEN"));
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01"); request.Headers.TryAddWithoutValidation("anthropic-beta", "claude-code-20250219");

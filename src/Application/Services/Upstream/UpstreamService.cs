@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Application.Contracts.Upstream;
 using Application.Interfaces.Security;
+using Application.Interfaces.Configuration;
 using Application.Interfaces.Upstream;
 using Core.Configuration;
 using Core.Upstream;
@@ -10,7 +11,7 @@ using Core.Upstream;
 namespace Application.Services.Upstream;
 
 /// <summary>网页和 CLI 共用的上游保存、获取模型、诊断、改名和原子切换服务。</summary>
-public sealed class UpstreamService(IUpstreamRepository repository, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts, IPasswordCipher cipher) : IUpstreamService
+public sealed class UpstreamService(IUpstreamRepository repository, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts, IPasswordCipher cipher, ISiteIdentityService siteIdentity) : IUpstreamService
 {
     /// <summary>导出文件的大小上限；几十家上游连同登录文件也远小于它，再大就不是导出文件。</summary>
     public const int MaxImportBytes = 1024 * 1024;
@@ -23,9 +24,8 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     public UpstreamSnapshot ReadActive()
     {
         var (row, options) = Active();
-        var credential = row.ProtectedCredential is null || row.Exported ? null
-            : options.OfficialLogin ? row.CandidateId is { } account ? officialAccounts.ReadAccessToken(account) : null : Decrypt(row.ProtectedCredential);
-        return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name, row.Failover);
+        var (credential, blocked) = ReadCredential(options, row.ProtectedCredential, row.Exported, row.CandidateId);
+        return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name, row.Failover, blocked);
     }
 
     /// <summary>
@@ -41,10 +41,24 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
             try { options = Parse<UpstreamOptions>(row.OptionsJson); report = Report(row); }
             // 一家的配置坏了只让它不参与切换，在用的那家和其余备用照常；它在上游页上照样读得出来，由管理员重新测试或删除。
             catch (Exception error) when (error is JsonException or InvalidOperationException) { continue; }
-            var credential = row.ProtectedCredential is null ? null : options.OfficialLogin ? officialAccounts.ReadAccessToken(row.CandidateId!) : Decrypt(row.ProtectedCredential);
-            snapshots.Add(new(row.Version, options, credential, report, row.CandidateId, row.Name));
+            var (credential, blocked) = ReadCredential(options, row.ProtectedCredential, false, row.CandidateId);
+            snapshots.Add(new(row.Version, options, credential, report, row.CandidateId, row.Name, blockedByIdentity: blocked));
         }
         return snapshots;
+    }
+
+    /// <summary>先原子取得官方许可再读取凭据；维护竞争只关闭这个官方候选，不中断后续独立 API 候选。</summary>
+    private (string? Credential, bool Blocked) ReadCredential(UpstreamOptions options, byte[]? protectedCredential, bool exported, string? accountId)
+    {
+        if (protectedCredential is null || exported) return (null, false);
+        try
+        {
+            using var operation = options.OfficialAccount ? siteIdentity.Enter() : null;
+            var credential = options.OfficialLogin ? accountId is null ? null : officialAccounts.ReadAccessToken(accountId) : Decrypt(protectedCredential);
+            return (credential, false);
+        }
+        // 只接住明确的维护或私有身份配置拒绝，包含账户读取内部再次准入的竞争；凭据解密损坏或未知异常仍按原规则暴露。
+        catch (Exception error) when (error is SiteIdentityUnavailableException or ClaudeConfigurationUnavailableException) { return (null, true); }
     }
 
     /// <summary>打开或关闭自动切换；保存即生效，下一个请求就按新开关取尝试顺序，不改在用的那一家。</summary>
@@ -82,6 +96,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     public string SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name = null)
     {
         options = options.Validated();
+        using var operation = options.OfficialAccount ? siteIdentity.Enter() : null;
         if (options.OfficialLogin) throw new InvalidOperationException("官方账户请按「登录官方账户」接入，不用贴令牌。");
         name = name is null ? new Uri(options.BaseUrl).Host : ValidName(name);
         if (credential.Length is < 1 or > 8192 || credential.Any(char.IsControl) || credential.Any(char.IsWhiteSpace))
@@ -130,7 +145,9 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     /// </summary>
     public async Task<ModelCatalog> DiscoverModels(string id, CancellationToken cancellation)
     {
-        var candidate = ReadCandidate(id); var token = LoginToken(candidate);
+        var candidate = ReadCandidate(id);
+        using var operation = candidate.Options.OfficialAccount ? siteIdentity.Enter() : null;
+        var token = LoginToken(candidate);
         var kept = candidate.Report is { } previous && repository.ReadActive()?.CandidateId == id ? previous : null;
         var secret = repository.BeginCandidateTest(id);
         ModelCatalog catalog;
@@ -171,6 +188,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     {
         if (!confirmed) throw new InvalidOperationException("请先确认最小模型测试可能消耗少量上游额度。");
         var candidate = ReadCandidate(id);
+        using var operation = candidate.Options.OfficialAccount ? siteIdentity.Enter() : null;
         if (candidate.Options.Model.Length == 0) throw new InvalidOperationException("请先选择或填写要测试的模型，再测试。");
         var token = LoginToken(candidate);
         var secret = repository.BeginCandidateTest(id);
@@ -181,7 +199,11 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     }
 
     /// <summary>把检测通过的上游原子地切换为新的活动版本；检测结果与活动版本的核对都在仓储的同一事务内完成。</summary>
-    public void Activate(string id, long? expectedVersion = null) => repository.Activate(id, expectedVersion);
+    public void Activate(string id, long? expectedVersion = null)
+    {
+        using var operation = ReadCandidate(id).Options.OfficialAccount ? siteIdentity.Enter() : null;
+        repository.Activate(id, expectedVersion);
+    }
 
     /// <summary>
     /// 把勾选的上游（按上游页顺序）加密导出：API 密钥与贴进来的账户令牌解密后放进文件，登录得到的官方账户放它账户目录里的登录文件原文；
@@ -196,6 +218,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
         if (wanted.Count == 0) throw new InvalidOperationException("请至少勾选一家要导出的上游，再按「导出加密文件」。");
         var chosen = ListCandidates().Where(item => wanted.Contains(item.Id)).ToArray();
         if (chosen.Length != wanted.Count) throw new InvalidOperationException("要导出的上游有一家已经不在了，请重新加载页面后再导出。");
+        using var operation = chosen.Any(item => item.Options.OfficialAccount) ? siteIdentity.Enter() : null;
         var officials = chosen.Where(item => item.Options.OfficialLogin).ToArray();
         return officialAccounts.Export(officials.Select(item => item.Id).ToArray(), files =>
         {
@@ -274,6 +297,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     private async Task<string> AddOfficial(long expectedVersion, UpstreamOptions options, string? name, Func<string, Task<string?>> acquire)
     {
         options = (options with { Mode = "oauth", Authentication = "bearer", AuthenticationManual = false, OfficialLogin = true }).Validated();
+        using var operation = siteIdentity.Enter();
         var chosen = string.IsNullOrWhiteSpace(name) ? null : ValidName(name);
         var id = Guid.NewGuid().ToString("N");
         var email = await acquire(id);

@@ -14,5 +14,6 @@
     <Content Include="../../docs/usability/PRIVATE-DEPLOYMENT.md" Link="PRIVATE-DEPLOYMENT.md" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../docs/usability/PRIVATE-DEPLOYMENT-VALIDATION.md" Link="PRIVATE-DEPLOYMENT-VALIDATION.md" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../docs/usability/MOVE-TO-ANOTHER-PC.md" Link="MOVE-TO-ANOTHER-PC.md" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../docs/usability/SITE-IDENTITY.md" Link="SITE-IDENTITY.md" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

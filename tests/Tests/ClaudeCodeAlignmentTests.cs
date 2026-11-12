@@ -41,23 +41,26 @@ static class ClaudeCodeAlignmentTests
         Check(sent[0].Headers["User-Agent"] == $"claude-cli/{claude.Version} (external, cli)", "cli must come from interactive mode in a pseudo console: " + sent[0].Headers["User-Agent"]);
     }
 
-    /// <summary>环境段逐字不变：正文系统提示里有工作目录（带用户名）、Platform、Shell、OS Version，还有工具列表；正文不带设备编号时，发到上游的正文与客户端发来的逐字节相同。</summary>
+    /// <summary>环境段逐字不变：正文系统提示里有工作目录、Platform、Shell、OS Version 和工具列表；合法设备字段更换后，所有其他正文字节仍与客户端发来的相同。</summary>
     public static async Task EnvironmentUnchanged()
     {
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
         var person = web.Identities.Create("书房");
+        var downstreamDevice = new string('a', 64);
         var body = JsonSerializer.Serialize(new
         {
             model = "fixture-model", max_tokens = 16,
             system = new object[] { new { type = "text", text = $"x-anthropic-billing-header: cc_version={claude.Version}.abc; cc_entrypoint=cli;" },
                 new { type = "text", text = "# Environment\n - Primary working directory: C:\\Users\\family.member\\projects\\家里的工程\n - Is a git repository: true\n - Platform: darwin\n - Shell: zsh\n - OS Version: Darwin 24.1.0" } },
             tools = new object[] { new { name = "Bash", description = "Run a command", input_schema = new { type = "object" } } },
+            metadata = new { user_id = "user_" + downstreamDevice + "_account_account_session_environment" },
             messages = new[] { new { role = "user", content = "hi" } }
         });
         using (var response = await Send(web, person.Token, body, null)) Check(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
-        Check(mock.Calls.Last().Body == body, "The environment section, tools and every other byte must reach the upstream unchanged");
+        var expected = body.Replace(downstreamDevice, web.Settings.Read().Value.DeviceId, StringComparison.Ordinal);
+        Check(mock.Calls.Last().Body == expected, "The environment section, tools, billing content and every byte outside the device value must reach the upstream unchanged");
     }
 
     /// <summary>
@@ -140,11 +143,12 @@ static class ClaudeCodeAlignmentTests
         await web.Login(); return web;
     }
 
-    /// <summary>客户端 Claude Code 发来的最小正文：<c>system[0]</c> 是计费头，写明版本与入口。</summary>
+    /// <summary>客户端 Claude Code 发来的最小正文：<c>system[0]</c> 写明版本与入口，metadata 带本站支持的独立模拟设备编号。</summary>
     private static string Body(string version, string entrypoint) => JsonSerializer.Serialize(new
     {
         model = "fixture-model", max_tokens = 16,
         system = new[] { new { type = "text", text = $"x-anthropic-billing-header: cc_version={version}.abc; cc_entrypoint={entrypoint};" }, new { type = "text", text = "You are Claude Code." } },
+        metadata = new { user_id = "user_" + new string('a', 64) + "_account_account_session_alignment" },
         messages = new[] { new { role = "user", content = "hi" } }
     });
 

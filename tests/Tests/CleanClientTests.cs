@@ -46,7 +46,7 @@ static class CleanClientTests
             await Event("message_delta", new { type = "message_delta", delta = new { stop_reason = toolDone ? "end_turn" : "tool_use", stop_sequence = (string?)null }, usage = new { output_tokens = 4 } });
             await Event("message_stop", new { type = "message_stop" });
         };
-        var start = new ProcessStartInfo(TestProcess.ClientLauncher.FindClaude())
+        var start = new ProcessStartInfo(TestProcess.IsolatedClientLauncher.FindClaude())
         { WorkingDirectory = temporary.Path, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
         foreach (var key in start.Environment.Keys.Where(key => key.StartsWith("ANTHROPIC_", StringComparison.OrdinalIgnoreCase) || key.StartsWith("CLAUDE_", StringComparison.OrdinalIgnoreCase)
             || key.Contains("PROXY", StringComparison.OrdinalIgnoreCase) || key is "NODE_EXTRA_CA_CERTS" or "SSL_CERT_FILE" or "NODE_TLS_REJECT_UNAUTHORIZED").ToArray()) start.Environment.Remove(key);
@@ -62,7 +62,7 @@ static class CleanClientTests
             Check(child.ExitCode == 0 && (await stdout).Contains("CLEAN_TOOL_OK"), "Isolated client failed its tool conversation: " + await stderr);
             Check(mock.Calls.Any(call => call.Body.Contains("tool_result") && call.Body.Contains("CLEAN_CLIENT_FILE_MARKER")));
             Check(mock.Calls.All(call => call.Headers.Values.All(value => !value.Contains(user.Token))));
-            Console.WriteLine("Clean native client: " + await TestProcess.ClientLauncher.DetectUserAgent() + "; local HTTP, no CA file or legacy client bundle.");
+            Console.WriteLine("Clean native client: " + await TestProcess.IsolatedClientLauncher.DetectUserAgent() + "; local HTTP, no CA file or legacy client bundle.");
         }
         // 超时或断言失败时客户端可能仍在运行，必须连同进程树一起结束，防止残留 Claude Code 进程占用临时目录。
         finally { if (!child.HasExited) { child.Kill(true); await child.WaitForExitAsync(); } }

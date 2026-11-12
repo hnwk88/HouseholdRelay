@@ -13,6 +13,8 @@ sealed class TestProcess
     public static ICertificateFactory CertificateFactory => Shared.GetRequiredService<ICertificateFactory>();
     /// <summary>本机 Claude Code 定位与启动。</summary>
     public static IClientLauncher ClientLauncher => Shared.GetRequiredService<IClientLauncher>();
+    /// <summary>离线真 CLI 用例专用启动器，缺少复制程序和防火墙回执时拒绝启动。</summary>
+    public static IClientLauncher IsolatedClientLauncher { get; } = new NativeCliIsolationLauncher();
 
     private readonly ServiceProvider provider;
     /// <summary>以数据目录、可选的固定时钟和可选的迁移注入点组装一个独立进程的容器。</summary>

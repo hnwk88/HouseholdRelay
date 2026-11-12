@@ -2,7 +2,11 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Application.Interfaces.Security;
+using Application.Interfaces.Configuration;
+using Application.Interfaces.ClaudeCode;
 using Infrastructure.ExternalSources.ClaudeCode;
 using Microsoft.AspNetCore.Http;
 using static Tests.TestSuite;
@@ -18,6 +22,8 @@ static class ClaudeCodeIdentityTests
 {
     /// <summary>官方账户登录文件里的访问令牌；断言它不出现在读句里。</summary>
     private const string Token = "fixture-identity-official-token";
+    /// <summary>仅用于两个全新隔离目录的同一固定假设备号，不来自或写入任何个人配置。</summary>
+    private static readonly string NativeDevice = new('d', 64);
     /// <summary>不算身份、跟着每次请求或连接走的头：认证、主机、长度、协议版本、beta、内容类型、编码和会话编号。</summary>
     private static readonly HashSet<string> PerRequest = new(StringComparer.OrdinalIgnoreCase)
     { "Authorization", "Host", "Content-Length", "Content-Type", "Accept-Encoding", "Connection", "anthropic-version", "anthropic-beta", "X-Claude-Code-Session-Id" };
@@ -42,10 +48,11 @@ static class ClaudeCodeIdentityTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock, services => services.AddSingleton<IClaudeCodeIdentitySource>(provider =>
         {
-            var launcher = new ClientLauncher();
-            return new ClaudeCodeIdentitySource(launcher, new ClaudeCodeProbe(launcher, provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<IUpstreamProxy>()), TimeProvider.System);
+            var launcher = new NativeCliIsolationLauncher();
+            return new ClaudeCodeIdentitySource(launcher, new ClaudeCodeProbe(launcher, provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<IUpstreamProxy>(), provider.GetRequiredService<IClaudeConfigurationPreparation>(), provider.GetRequiredService<ISiteIdentityService>(), provider.GetRequiredService<IOwnedClaudeProcesses>()), TimeProvider.System, provider.GetRequiredService<ISiteIdentityService>());
         }));
         var study = web.Identities.Create("书房"); var bedroom = web.Identities.Create("卧室");
+        var beforeBusiness = mock.Calls.Count;
         using (var first = await Send(web, study.Token, new string('a', 64), ("User-Agent", "claude-cli/1.9.9 (external, cli)"), ("x-app", "cli"), ("X-Stainless-OS", "MacOS"),
             ("X-Stainless-Arch", "arm64"), ("X-Stainless-Runtime-Version", "v22.1.0"), ("X-Stainless-Package-Version", "0.99.0"), ("X-Claude-Code-Session-Id", "session-study"),
             ("X-Device-Hint", "study-laptop"), ("anthropic-version", "2023-06-01"), ("anthropic-beta", "claude-code-20250219")))
@@ -73,8 +80,13 @@ static class ClaudeCodeIdentityTests
         var sdk = mock.Calls.Last();
         foreach (var (name, value) in print) Check(sdk.Headers.TryGetValue(name, out var sent) && sent == value, $"sdk-cli {name}: sent {sent}, real claude.exe --print sends {value}");
         Check(sdk.Headers.Keys.All(name => print.ContainsKey(name) || PerRequest.Contains(name)), "Only the sdk-cli identity may leave: " + string.Join(", ", sdk.Headers.Keys));
+        var business = mock.Calls.Skip(beforeBusiness).ToArray();
+        var callerDevices = new[] { new string('a', 64), new string('b', 64), new string('c', 64) };
+        Check(business.Length == 3 && business.All(call => !callerDevices.Any(device => call.Body.Contains(device, StringComparison.Ordinal))),
+            "Three simulated clients send exactly three original requests without leaking any original caller device.");
         Console.WriteLine($"Identity compared: {identity.Count} headers per mode from real claude.exe (cli {identity["User-Agent"]}; sdk-cli {print["User-Agent"]}), "
             + $"{shared.Length} headers equal across two cli clients, {print.Count} headers equal to --print for the sdk-cli client.");
+        Console.WriteLine($"Relay identity comparison: simulated_clients=3; distinct_input_devices={callerDevices.Distinct(StringComparer.Ordinal).Count()}; observed_upstream_requests={business.Length}; original_device_occurrences=0.");
     }
 
     /// <summary>从一次实抓里取出身份头：去掉跟着每次请求或连接走的头。</summary>
@@ -206,16 +218,12 @@ static class ClaudeCodeIdentityTests
             return context.Response.WriteAsJsonAsync(new { type = "error", error = new { type = "invalid_request_error", message = "capture only" } });
         };
         var directory = Directory.CreateTempSubdirectory("hr-native-claude-").FullName;
-        var start = new ProcessStartInfo(new ClientLauncher().FindClaude())
-        { WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var key in start.Environment.Keys.Where(key => key.StartsWith("ANTHROPIC_", StringComparison.OrdinalIgnoreCase) || key.StartsWith("CLAUDE_", StringComparison.OrdinalIgnoreCase)).ToArray())
-            start.Environment.Remove(key);
-        start.Environment["CLAUDE_CONFIG_DIR"] = Path.Combine(directory, "config"); start.Environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
-        start.Environment["ANTHROPIC_BASE_URL"] = native.Url; start.Environment["ANTHROPIC_AUTH_TOKEN"] = "fixture-native-token"; start.Environment["NO_PROXY"] = "127.0.0.1,localhost";
-        foreach (var argument in new[] { "--safe-mode", "--no-session-persistence", "--strict-mcp-config", "--no-chrome", "--tools", "", "--setting-sources", "",
-            "--max-turns", "1", "--output-format", "json", "--print", "Reply with OK." }) start.ArgumentList.Add(argument);
+        var start = ClaudeCodeProbe.Start(new NativeCliIsolationLauncher().FindClaude(), directory, native.Url, "fixture-native-token", null, new ProxyRoute(null, "127.0.0.1,localhost", "直连"), "sdk-cli");
+        SeedNativeDevice(start);
+        var launches = 0;
         using (var child = Process.Start(start)!)
         {
+            launches++;
             child.StandardInput.Close();
             var output = child.StandardOutput.BaseStream.CopyToAsync(Stream.Null); var errors = child.StandardError.BaseStream.CopyToAsync(Stream.Null);
             var deadline = DateTime.UtcNow.AddSeconds(60);
@@ -229,7 +237,7 @@ static class ClaudeCodeIdentityTests
         // 文件仍被占用：放弃清理，不让用例因此失败。
         catch (IOException) { }
         Check(!native.Calls.IsEmpty, "Real claude.exe must send one request to the local endpoint");
-        return native.Calls.First();
+        return NativeEvidence(native, directory, "sdk-cli", launches);
     }
 
     /// <summary>本机真 claude.exe 的交互模式：参数与预写配置用中转的 <see cref="ClaudeCodeProbe.Start"/>，在伪控制台里跑，抓到第一个请求就结束。</summary>
@@ -242,9 +250,12 @@ static class ClaudeCodeIdentityTests
             return context.Response.WriteAsJsonAsync(new { type = "error", error = new { type = "invalid_request_error", message = "capture only" } });
         };
         var directory = Directory.CreateTempSubdirectory("hr-native-claude-").FullName;
-        var start = ClaudeCodeProbe.Start(new ClientLauncher().FindClaude(), directory, native.Url, "fixture-native-token", null, new ProxyRoute(null, "127.0.0.1,localhost", "直连"), "cli");
+        var start = ClaudeCodeProbe.Start(new NativeCliIsolationLauncher().FindClaude(), directory, native.Url, "fixture-native-token", null, new ProxyRoute(null, "127.0.0.1,localhost", "直连"), "cli");
+        SeedNativeDevice(start);
+        var launches = 0;
         using (var terminal = PseudoConsoleProcess.Start(start, new Dictionary<string, string> { ["Press Enter to continue"] = "\r" }))
         {
+            launches++;
             var deadline = DateTime.UtcNow.AddSeconds(60);
             while (native.Calls.IsEmpty && !terminal.Process.HasExited && DateTime.UtcNow < deadline) await Task.Delay(100);
         }
@@ -253,7 +264,38 @@ static class ClaudeCodeIdentityTests
         // 文件仍被占用：放弃清理，不让用例因此失败。
         catch (IOException) { }
         Check(!native.Calls.IsEmpty, "Real claude.exe in interactive mode must send one request to the local endpoint");
-        return native.Calls.First();
+        return NativeEvidence(native, directory, "cli", launches);
+    }
+
+    /// <summary>只在刚创建的测试配置目录预置 userID；保留 Start 生成的引导、主题和信任字段，不触碰真实账户。</summary>
+    private static void SeedNativeDevice(ProcessStartInfo start)
+    {
+        var directory = start.Environment["CLAUDE_CONFIG_DIR"]!;
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, ".claude.json");
+        var json = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();
+        json["userID"] = NativeDevice;
+        File.WriteAllText(path, json.ToJsonString());
+    }
+
+    /// <summary>读取原生真实发出的首个请求，验证预置设备值；只输出启动数、实收请求数和设备/目录哈希，不改写请求。</summary>
+    private static UpstreamCall NativeEvidence(UpstreamFixture native, string directory, string mode, int launches)
+    {
+        var first = native.Calls.First();
+        using var body = JsonDocument.Parse(first.Body);
+        var identifier = body.RootElement.GetProperty("metadata").GetProperty("user_id").GetString()!;
+        string observed;
+        if (identifier.StartsWith("user_", StringComparison.Ordinal))
+        {
+            Check(DeviceMetadata.LegacyId().IsMatch(identifier), "The native client must send a supported legacy identity.");
+            observed = identifier.Substring(5, 64);
+        }
+        else { using var inner = JsonDocument.Parse(identifier); observed = inner.RootElement.GetProperty("device_id").GetString()!; }
+        Check(launches == 1 && observed == NativeDevice, "A new isolated native directory must send exactly its pre-seeded userID without request rewriting.");
+        var deviceHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(observed)));
+        var directoryHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(directory)));
+        Console.WriteLine($"Native direct fixture: mode={mode}; fresh_directory_hash={directoryHash}; actual_process_launches={launches}; observed_requests={native.Calls.Count}; preseed_matches_wire=true; device_hash={deviceHash}.");
+        return first;
     }
 
     /// <summary>带假 Claude Code 的网页主机里导入一个官方账户上游（指向模拟上游），测试通过并切换过去；<paramref name="extra"/> 可再覆盖服务登记。</summary>

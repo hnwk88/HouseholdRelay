@@ -1,10 +1,11 @@
 ﻿using Application.Interfaces.Usage;
+using Application.Interfaces.Configuration;
 using Microsoft.Extensions.Hosting;
 
 namespace Application.Services.Usage;
 
 /// <summary>只在服务启动时恢复遗留请求；查询和 CLI 打开数据库不会打断仍在运行的请求。</summary>
-public sealed class UsageMaintenance(IUsageService store, IServingLock servingLock) : BackgroundService
+public sealed class UsageMaintenance(IUsageService store, IServingLock servingLock, ISiteIdentityService identity) : BackgroundService
 {
     private IDisposable? serving;
 
@@ -17,6 +18,7 @@ public sealed class UsageMaintenance(IUsageService store, IServingLock servingLo
         try
         {
             serving = servingLock.Acquire();
+            await identity.Prepare(cancellationToken);
             store.Recover(); await store.Cleanup(cancellationToken);
             await base.StartAsync(cancellationToken);
         }

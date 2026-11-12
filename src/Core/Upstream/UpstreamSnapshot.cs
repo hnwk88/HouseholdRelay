@@ -3,8 +3,11 @@
 namespace Core.Upstream;
 
 /// <summary>请求持有的不可变活动版本；用普通类而非记录类型，避免自动输出凭据。</summary>
-public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, string? candidateId = null, string? name = null, bool failover = false)
+public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, string? candidateId = null, string? name = null, bool failover = false, bool blockedByIdentity = false)
 {
+    /// <summary>本次读取被站点维护或私有身份配置校验拒绝；不是凭据丢失，连接池须保留既有暂停和冷却。</summary>
+    [JsonIgnore] public bool BlockedByIdentity { get; } = blockedByIdentity;
+
     /// <summary>当前生效的已保存上游主键；尚未从任何已保存上游激活（新实例或独立中转）时为 null。</summary>
     public string? CandidateId { get; } = candidateId;
 
@@ -21,8 +24,8 @@ public sealed class UpstreamSnapshot(long version, UpstreamOptions options, stri
     public UpstreamOptions Options { get; } = options;
     /// <summary>上游明文凭据；只供建连、脱敏和诊断使用，永不序列化。</summary>
     [JsonIgnore] public string? Credential { get; } = credential;
-    /// <summary>是否已有可用凭据；为 false 时中转请求会以「未配置」失败。</summary>
-    public bool Configured => Credential is not null;
+    /// <summary>本次快照是否取得可用凭据；维护拒绝的读取不可用于发送。</summary>
+    public bool Configured => Credential is not null && !BlockedByIdentity;
 
     /// <summary>该版本最近一次检测结果；null 表示从未检测。</summary>
     public UpstreamReport? Report { get; } = report;

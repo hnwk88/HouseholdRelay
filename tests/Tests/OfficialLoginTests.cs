@@ -197,7 +197,7 @@ static class OfficialLoginTests
     {
         using var gate = new ManualResetEventSlim(); using var waiting = new ManualResetEventSlim();
         var source = new GatedSource(gate, waiting);
-        using var pool = new UpstreamPool(source, new RelayConfiguration(), new Infrastructure.ExternalSources.Network.SystemUpstreamProxy(() => new RelayConfiguration()), TimeProvider.System);
+        using var pool = new UpstreamPool(source, new RelayConfiguration { DeviceId = new string('e', 64) }, new Infrastructure.ExternalSources.Network.SystemUpstreamProxy(() => new RelayConfiguration { DeviceId = new string('e', 64) }), TimeProvider.System);
         // 两次取租约放到线程池上并行：第一次卡在读快照里，第二次若还排在锁后面就会超时，正好量出等待是否在锁外。
         var slow = Task.Run(pool.Acquire);
         Check(waiting.Wait(TimeSpan.FromSeconds(5)), "The slow read never started");

@@ -1,0 +1,33 @@
+@page
+@model DeviceIdentityModel
+@{ ViewData["Title"] = "设备维护"; }
+<h1>设备维护</h1>
+<p>更换设备编号会暂时暂停本站全部官方账户的调用，等待已经开始的调用和登录程序结束。独立 API 上游仍可使用。</p>
+<p>这项维护不能解除账户限制，不会重新登录或测试账户。每台电脑的个人令牌、会话、用量归属和连接配置继续保留。</p>
+<p role="status" id="identity-progress">@Model.Progress</p>
+@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<div asp-validation-summary="All" role="alert"></div>
+@if (Model.Pending || !Model.Available)
+{
+    <form method="post" asp-page-handler="Resume" class="card">
+        <input type="hidden" asp-for="OperationId" />
+        <p>修复本站私有配置后，可以继续原操作。已经开始的更换会沿用同一个编号。</p>
+        <button type="submit">继续原操作</button>
+    </form>
+}
+else
+{
+    <form method="post" asp-page-handler="Refresh" class="card" data-device-maintenance>
+        <input type="hidden" asp-for="OperationId" /><input type="hidden" asp-for="Version" />
+        <label class="checkbox"><input asp-for="Confirmed" required />我确认暂时暂停本站全部官方账户，并更换设备编号；这不能解除账户限制。</label>
+        <button type="submit">更换设备编号</button>
+        <p data-submit-status role="status">尚未开始更换。</p>
+    </form>
+}
+<section class="card" aria-labelledby="diagnostic-title">
+    <h2 id="diagnostic-title">临时脱敏取证</h2>
+    <p>最多记录十分钟或一百条样本，达到任一限制就停止，重启后默认关闭。不记录凭据或完整对话，也不会主动发请求。</p>
+    <p role="status">@Model.DiagnosticStatus</p>
+    <form method="post" asp-page-handler="StartDiagnostics"><button type="submit">开启临时取证</button></form>
+    <form method="post" asp-page-handler="StopDiagnostics"><button type="submit">停止临时取证</button></form>
+</section>

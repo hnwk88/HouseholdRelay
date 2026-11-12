@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Application.Contracts.Upstream;
 using Application.Interfaces.ClaudeCode;
+using Application.Interfaces.Configuration;
 using Application.Interfaces.Upstream;
 using Core.Relay;
 using Core.Upstream;
@@ -12,7 +13,7 @@ namespace Infrastructure.ExternalSources.Upstream;
 /// 独立诊断已保存上游：读模型目录时探测认证方式，最小调用被拒时按需改用 Claude Code；仅完成有效 Messages 调用后允许切换。
 /// 官方账户读模型目录与测试都只带本机 Claude Code 的统一身份，测试直接用真 Claude Code，不发标准调用。
 /// </summary>
-internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy proxy, IClaudeCodeIdentitySource identities) : IUpstreamProbe
+internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy proxy, IClaudeCodeIdentitySource identities, ISiteIdentityService? siteIdentity = null) : IUpstreamProbe
 {
     /// <summary>失败读句里引用上游原话的最大字符数（含截断时补的省略号）。</summary>
     private const int QuoteLimit = 200;
@@ -21,6 +22,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     public async Task<ModelCatalog> Discover(UpstreamSnapshot snapshot, CancellationToken cancellation)
     {
         using var timeout = Limit(cancellation, 30);
+        using var operation = snapshot.Options.OfficialAccount ? siteIdentity?.Enter() : null;
         var options = snapshot.Options;
         try
         {
@@ -60,6 +62,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     /// </summary>
     public async Task<ProbeResult> Run(UpstreamSnapshot snapshot, CancellationToken cancellation)
     {
+        using var operation = snapshot.Options.OfficialAccount ? siteIdentity?.Enter() : null;
         var options = snapshot.Options; var used = options;
         var connection = "unverified"; var authentication = "unverified"; var discovery = "unverified";
         var models = Array.Empty<string>(); string? verifiedModel = null; var checkedAt = DateTimeOffset.UtcNow;
@@ -129,7 +132,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         {
             var method = order[index];
             using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options with { Authentication = method }, snapshot.Credential), proxy, 1);
-            using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0", identity: identity);
+            using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0", identity: identity, deviceId: siteIdentity?.Current.DeviceId);
             using var response = await transport.Send(request, cancellation);
             var refused = response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
             if (refused && index + 1 < order.Length) continue;

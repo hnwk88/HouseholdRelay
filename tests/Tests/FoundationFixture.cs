@@ -32,6 +32,7 @@ sealed class TestHome : IDisposable
         var state = System.IO.Path.Combine(Path, ".state"); WindowsSecrets.ProtectDirectory(state);
         var config = new RelayConfiguration
         {
+            DeviceId = new string('a', 64),
             UpstreamUserAgent = "claude-cli/fixture", PublicUrl = "https://localhost:5433",
             Clients = [new("study", ConfigurationFiles.Hash("legacy-study-token")), new("office", ConfigurationFiles.Hash("legacy-office-token"), false)]
         };

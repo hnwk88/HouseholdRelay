@@ -71,7 +71,7 @@ static class UpstreamSecurityTests
             Check(collection.Count == 2 && collection.Cast<X509Certificate2>().Count(item => item.HasPrivateKey) == 1);
             using var leaf = TestProcess.CertificateFactory.LoadServerCertificate(stored);
             var client = new ClientRegistry([new("certificate-test", ConfigurationFiles.Hash("certificate-personal-token"))]);
-            using var relayServices = TestProcess.StandaloneRelay(new RelayConfiguration(), null, clients: client); var relay = relayServices.GetRequiredService<RelayServer>();
+            using var relayServices = TestProcess.StandaloneRelay(new RelayConfiguration { DeviceId = new string('e', 64) }, null, clients: client); var relay = relayServices.GetRequiredService<RelayServer>();
             await using var app = relay.Build(leaf, 0, collection); await app.StartAsync();
             using var http = new HttpClient(new SocketsHttpHandler
             {

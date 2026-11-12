@@ -22,7 +22,7 @@ static partial class FoundationTests
         settings.Read().Value.Validate();
         using (var connection = database.Open())
         {
-            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 7);
+            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 8);
             Check((string?)RelayDatabase.Scalar(connection, null, "PRAGMA journal_mode") == "wal");
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA synchronous")) == 2);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA foreign_keys")) == 1);
@@ -37,7 +37,7 @@ static partial class FoundationTests
         Check(identities.Clients.Authenticate(a.Token) is null);
         var snapshot = settings.Read(); snapshot.Value.ListenPort = 9001; settings.Save(snapshot.Version, snapshot.Value);
         var staleRejected = false;
-        try { settings.Save(snapshot.Version, new RelayConfiguration()); } catch (InvalidOperationException) { /* 用已提交过的旧版本号保存必须被拒绝；捕获到即记为拒绝成功，未抛出则下一行断言判失败。 */ staleRejected = true; }
+        try { settings.Save(snapshot.Version, snapshot.Value); } catch (InvalidOperationException) { /* 用已提交过的旧版本号保存必须被拒绝；捕获到即记为拒绝成功，未抛出则下一行断言判失败。 */ staleRejected = true; }
         Check(staleRejected, "A stale form must not overwrite a committed configuration");
         var restarted = new TestProcess(home.Path); var restored = restarted.Identities;
         Check(restored.Clients.Authenticate(rotated.Token)?.Id == a.UserId);

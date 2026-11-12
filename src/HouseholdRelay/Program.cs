@@ -1,5 +1,7 @@
 ﻿using System.Text;
 using Application.Interfaces.ClaudeCode;
+using Application.Interfaces.Configuration;
+using Application.Interfaces.Usage;
 using Application.Interfaces.Relay;
 using HouseholdRelay.Commands;
 using HouseholdRelay.Composition;
@@ -43,6 +45,8 @@ public static class Program
                 case "account":
                 {
                     using var services = CompositionRoot.BuildCommandServices(home);
+                    using var serving = services.GetRequiredService<IServingLock>().Acquire();
+                    await services.GetRequiredService<ISiteIdentityService>().Prepare(CancellationToken.None);
                     services.GetRequiredService<ManagementCommands>().SetAccount(); break;
                 }
                 case "serve":

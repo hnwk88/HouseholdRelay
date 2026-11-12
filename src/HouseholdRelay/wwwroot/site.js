@@ -27,6 +27,6 @@ document.querySelectorAll('form[method="post"]').forEach(form => {
             progress = document.createElement('p'); progress.dataset.submitStatus = '';
             progress.setAttribute('role', 'status'); form.append(progress);
         }
-        progress.textContent = form.action.includes('handler=Test') ? '正在检测上游，请稍候…' : '正在处理，请稍候…';
+        progress.textContent = form.hasAttribute('data-device-maintenance') ? '正在等待已有官方调用结束，设备更换尚未完成，请稍候。' : form.action.includes('handler=Test') ? '正在检测上游，请稍候…' : '正在处理，请稍候…';
     });
 });

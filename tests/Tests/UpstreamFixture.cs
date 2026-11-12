@@ -63,7 +63,7 @@ sealed class UpstreamFixture : IAsyncDisposable
     public static async Task<HttpResponseMessage> RelayRequest(WebFixture web, string token, string marker = "ordinary", string route = "/v1/messages?beta=true")
     {
         using var request = new HttpRequestMessage(route.StartsWith("/v1/models", StringComparison.Ordinal) ? HttpMethod.Get : HttpMethod.Post, web.Url + route)
-        { Content = new StringContent(JsonSerializer.Serialize(new { model = "fixture-model", messages = new[] { new { role = "user", content = marker } } }), Encoding.UTF8, "application/json") };
+        { Content = new StringContent(JsonSerializer.Serialize(new { model = "fixture-model", messages = new[] { new { role = "user", content = marker } }, metadata = new { user_id = "user_" + new string('a', 64) + "_account_fixture_session_relay" } }), Encoding.UTF8, "application/json") };
         request.Headers.Authorization = new("Bearer", token);
         request.Headers.Add("anthropic-beta", "future-beta,oauth-2025-04-20");
         request.Headers.Add("anthropic-version", "2023-06-01");

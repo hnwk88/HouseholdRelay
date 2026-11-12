@@ -40,7 +40,8 @@ static class UpstreamMigrationTests
         }
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TABLE upstream_candidates"));
         var upgraded = new TestProcess(home.Path); var upstream = upgraded.Upstreams.ReadActive();
-        Check(upstream.Options.Mode == "oauth" && upstream.Credential == "fixture-legacy-upstream-secret" && upstream.Report is null);
+        // 纯迁移不准备官方目录或触发续期；直接检查已保存密文解密后仍是旧夹具凭据。
+        Check(upstream.Options.Mode == "oauth" && upgraded.ActiveCredential() == "fixture-legacy-upstream-secret" && upstream.Report is null);
         Check(upgraded.Administrators.IsInitialized);
         Check(upgraded.Identities.Clients.Authenticate("legacy-study-token")!.Id == originalId);
         Check(upgraded.Identities.Clients.Authenticate("legacy-office-token") is null);

@@ -1,4 +1,5 @@
 ﻿using Application.Interfaces.Upstream;
+using Application.Interfaces.Configuration;
 using Core.Configuration;
 using Core.Upstream;
 using Core.Usage;
@@ -9,7 +10,7 @@ namespace Infrastructure.ExternalSources.Upstream;
 /// 按数据库活动版本更换在用那一家的连接，旧请求的租约继续使用原地址、凭据和状态；备用上游按已保存上游主键各持一个连接，凭据、暂停、冷却、暂避各管各的。
 /// 活动版本换了，在用与备用的连接都随新版本重建。
 /// </summary>
-internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfiguration config, IUpstreamProxy proxy, TimeProvider clock) : IUpstreamPool
+internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfiguration config, IUpstreamProxy proxy, TimeProvider clock, ISiteIdentityService? siteIdentity = null) : IUpstreamPool
 {
     /// <summary>换掉的那一家暂避多久。</summary>
     internal static readonly TimeSpan AvoidFor = TimeSpan.FromMinutes(5);
@@ -57,12 +58,18 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
         lock (sync)
         {
             // 比当前连接晚开始读的快照才可能更新；先开始、后读完的慢读不能把已换上的新连接换回去，此时沿用当前连接。
+            if (current is not null && snapshot.BlockedByIdentity && current.Snapshot.Version == snapshot.Version
+                && current.Snapshot.CandidateId == snapshot.CandidateId && current.Snapshot.Options == snapshot.Options)
+            {
+                if (read > installed) { installed = read; current.SetIdentityReadBlocked(true); }
+                return current.Retain();
+            }
             if (current is null || read > installed && (current.Snapshot.Version != snapshot.Version || !string.Equals(current.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)))
             {
-                var replacement = new UpstreamConnection(snapshot, proxy, maxConnections);
+                var replacement = new UpstreamConnection(snapshot, proxy, maxConnections, () => siteIdentity?.Available ?? true);
                 var previous = current; current = replacement; installed = read; previous?.Dispose();
             }
-            else if (read > installed) installed = read;
+            else if (read > installed) { installed = read; current.SetIdentityReadBlocked(snapshot.BlockedByIdentity); }
             return current.Retain();
         }
     }
@@ -84,10 +91,15 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
             {
                 var id = snapshot.CandidateId!;
                 standby.TryGetValue(id, out var connection);
-                if (!stale && (connection is null || connection.Snapshot.Version != snapshot.Version || connection.Snapshot.Options != snapshot.Options
+                var keepBlocked = snapshot.BlockedByIdentity && connection is not null && connection.Snapshot.Version == snapshot.Version && connection.Snapshot.Options == snapshot.Options;
+                if (!stale && !keepBlocked && (connection is null || connection.Snapshot.Version != snapshot.Version || connection.Snapshot.Options != snapshot.Options
                     || !string.Equals(connection.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)))
-                { connection?.Dispose(); connection = new UpstreamConnection(snapshot, proxy, maxConnections); standby[id] = connection; }
-                if (connection is not null) leases.Add(connection.Retain());
+                { connection?.Dispose(); connection = new UpstreamConnection(snapshot, proxy, maxConnections, () => siteIdentity?.Available ?? true); standby[id] = connection; }
+                if (connection is not null)
+                {
+                    if (!stale) connection.SetIdentityReadBlocked(snapshot.BlockedByIdentity);
+                    leases.Add(connection.Retain());
+                }
             }
             if (stale) return leases;
             standbyInstalled = read; order = snapshots.Select(snapshot => snapshot.CandidateId!).ToList();

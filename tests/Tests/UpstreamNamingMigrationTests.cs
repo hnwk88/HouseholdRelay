@@ -48,7 +48,7 @@ static class UpstreamNamingMigrationTests
         Check(active.CandidateId == "old-candidate" && active.Name == "aitoll.net" && active.Credential == "fixture-migrated-secret" && active.Options.Diagnostic == "claude-code");
         using (var connection = upgraded.Database.Open())
         {
-            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 7);
+            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 8);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM upstream_candidates WHERE options_json LIKE '%proxyUrl%'")) == 0);
             Check(!((string)RelayDatabase.Scalar(connection, null, "SELECT options_json FROM upstream WHERE id=1")!).Contains("proxyUrl"));
         }
@@ -69,7 +69,8 @@ static class UpstreamNamingMigrationTests
             ("$json", """{"mode":"oauth","authentication":"bearer","baseUrl":"https://api.anthropic.com","oAuthBeta":true}"""), ("$secret", secret)));
         var version = process.Settings.Read().Version;
         var upgraded = new TestProcess(home.Path); var active = upgraded.Upstreams.ReadActive();
-        Check(active.CandidateId is not null && active.Name == "api.anthropic.com" && active.Credential == "fixture-orphan-secret");
+        // 迁移只核对原有加密凭据；未准备官方身份的测试进程不通过活动读取开放转发。
+        Check(active.CandidateId is not null && active.Name == "api.anthropic.com" && upgraded.ActiveCredential() == "fixture-orphan-secret");
         var created = upgraded.Upstreams.ReadCandidate(active.CandidateId!);
         Check(created.State == "untested" && created.Options.Mode == "oauth" && upgraded.Upstreams.ListCandidates().Count == 1);
         Check(upgraded.Settings.Read().Value.ProxyMode == "none" && upgraded.Settings.Read().Version == version);

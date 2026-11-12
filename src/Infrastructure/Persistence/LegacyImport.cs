@@ -14,6 +14,21 @@ internal sealed class LegacyImport(ISecretProtector protector, ICertificateFacto
     /// <summary>排在第一位（10）：先把旧版文件导入基础库，再交给上游和用量架构升级。</summary>
     public int Order => 10;
 
+    /// <summary>首次建库前先检查旧资产是否配套并读取合法旧编号；真正空目录才返回 null。</summary>
+    internal static RelayConfiguration? ReadInitialConfiguration(string state)
+    {
+        // 数据库及配套标记同时遗失也不能把残留私有账户或WAL当作全新站点。
+        if (new[] { "official-accounts", "owned-claude-processes", "keys", "legacy-backups" }.Any(name => System.IO.Directory.Exists(System.IO.Path.Combine(state, name))
+                && System.IO.Directory.EnumerateFileSystemEntries(System.IO.Path.Combine(state, name)).Any())
+            || new[] { "relay.db-wal", "relay.db-shm", "serving.lock" }.Any(name => File.Exists(System.IO.Path.Combine(state, name))))
+            throw new InvalidOperationException("发现已有站点的残留资产，请恢复完整配套备份，不能重新创建身份。");
+        var path = System.IO.Path.Combine(state, "server.json");
+        if (File.Exists(path)) return DeserializeSettings(File.ReadAllText(path).TrimStart('\uFEFF'));
+        if (new[] { "account.dpapi", "tls.dpapi", "relay-ca.pem" }.Any(name => File.Exists(System.IO.Path.Combine(state, name))))
+            throw new InvalidOperationException("旧数据目录缺少 server.json，请恢复完整备份，不能新建身份。");
+        return null;
+    }
+
     /// <summary>若元数据未标记已导入，就读取旧版 server.json、account.dpapi、tls.dpapi、relay-ca.pem：先把原文件复制到受保护的 legacy-backups 快照目录，再在一个事务里导入设置、用户与令牌哈希、上游凭据、TLS 证书和旧 CA，并写入已导入标记；校验或解密失败时整体回滚，原文件始终不动。旧凭据和证书只在内存里短暂解密校验，库中仍存 DPAPI 密文。</summary>
     public void Apply(RelayDatabase database)
     {
@@ -37,9 +52,7 @@ internal sealed class LegacyImport(ISecretProtector protector, ICertificateFacto
         using var transaction = connection.BeginTransaction();
         if (files.TryGetValue("server.json", out var json))
         {
-            var config = JsonSerializer.Deserialize<RelayConfiguration>(Encoding.UTF8.GetString(json).TrimStart('﻿'), ConfigurationFiles.Json)
-                ?? throw new InvalidOperationException("旧配置为空。");
-            config.Validate();
+            var config = DeserializeSettings(Encoding.UTF8.GetString(json).TrimStart('﻿'));
             Execute(connection, transaction, "UPDATE settings SET json=$json,version=version+1 WHERE id=1", ("$json", SerializeSettings(config)));
             foreach (var client in config.Clients)
             {

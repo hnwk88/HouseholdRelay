@@ -15,13 +15,13 @@ public sealed class RelayConfiguration
     /// <summary>上游认证方式：<c>oauth</c>（Bearer 令牌）或 <c>api-key</c>（x-api-key 头），其余取值不合法。</summary>
     public string AuthMode { get; set; } = "oauth";
 
-    /// <summary>本实例固定的设备标识，64 位十六进制（32 字节随机数）；OAuth 模式下用于统一改写请求里的设备元数据，让上游只看到一台设备。</summary>
-    public string DeviceId { get; set; } = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+    /// <summary>站点唯一持久设备标识；只有首次建站和明确维护会生成，普通对象和读取不补号。</summary>
+    public string DeviceId { get; set; } = "";
 
     /// <summary>发往上游时使用的 User-Agent；不能为空白、不超过 256 字符且不含控制字符。</summary>
     public string UpstreamUserAgent { get; set; } = "HouseholdRelay/1.0";
 
-    /// <summary>为 true 时，OAuth 模式下把请求体中的设备元数据统一改写为 <see cref="DeviceId"/>；API 密钥模式不改写。</summary>
+    /// <summary>兼容账户模式可选择把设备元数据统一为 <see cref="DeviceId"/>；官方账户始终统一，独立 API 不改写。</summary>
     public bool NormalizeDeviceMetadata { get; set; } = true;
 
     /// <summary>旧版 server.json 里的上游代理地址，只在旧版导入时读入；v4 迁移把它改成 <see cref="ProxyMode"/> 与 <see cref="ProxyUrl"/>，运行时不再使用。</summary>
@@ -68,7 +68,7 @@ public sealed class RelayConfiguration
             || QueueTimeoutSeconds is < 1 or > 120 || UploadTimeoutSeconds is < 1 or > 120
             || RequestTimeoutSeconds is < 1 or > 3600 || MaxBodyBytes is < 1 or > 67108864
             || RequestsPerMinute is < 1 or > 10000
-            || !IsHex(DeviceId, 64) || string.IsNullOrWhiteSpace(UpstreamUserAgent)
+            || !SiteDeviceIdentity.IsValid(DeviceId) || string.IsNullOrWhiteSpace(UpstreamUserAgent)
             || UpstreamUserAgent.Length > 256 || UpstreamUserAgent.Any(char.IsControl))
             throw new InvalidOperationException("中转配置格式或范围错误。");
         if (UpstreamProxy is not null && (!Uri.TryCreate(UpstreamProxy, UriKind.Absolute, out var proxy)
@@ -80,7 +80,7 @@ public sealed class RelayConfiguration
     }
 
     /// <summary>判断字符串是否恰好为指定长度且全部是十六进制字符（大小写均可）。</summary>
-    public static bool IsHex(string value, int length) => value.Length == length && value.All(Uri.IsHexDigit);
+    public static bool IsHex(string? value, int length) => value is not null && value.Length == length && value.All(Uri.IsHexDigit);
 
     /// <summary>判断是否为合法客户端名：1–32 个字符，以小写字母开头，只含小写字母、数字、下划线和连字符。</summary>
     public static bool IsClientName(string value) => value.Length is > 0 and <= 32

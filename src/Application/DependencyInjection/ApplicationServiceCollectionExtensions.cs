@@ -24,6 +24,7 @@ public static class ApplicationServiceCollectionExtensions
     {
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IRelayEventLog, NullRelayEventLog>();
+        services.AddSingleton<IProtocolDiagnostics, ProtocolDiagnostics>();
         // 鉴权名单在创建时读一次已提交快照，之后每次鉴权前重读，使其他进程的撤销立即生效。
         services.AddSingleton(provider =>
         {
@@ -31,6 +32,7 @@ public static class ApplicationServiceCollectionExtensions
             return new ClientRegistry(repository.ReadAccess(), repository.ReadAccess);
         });
         services.AddSingleton<IConfigurationService, ConfigurationService>();
+        services.AddSingleton<ISiteIdentityService, SiteIdentityService>();
         services.AddSingleton<IIdentityService, IdentityService>();
         services.AddSingleton<IAdministratorService, AdministratorService>();
         services.AddSingleton<IUpstreamService, UpstreamService>();
