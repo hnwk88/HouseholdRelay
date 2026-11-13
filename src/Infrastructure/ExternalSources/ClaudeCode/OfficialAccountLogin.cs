@@ -208,7 +208,8 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     {
         try
         {
-            configuration.ValidateAccount(accountId);
+            // 启动续期程序之前重读一次私有配置，不用本代缓存。
+            configuration.ValidateAccount(accountId, reread: true);
             var start = Start(launcher.FindClaude(), directory, proxy.Resolve(OfficialTarget), "-p", "/usage", "--output-format", "json", "--no-session-persistence");
             var (exit, _) = await RunHidden(start, TimeSpan.FromSeconds(60), stop);
             diagnostics?.Record(Guid.NewGuid().ToString("N"), "cli_completed", "cli", siteIdentity.Current.Version, siteIdentity.Current.DeviceId,

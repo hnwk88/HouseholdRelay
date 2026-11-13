@@ -14,6 +14,11 @@ internal sealed class ClaudeConfigurationPreparation(IConfigurationRepository se
     private const string ConfigName = ".claude.json";
     private const int MaxBytes = 1024 * 1024;
     private readonly object sync = new();
+    /// <summary>
+    /// 本代身份下已核对一致的账户。换号只经 <see cref="PrepareExistingAccounts"/>（维护排空后、重新开放准入前），
+    /// 登录与导入只经 <see cref="PrepareAccount"/>，两者开头都清空，所以命中即属于当前这一代。
+    /// </summary>
+    private readonly HashSet<string> validated = new(StringComparer.Ordinal);
 
     /// <summary>从唯一设置仓储读取已有设备编号，缺失或损坏时拒绝，绝不生成替代值。</summary>
     public string DeviceId
@@ -32,6 +37,7 @@ internal sealed class ClaudeConfigurationPreparation(IConfigurationRepository se
         // 同一副本的校验与原子替换串行，防止两个准备操作交错覆盖。
         lock (sync)
         {
+            validated.Clear();
             var directory = AccountDirectory(accountId);
             var deviceId = DeviceId;
             if (allowCreate && !System.IO.Directory.Exists(directory)) protector.ProtectDirectory(directory);
@@ -39,15 +45,18 @@ internal sealed class ClaudeConfigurationPreparation(IConfigurationRepository se
         }
     }
 
-    /// <summary>普通操作只读核对，不写配置、不读取凭据，也不启动客户端。</summary>
-    public void ValidateAccount(string accountId)
+    /// <summary>普通操作只读核对，不写配置、不读取凭据，也不启动客户端；本代已核对过的账户不再打开文件，<paramref name="reread"/> 时重读。</summary>
+    public void ValidateAccount(string accountId, bool reread = false)
     {
-        // 与受控准备共锁，读取不会夹在文件校验与发布之间。
+        // 与受控准备共锁，读取不会夹在文件校验与发布之间，缓存也不会在清空时被旧结果写回。
         lock (sync)
         {
+            if (!reread && validated.Contains(accountId)) return;
+            validated.Remove(accountId);
             var directory = AccountDirectory(accountId);
             var bytes = Read(directory, false);
             if (Inspect(bytes).Value != DeviceId) throw Invalid("官方账户的私有设备配置尚未对齐，请在本机管理页完成身份准备。");
+            validated.Add(accountId);
         }
     }
 
@@ -76,6 +85,7 @@ internal sealed class ClaudeConfigurationPreparation(IConfigurationRepository se
         // 整批准备共享一份站点编号，维护完成前不允许其他准备穿插。
         lock (sync)
         {
+            validated.Clear();
             cancellation.ThrowIfCancellationRequested();
             ownedProcesses.EnsureExited();
             var root = Path.Combine(Path.GetFullPath(instance.State), "official-accounts");
@@ -145,11 +155,17 @@ internal sealed class ClaudeConfigurationPreparation(IConfigurationRepository se
             if (allowCreate) return "{}"u8.ToArray();
             throw Invalid("官方账户私有配置缺失，请恢复配套配置后重新准备身份。");
         }
-        using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (input.Length > MaxBytes) throw Invalid("官方账户私有配置超过允许大小，请检查配套备份。");
-        var bytes = new byte[checked((int)input.Length)]; input.ReadExactly(bytes);
-        if (input.ReadByte() != -1) throw Invalid("官方账户私有配置在读取期间改变，请稍后重新准备。");
-        return bytes;
+        try
+        {
+            using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (input.Length > MaxBytes) throw Invalid("官方账户私有配置超过允许大小，请检查配套备份。");
+            var bytes = new byte[checked((int)input.Length)]; input.ReadExactly(bytes);
+            if (input.ReadByte() != -1) throw Invalid("官方账户私有配置在读取期间改变，请稍后重新准备。");
+            return bytes;
+        }
+        // 别的程序正占着或刚好改写这个文件：归入本地身份阻断，这次不发往官方、可换独立 API、不进认证暂停或冷却；不转述系统原话。
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { throw Invalid("官方账户私有配置正被其他程序占用或暂时读不到，这次没有发往官方。请稍后重试；独立 API 上游仍可使用。"); }
     }
 
     /// <summary>解析完整 JSON 并定位唯一顶层 userID 的原字节区间；重复键、错误类型和损坏文件拒绝覆盖。</summary>

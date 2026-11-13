@@ -93,6 +93,13 @@ public static class UpstreamIdentityRaceTests
         var path = Path.Combine(web.Home.Path, ".state", "official-accounts", official, ".claude.json");
         var originalBytes = File.ReadAllBytes(path);
         File.WriteAllText(path, "{broken-identity-configuration");
+        // 普通转发按身份代次缓存核对结果、不再每次打开私有配置；损坏在下一次受控准备（或续期启动前重读）时发现。
+        // 这里走一次受控准备：它拒绝损坏文件、不改原字节，并让本代缓存失效，下一次读取据实阻断。
+        var refused = false;
+        try { web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>().PrepareAccount(official); }
+        // 损坏配置的固定拒绝是本步预期结果。
+        catch (ClaudeConfigurationUnavailableException) { refused = true; }
+        Check(refused && File.ReadAllText(path) == "{broken-identity-configuration", "Controlled preparation refuses the damaged file without rewriting it.");
         using (var blocked = web.Relay.Upstreams.Acquire())
             Check(ReferenceEquals(original, blocked) && ((UpstreamConnection)blocked).IdentityReadBlocked && !blocked.Paused && blocked.CooldownSeconds == 0,
                 "A known configuration refusal preserves credentials and upstream states, but closes the existing connection.");

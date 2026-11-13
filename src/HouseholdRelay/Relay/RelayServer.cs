@@ -139,6 +139,8 @@ public sealed class RelayServer : IDisposable
             if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked during upload.");
             route.CheckState();
             string? model = null; byte[]? normalized = null;
+            // 兼容账户的设备值取当前已发布的站点快照：管理员换号后不重启也发新编号，不用启动时那份配置里的旧值。
+            var compatibleDevice = siteIdentity?.Current.DeviceId ?? config.DeviceId;
             if (method == "POST")
             {
                 if (!(context.Request.ContentType ?? "").StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
@@ -149,7 +151,7 @@ public sealed class RelayServer : IDisposable
                     if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
                     if (document.RootElement.TryGetProperty("model", out var modelValue) && modelValue.ValueKind == JsonValueKind.String)
                         model = SafeModel(modelValue.GetString(), token, route.Active.Snapshot.Credential);
-                    if (!route.Active.Snapshot.Options.OfficialAccount && route.Active.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata) normalized = DeviceMetadata.Normalize(body, config.DeviceId);
+                    if (!route.Active.Snapshot.Options.OfficialAccount && route.Active.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata) normalized = DeviceMetadata.Normalize(body, compatibleDevice);
                 }
                 // 请求体不是 JSON 对象时在发往上游之前就以 400 拒绝，不把解析器的内部消息透给客户端。
                 catch (JsonException) { throw new RelayFailure(400, "Expected a JSON object."); }
@@ -158,7 +160,7 @@ public sealed class RelayServer : IDisposable
             if (Clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked before dispatch.");
             // 每家按自己的接入方式用同一份请求体重建请求：账户模式统一设备元数据，API 模式原样；请求体只读了一次。
             byte[] Body(IUpstreamLease target) => method == "POST" && !target.Snapshot.Options.OfficialAccount && target.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata
-                ? normalized ??= DeviceMetadata.Normalize(body, config.DeviceId) : body;
+                ? normalized ??= DeviceMetadata.Normalize(body, compatibleDevice) : body;
             var upstream = route.Next(model)!;
             // 客户端自报的 Claude Code 版本与入口，第一次发往官方账户时才读一次。
             ClaudeCodeClient? caller = null;

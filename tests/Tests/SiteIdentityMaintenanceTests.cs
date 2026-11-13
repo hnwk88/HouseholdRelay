@@ -216,7 +216,7 @@ static class SiteIdentityMaintenanceTests
         /// <summary>本组测试不准备单个账户。</summary>
         public void PrepareAccount(string accountId, bool allowCreate = false) => throw new NotSupportedException();
         /// <summary>本组测试不读取账户目录。</summary>
-        public void ValidateAccount(string accountId) => throw new NotSupportedException();
+        public void ValidateAccount(string accountId, bool reread = false) => throw new NotSupportedException();
         /// <summary>本组测试不启动诊断CLI。</summary>
         public void PrepareTransient(string configDirectory) => throw new NotSupportedException();
         /// <summary>执行同步准备并完整登记生命周期，取消与异常都归还活跃计数。</summary>

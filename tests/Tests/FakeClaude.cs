@@ -91,6 +91,9 @@ static class FakeClaude
     /// <summary>假 Claude Code 自带的身份版本从这个环境变量读；定位器写进 claude.cmd，改版本就是「升级」。不以 CLAUDE_ 或 ANTHROPIC_ 开头，隔离环境不会清掉它。</summary>
     public const string VersionVariable = "HOUSEHOLD_FAKE_CLAUDE_VERSION";
 
+    /// <summary>claude.cmd 里写的回显文件路径：假 Claude 每次发请求前把读到的 userID 追加一行。不以 CLAUDE_ 或 ANTHROPIC_ 开头，隔离环境不会清掉它。</summary>
+    public const string SeenVariable = "HOUSEHOLD_FAKE_CLAUDE_SEEN";
+
     /// <summary>extra-headers 场景多带的、中转白名单里没有的头名。</summary>
     public const string UnclassifiedHeader = "X-Claude-Code-Future-Hint";
 
@@ -114,6 +117,8 @@ static class FakeClaude
         var index = Array.IndexOf(args, "--model"); var model = index >= 0 && index + 1 < args.Length ? args[index + 1] : "fixture-model";
         using var configuration = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")!, ".claude.json")));
         var deviceId = configuration.RootElement.GetProperty("userID").GetString();
+        // 回显启动时在配置目录里读到的 userID，用例据此核对探测目录预置的编号就是线上那一个；临时目录随探测删掉，所以记在定位器自己的目录。
+        if (Environment.GetEnvironmentVariable(SeenVariable) is { Length: > 0 } seen) File.AppendAllText(seen, $"{entrypoint}\t{deviceId}\n");
         using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false });
         using var request = new HttpRequestMessage(HttpMethod.Post, Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL") + "/v1/messages?beta=true")
         {
@@ -187,6 +192,13 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
     /// <summary>假 <c>claude update</c> 被跑了几次（每次在 claude.cmd 旁的 .updates 文件里记一行）。</summary>
     public int Updates => File.Exists(Path.Combine(directory, "claude.cmd.updates")) ? File.ReadAllLines(Path.Combine(directory, "claude.cmd.updates")).Length : 0;
 
+    /// <summary>假 Claude 回显文件的位置，在本定位器自己的临时目录里。</summary>
+    private string SeenPath => Path.Combine(directory, "seen-userid.log");
+
+    /// <summary>假 Claude 每次发请求前读到的（入口，userID），按发生顺序。</summary>
+    public IReadOnlyList<(string Entrypoint, string UserId)> SeenUserIds => File.Exists(SeenPath)
+        ? [.. File.ReadAllLines(SeenPath).Where(line => line.Length > 0).Select(line => line.Split('\t')).Select(parts => (parts[0], parts[1]))] : [];
+
     /// <summary>
     /// 模拟本机 Claude Code 升级或重装：换场景和身份版本，重写 claude.cmd（大小或修改时间随之改变，统一身份据此重取）；场景改成 missing 等于卸掉。
     /// </summary>
@@ -214,7 +226,7 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
             var host = Environment.ProcessPath!;
             var command = Path.GetFileNameWithoutExtension(host).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
                 ? $"\"{host}\" \"{typeof(FakeClaude).Assembly.Location}\"" : $"\"{host}\"";
-            File.WriteAllText(path, $"@set {FakeClaude.VersionVariable}={version}\r\n@set {FakeClaude.SelfVariable}=%~f0\r\n@set {FakeClaude.UpdateToVariable}={UpdateTo}\r\n@{command} --fake-claude {scenario} %*\r\n");
+            File.WriteAllText(path, $"@set {FakeClaude.VersionVariable}={version}\r\n@set {FakeClaude.SelfVariable}=%~f0\r\n@set {FakeClaude.UpdateToVariable}={UpdateTo}\r\n@set {FakeClaude.SeenVariable}={SeenPath}\r\n@{command} --fake-claude {scenario} %*\r\n");
         }
         return path;
     }
