@@ -257,6 +257,8 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     }
 
     /// <summary>组装账户目录里的 Claude Code 子进程：工作目录与配置目录都是账户目录，环境按 <see cref="IsolatedClaudeEnvironment"/> 隔离。</summary>
+    // 普通转发对私有配置的核对按身份代次缓存，运行中被外部改坏的 .claude.json 只在 Claude Code 真要读它之前发现。
+    // 所以凡是在账户目录里启动 Claude Code 的入口（今天是登录、导入后取邮箱和续期），启动前必须先 PrepareAccount 或 ValidateAccount(reread: true)，新增入口同样如此。
     internal static ProcessStartInfo Start(string executable, string directory, ProxyRoute route, params string[] arguments)
     {
         var start = new ProcessStartInfo(executable) { WorkingDirectory = directory, UseShellExecute = false };
