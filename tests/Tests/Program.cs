@@ -93,6 +93,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("usage SSE byte fragments, cumulative counts, errors and missing endings", UsageStreamingTests.FragmentsAndEndings),
     ("usage cancellation and timeout preserve partial counts and release connections", UsageStreamingTests.CancellationAndTimeout),
     ("usage streaming memory stays bounded by individual events", UsageStreamingTests.BoundedEvents),
+    ("usage storage: SQLite engine includes the CVE-2025-6965 fix", UsageStorageTests.EngineVersion),
     ("usage busy and failed writes reject dispatch and expose completion failures", UsageStorageTests.WriteFailures),
     ("usage UTC retention boundary, hourly cleanup and restart recovery", UsageStorageTests.RetentionAndRecovery),
     ("usage schema migration rolls back before preserving identities", UsageStorageTests.MigrationRollback),

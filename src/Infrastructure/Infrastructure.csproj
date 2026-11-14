@@ -2,7 +2,7 @@
   <!-- 外部技术实现：SQLite、DPAPI、证书、上游 HTTP、Claude Code 进程（台账 D-005）。 -->
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.6" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.15" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Application/Application.csproj" />

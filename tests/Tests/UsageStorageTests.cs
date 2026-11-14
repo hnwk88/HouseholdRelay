@@ -9,6 +9,17 @@ namespace Tests;
 
 static class UsageStorageTests
 {
+    /// <summary>中转自己的数据库连接所用的 SQLite 引擎不早于 3.50.2（CVE-2025-6965 的修复版本），版本原样打出供结果引用。</summary>
+    public static async Task EngineVersion()
+    {
+        await using var web = await WebFixture.Create();
+        using var connection = web.Database.Open(); using var command = connection.CreateCommand();
+        command.CommandText = "select sqlite_version()";
+        var text = (string)command.ExecuteScalar()!;
+        Console.WriteLine("sqlite_version=" + text);
+        Check(Version.Parse(text) >= new Version(3, 50, 2), "SQLite engine must include the CVE-2025-6965 fix: " + text);
+    }
+
     /// <summary>
     /// 验证用量写入繁忙或失败时的处理：数据库被写事务占住时新请求返回 503，既不发往上游也不凭空生成记录；
     /// 完成记录首次遇忙后重试成功；完成写入被触发器拒绝时 5 秒内返回失败、失败计数为 2、记录停在已开始，
