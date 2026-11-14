@@ -18,6 +18,7 @@ if (args.FirstOrDefault() == "--real-upstream-browser") return await RealUpstrea
 if (args.FirstOrDefault() == "--real-detection-browser") return await RealDetectionValidation.Run(args);
 if (args.FirstOrDefault() == "--real-import-browser") return await RealImportValidation.Run(args);
 if (args.FirstOrDefault() == "--real-transfer-browser") return await RealTransferValidation.Run(args);
+if (args.FirstOrDefault() == "--real-cli-client") return await RealCliClientValidation.Run(args);
 if (args.FirstOrDefault() == "--fake-claude") return FakeClaude.Run(args);
 if (Path.GetFileNameWithoutExtension(Environment.ProcessPath)?.Equals("claude", StringComparison.OrdinalIgnoreCase) == true) return FakeClaude.RunAsClaude(args);
 
