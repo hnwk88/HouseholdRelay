@@ -59,7 +59,7 @@ public static class UpstreamResponses
     public static async Task Inspect(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation)
     {
         byte[] bytes;
-        try { await using var raw = await upstream.Content.ReadAsStreamAsync(cancellation); await using var stream = Decompress(raw, upstream.Content.Headers.ContentEncoding); bytes = await ReadBounded(stream, 1024 * 1024, cancellation); }
+        try { bytes = await ReadDecoded(upstream, 1024 * 1024, cancellation); }
         // 要丢弃的响应读不全也不影响换下一家，只是说不出它为什么失败。
         catch (Exception error) when (error is IOException or HttpRequestException or RelayFailure) { return; }
         try { usage.Json(Json(bytes, secret)); }
@@ -85,6 +85,18 @@ public static class UpstreamResponses
             "zstd" => new ZstdSharp.DecompressionStream(source),
             _ => throw new RelayFailure(502, "Unexpected upstream content encoding.")
         };
+    }
+
+    /// <summary>
+    /// 中转自己要解析上游回复（测试的最小调用、模型目录、账户资料、丢弃前的错误检查）时用它取正文：按 <c>Content-Encoding</c> 解开（见 <see cref="Decompress"/>）后在 <paramref name="limit"/> 内读入明文。
+    /// 压缩数据损坏与不认识的编码一样抛 502 的 <see cref="RelayFailure"/>，调用方按「不支持的响应」读出，不把解压库的异常漏给页面。
+    /// </summary>
+    public static async Task<byte[]> ReadDecoded(HttpResponseMessage upstream, int limit, CancellationToken cancellation)
+    {
+        await using var raw = await upstream.Content.ReadAsStreamAsync(cancellation);
+        try { await using var stream = Decompress(raw, upstream.Content.Headers.ContentEncoding); return await ReadBounded(stream, limit, cancellation); }
+        // 声称压缩却解不开：按协议异常处理，和多层或不认识的编码同一口径。
+        catch (Exception error) when (error is InvalidDataException or ZstdSharp.ZstdException) { throw new RelayFailure(502, "Upstream returned a corrupt compressed response."); }
     }
 
     /// <summary>把流读入内存，累计超过 <paramref name="limit"/> 字节立即抛 502，防止异常大的上游响应耗尽内存；读缓冲取自共享数组池。</summary>

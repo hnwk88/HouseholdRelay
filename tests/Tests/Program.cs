@@ -167,6 +167,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("private Claude configuration: transient paths are restricted", ClaudeConfigurationTests.RestrictTransientPaths),
     ("official metadata: business and probe wire matrix", DeviceMetadataPathTests.BusinessAndProbeMatrix),
     ("official metadata: the account UUID is fetched by discovery and test, synchronized on change, and missing means a local block", DeviceMetadataPathTests.AccountUuidRecordedByTest),
+    ("official compressed replies: discovery, profile and test decode gzip, br and zstd, json and stream", DeviceMetadataPathTests.OfficialCompressedReplies),
     ("private Claude configuration: directory junction is refused", ClaudeConfigurationTests.RefuseDirectoryJunction),
     ("site maintenance: drains and concurrent retries generate once", SiteIdentityMaintenanceTests.DrainAndConcurrency),
     ("site maintenance: drain timeout never changes identity", SiteIdentityMaintenanceTests.DrainTimeout),

@@ -143,6 +143,44 @@ public static class DeviceMetadataPathTests
         Check(!lease.Paused && lease.CooldownSeconds == 0, "The missing account UUID is a local block, not an upstream pause or cooldown");
     }
 
+    /// <summary>
+    /// 官方按 Accept-Encoding 回压缩正文时，获取模型和测试照样读得懂：模拟官方把账户资料、模型目录和测试那次调用都用 gzip、br、zstd 之一压缩回答，
+    /// 调用分非流式 JSON 与流式事件两种；六种组合都要拿到模型目录、记下账户编号、测试通过。
+    /// </summary>
+    public static async Task OfficialCompressedReplies()
+    {
+        using var claude = new FakeClaudeLauncher("success");
+        await using var mock = await UpstreamFixture.Create();
+        await using var web = await WebFixture.Create(overrides: claude.Register);
+        var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
+        var events = string.Concat(ClaudeCodeProbeTests.Events.Split("\n\n").Select(frame => frame + "\n\n"));
+        foreach (var encoding in new[] { "gzip", "br", "zstd" })
+        foreach (var streaming in new[] { false, true })
+        {
+            var label = encoding + (streaming ? " stream" : " json");
+            async Task Reply(Microsoft.AspNetCore.Http.HttpContext context, string contentType, byte[] payload)
+            {
+                context.Response.ContentType = contentType; context.Response.Headers.ContentEncoding = encoding;
+                await context.Response.Body.WriteAsync(UpstreamIntegrationTests.Compress(encoding, payload));
+            }
+            mock.Profile = context => Reply(context, "application/json", JsonSerializer.SerializeToUtf8Bytes(new
+            { account = new { uuid = FakeClaude.AccountUuid, email = FakeClaude.Email }, organization = new { uuid = "9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a" } }));
+            mock.Handler = context => context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal)
+                ? Reply(context, "application/json", JsonSerializer.SerializeToUtf8Bytes(new { data = new[] { new { id = "fixture-model" } } }))
+                : streaming ? Reply(context, "text/event-stream", Encoding.UTF8.GetBytes(events))
+                : Reply(context, "application/json", JsonSerializer.SerializeToUtf8Bytes(new { id = "msg_fixture", type = "message", role = "assistant", model = "fixture-model",
+                    content = new[] { new { type = "text", text = "OK" } }, stop_reason = "end_turn" }));
+            var candidate = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, options, FakeClaude.Credential("fixture-compressed-" + encoding + (streaming ? "-sse" : "-json"), 60), "模拟官方", CancellationToken.None);
+            var catalog = await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
+            Check(catalog.Status == "passed" && catalog.Models.SequenceEqual(["fixture-model"]), label + " catalog decoded: " + catalog.Message);
+            var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate, ".claude.json");
+            using (var recorded = JsonDocument.Parse(File.ReadAllBytes(configuration)))
+                Check(recorded.RootElement.GetProperty("oauthAccount").GetProperty("accountUuid").GetString() == FakeClaude.AccountUuid, label + " profile decoded and recorded");
+            var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);
+            Check(report.CanActivate, label + " test decoded the probe reply: " + report.Message);
+        }
+    }
+
     /// <summary>构造由假 CLI 和业务客户端共用的确定正文；内嵌 JSON 保留空白、转义、未知扩展和属性顺序。</summary>
     internal static string Sample(bool embedded, string device, string model, string version, string entrypoint)
     {

@@ -56,13 +56,12 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
                 using var response = await transport.Send(request, cancellation);
                 if (official) diagnostics?.Record(correlation, "response", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint,
                     (int)response.StatusCode, response.StatusCode switch { HttpStatusCode.Unauthorized => "authentication", HttpStatusCode.Forbidden => "forbidden", HttpStatusCode.TooManyRequests => "rate_limit", _ => null });
-                await using var source = await response.Content.ReadAsStreamAsync(cancellation);
-                var bytes = await UpstreamResponses.ReadBounded(source, 1024 * 1024, cancellation);
+                // 先按 Content-Encoding 解开：官方按客户端的 Accept-Encoding 回压缩正文，判定与转给本机客户端都用明文（副本不再带压缩编码）。
+                var bytes = await UpstreamResponses.ReadDecoded(response, 1024 * 1024, cancellation);
                 var streaming = response.Content.Headers.ContentType?.MediaType == "text/event-stream";
                 // 用已有响应边界返回给本机客户端，防止错误正文中的上游秘密进入客户端临时文件。
                 using var copy = new HttpResponseMessage(response.StatusCode) { Content = new ByteArrayContent(bytes) };
                 copy.Content.Headers.ContentType = response.Content.Headers.ContentType;
-                foreach (var encoding in response.Content.Headers.ContentEncoding) copy.Content.Headers.ContentEncoding.Add(encoding);
                 await UpstreamResponses.Copy(copy, context.Response, transport.Snapshot.Credential!, "diagnostic", cancellation);
                 completion.TrySetResult(new(response.StatusCode, bytes, streaming));
             }

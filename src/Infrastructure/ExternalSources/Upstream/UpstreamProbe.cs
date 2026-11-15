@@ -138,8 +138,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) throw new InvalidOperationException(next + "官方拒绝了这个账户的登录凭据，请重新登录官方账户。");
             if (response.StatusCode == HttpStatusCode.TooManyRequests) throw new InvalidOperationException(next + "官方请求过多，请稍后再试。");
             if (!response.IsSuccessStatusCode) throw new InvalidOperationException(next + $"官方返回 HTTP {(int)response.StatusCode}，请稍后再试。");
-            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-            using var body = JsonDocument.Parse(await UpstreamResponses.ReadBounded(stream, 1024 * 1024, timeout.Token));
+            using var body = JsonDocument.Parse(await UpstreamResponses.ReadDecoded(response, 1024 * 1024, timeout.Token));
             return ReadProfile(body.RootElement) ?? throw new InvalidOperationException(next + "官方返回的账户资料里没有可用的账户编号。");
         }
         // 取不到本机 Claude Code 的统一身份或代理：一个请求都没发，读出原因。
@@ -186,10 +185,10 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
             if (response.StatusCode == HttpStatusCode.TooManyRequests) return new("cooldown", null, [], "");
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed) return new("unsupported", null, [], "");
             if (!response.IsSuccessStatusCode) return new("failed", null, [], ((int)response.StatusCode).ToString(System.Globalization.CultureInfo.InvariantCulture));
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellation);
+            var bytes = await UpstreamResponses.ReadDecoded(response, 1024 * 1024, cancellation);
             try
             {
-                using var body = JsonDocument.Parse(await UpstreamResponses.ReadBounded(stream, 1024 * 1024, cancellation));
+                using var body = JsonDocument.Parse(bytes);
                 if (body.RootElement.ValueKind != JsonValueKind.Object || !body.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
                     return new("unsupported", method, [], "");
                 var models = data.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object && item.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
@@ -246,8 +245,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         using var call = transport.Request("/v1/messages", "", bytes, "POST", "HouseholdRelay/1.0");
         call.Content!.Headers.ContentType = new("application/json");
         using var result = await transport.Send(call, cancellation);
-        await using var content = await result.Content.ReadAsStreamAsync(cancellation);
-        return new(result.StatusCode, await UpstreamResponses.ReadBounded(content, 1024 * 1024, cancellation), result.Content.Headers.ContentType?.MediaType == "text/event-stream");
+        return new(result.StatusCode, await UpstreamResponses.ReadDecoded(result, 1024 * 1024, cancellation), result.Content.Headers.ContentType?.MediaType == "text/event-stream");
     }
 
     /// <summary>

@@ -10,7 +10,7 @@ namespace Tests;
 /// <summary>复现仅接受原生请求特征的上游，并验证显式检测、激活和客户端转发。</summary>
 static class ClaudeCodeProbeTests
 {
-    private const string Events = """
+    internal const string Events = """
         event: message_start
         data: {"type":"message_start","message":{"id":"msg_probe","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}
 

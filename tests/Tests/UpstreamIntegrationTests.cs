@@ -107,7 +107,7 @@ static class UpstreamIntegrationTests
     }
 
     /// <summary>用指定编码压缩一段字节：zstd 走纯托管 ZstdSharp，gzip/deflate(zlib)/br 走 .NET 内置流，与中转解压侧一一对应。</summary>
-    private static byte[] Compress(string encoding, byte[] payload)
+    internal static byte[] Compress(string encoding, byte[] payload)
     {
         using var output = new MemoryStream();
         if (encoding == "zstd") { using var comp = new ZstdSharp.Compressor(3); return comp.Wrap(payload).ToArray(); }
