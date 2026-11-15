@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using Core.Relay;
@@ -13,11 +14,9 @@ public static class UpstreamResponses
     private static readonly HashSet<string> AllowedHeaders = new(StringComparer.OrdinalIgnoreCase)
     { "request-id", "x-request-id", "retry-after", "x-should-retry", "anthropic-organization-id" };
 
-    /// <summary>把上游响应安全地转给家庭客户端：拒绝非 identity 的内容编码；响应头只放行请求编号、重试和限流类白名单且值中不含秘密；附加禁止缓存、禁止代理缓冲和本次中转请求编号；SSE 逐事件脱敏转发，普通 JSON 在大小上限内（成功 16 MB、错误 1 MB）整体脱敏后写出；可选地把内容交给用量累加器统计。</summary>
+    /// <summary>把上游响应安全地转给家庭客户端：先按 Content-Encoding 解开压缩（见 <see cref="Decompress"/>），再做脱敏与计量，回给客户端的是解开后的明文；响应头只放行请求编号、重试和限流类白名单且值中不含秘密；附加禁止缓存、禁止代理缓冲和本次中转请求编号；SSE 逐事件脱敏转发，普通 JSON 在大小上限内（成功 16 MB、错误 1 MB）整体脱敏后写出；可选地把内容交给用量累加器统计。</summary>
     public static async Task Copy(HttpResponseMessage upstream, HttpResponse response, string secret, string requestId, CancellationToken cancellation, UsageAccumulator? usage = null)
     {
-        if (upstream.Content.Headers.ContentEncoding.Any(value => !value.Equals("identity", StringComparison.OrdinalIgnoreCase)))
-            throw new RelayFailure(502, "Unexpected upstream content encoding.");
         var excluded = upstream.Headers.Connection.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var header in upstream.Headers)
         {
@@ -27,7 +26,8 @@ public static class UpstreamResponses
         }
         response.StatusCode = (int)upstream.StatusCode;
         response.Headers.CacheControl = "no-store"; response.Headers["X-Accel-Buffering"] = "no"; response.Headers["X-Relay-Request-Id"] = requestId;
-        await using var stream = await upstream.Content.ReadAsStreamAsync(cancellation);
+        await using var raw = await upstream.Content.ReadAsStreamAsync(cancellation);
+        await using var stream = Decompress(raw, upstream.Content.Headers.ContentEncoding);
         if (upstream.Content.Headers.ContentType?.MediaType == "text/event-stream")
         {
             response.ContentType = "text/event-stream; charset=utf-8";
@@ -59,12 +59,32 @@ public static class UpstreamResponses
     public static async Task Inspect(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation)
     {
         byte[] bytes;
-        try { await using var stream = await upstream.Content.ReadAsStreamAsync(cancellation); bytes = await ReadBounded(stream, 1024 * 1024, cancellation); }
+        try { await using var raw = await upstream.Content.ReadAsStreamAsync(cancellation); await using var stream = Decompress(raw, upstream.Content.Headers.ContentEncoding); bytes = await ReadBounded(stream, 1024 * 1024, cancellation); }
         // 要丢弃的响应读不全也不影响换下一家，只是说不出它为什么失败。
         catch (Exception error) when (error is IOException or HttpRequestException or RelayFailure) { return; }
         try { usage.Json(Json(bytes, secret)); }
         // 和交给客户端时同一口径：非 JSON 的错误正文记为无法解析。
         catch (JsonException) { usage.Unreadable(); }
+    }
+
+    /// <summary>
+    /// 按响应的 <c>Content-Encoding</c> 把上游响应流解开成明文，之后的脱敏与计量都在明文上做；回给家庭客户端的永远是解开后的内容（不透传压缩流）。
+    /// 支持 identity（原样）、gzip、deflate（RFC 1950 zlib）、br、zstd（纯托管 ZstdSharp，无原生库）；这几种正是官方账户路径按客户端 Accept-Encoding 报给官方、官方可能回的编码。
+    /// 多层或不认识的编码一律抛 502：发给官方的 Accept-Encoding 只含这里能解的几种，所以不会出现「报了却解不开」。解压结果仍受 <see cref="ReadBounded"/> 与 SSE 单事件上限约束，压缩炸弹在解开后按超限处理。
+    /// </summary>
+    private static Stream Decompress(Stream source, IEnumerable<string> encodings)
+    {
+        var applied = encodings.Where(value => !string.IsNullOrWhiteSpace(value) && !value.Equals("identity", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (applied.Length == 0) return source;
+        if (applied.Length != 1) throw new RelayFailure(502, "Unexpected upstream content encoding.");
+        return applied[0].Trim().ToLowerInvariant() switch
+        {
+            "gzip" or "x-gzip" => new GZipStream(source, CompressionMode.Decompress),
+            "deflate" => new ZLibStream(source, CompressionMode.Decompress),
+            "br" => new BrotliStream(source, CompressionMode.Decompress),
+            "zstd" => new ZstdSharp.DecompressionStream(source),
+            _ => throw new RelayFailure(502, "Unexpected upstream content encoding.")
+        };
     }
 
     /// <summary>把流读入内存，累计超过 <paramref name="limit"/> 字节立即抛 502，防止异常大的上游响应耗尽内存；读缓冲取自共享数组池。</summary>

@@ -3,6 +3,8 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.15" />
+    <!-- 纯托管 zstd 解压（无原生 dll），用于把官方账户上游用 zstd 压的响应解开后计量、脱敏，使发往官方的 Accept-Encoding 能与原生直连一致地带上 zstd。 -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Application/Application.csproj" />

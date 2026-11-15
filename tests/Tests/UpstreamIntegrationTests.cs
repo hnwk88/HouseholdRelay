@@ -76,6 +76,52 @@ static class UpstreamIntegrationTests
     }
 
     /// <summary>
+    /// 验证中转按 Content-Encoding 解开上游压缩响应：gzip、deflate(zlib)、br、zstd 四种各发一次非流式 JSON，客户端拿到的是解开后的明文、脱敏照常；
+    /// 再用 gzip 压一条 SSE 事件流，逐事件解开转发。解开用纯托管 ZstdSharp（zstd）与 .NET 内置流（其余），不带原生库。
+    /// </summary>
+    public static async Task ResponseDecompression()
+    {
+        foreach (var encoding in new[] { "gzip", "deflate", "br", "zstd" })
+        {
+            await using var fixture = await Fixture.Create(async context =>
+            {
+                context.Response.ContentType = "application/json"; context.Response.Headers.ContentEncoding = encoding;
+                var payload = Encoding.UTF8.GetBytes("{\"type\":\"message\",\"model\":\"fixture-model\",\"leak\":\"fixture-upstream-secret\",\"usage\":{\"input_tokens\":7,\"output_tokens\":9}}");
+                await context.Response.Body.WriteAsync(Compress(encoding, payload));
+            });
+            using var response = await fixture.Send(); var body = await response.Content.ReadAsStringAsync();
+            Check(response.IsSuccessStatusCode, encoding + " response status " + response.StatusCode);
+            Check(body.Contains("\"input_tokens\":7", StringComparison.Ordinal) && body.Contains("fixture-model", StringComparison.Ordinal), encoding + " body must arrive decompressed: " + body[..Math.Min(80, body.Length)]);
+            Check(!body.Contains("fixture-upstream-secret", StringComparison.Ordinal), encoding + " secret must still be redacted after decompression");
+            Check(!response.Content.Headers.Contains("Content-Encoding"), encoding + " downstream body is identity, not re-compressed");
+        }
+        await using var sse = await Fixture.Create(async context =>
+        {
+            context.Response.ContentType = "text/event-stream"; context.Response.Headers.ContentEncoding = "gzip";
+            var events = Encoding.UTF8.GetBytes("event: message_stop\ndata: {\"type\":\"message_stop\",\"leak\":\"fixture-upstream-secret\"}\n\n");
+            await context.Response.Body.WriteAsync(Compress("gzip", events));
+        });
+        using var streamed = await sse.Send(); var streamedBody = await streamed.Content.ReadAsStringAsync();
+        Check(streamedBody.Contains("event: message_stop", StringComparison.Ordinal) && streamedBody.Contains("message_stop", StringComparison.Ordinal), "gzip SSE decoded: " + streamedBody);
+        Check(!streamedBody.Contains("fixture-upstream-secret", StringComparison.Ordinal), "gzip SSE secret redacted after decompression");
+    }
+
+    /// <summary>用指定编码压缩一段字节：zstd 走纯托管 ZstdSharp，gzip/deflate(zlib)/br 走 .NET 内置流，与中转解压侧一一对应。</summary>
+    private static byte[] Compress(string encoding, byte[] payload)
+    {
+        using var output = new MemoryStream();
+        if (encoding == "zstd") { using var comp = new ZstdSharp.Compressor(3); return comp.Wrap(payload).ToArray(); }
+        using (Stream codec = encoding switch
+        {
+            "gzip" => new System.IO.Compression.GZipStream(output, System.IO.Compression.CompressionMode.Compress, true),
+            "deflate" => new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress, true),
+            "br" => new System.IO.Compression.BrotliStream(output, System.IO.Compression.CompressionMode.Compress, true),
+            _ => throw new ArgumentOutOfRangeException(nameof(encoding))
+        }) codec.Write(payload);
+        return output.ToArray();
+    }
+
+    /// <summary>
     /// 验证候选上游的测试与原子激活：保存候选不影响当前上游且状态为未测试；未明确同意时拒绝发起诊断调用；
     /// 同意后连接、认证和模型检查均通过才可激活，激活后当前上游采用候选配置；用过期版本号再保存候选被拒绝。
     /// </summary>

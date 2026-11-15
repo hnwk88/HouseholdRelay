@@ -141,6 +141,20 @@ public static class DeviceMetadataTests
         }
     }
 
+    /// <summary>官方账户按客户端这一次报的 Accept-Encoding 原样带上去（对齐原生直连，含 zstd）；兼容/API 上游仍写死 identity，不透传、不引入解压路径。</summary>
+    public static async Task OfficialPassesClientAcceptEncoding()
+    {
+        await using var mock = await UpstreamFixture.Create();
+        var body = Encoding.UTF8.GetBytes(Wrap("\"user_" + new string('a', 64) + "_account_account_session_session\""));
+        var headers = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues> { ["Accept-Encoding"] = "gzip, deflate, br, zstd" };
+        using var official = Connection(mock);
+        using (var request = official.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, Identity(), Canonical))
+            Check(request.Headers.AcceptEncoding.ToString() == "gzip, deflate, br, zstd", "Official path forwards the client's Accept-Encoding verbatim: " + request.Headers.AcceptEncoding);
+        using var api = new UpstreamConnection(new(1, mock.Options(), "fixture-secret"), Proxy());
+        using (var request = api.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers))
+            Check(request.Headers.AcceptEncoding.ToString() == "identity", "API path keeps identity: " + request.Headers.AcceptEncoding);
+    }
+
     /// <summary>创建仅访问回环的官方租约；假凭据和假客户端身份不接触真实账户。</summary>
     private static UpstreamConnection Connection(UpstreamFixture mock) => new(new(1,
         mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret"), Proxy());

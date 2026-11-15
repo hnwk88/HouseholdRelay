@@ -87,7 +87,11 @@ internal sealed class UpstreamConnection : IUpstreamLease
                 && clientAgent is { Length: > 0 and <= 256 } && !clientAgent.Any(char.IsControl) ? clientAgent : userAgent;
             request.Headers.TryAddWithoutValidation("User-Agent", forwardedAgent);
         }
-        request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
+        // 官方账户要对齐原生直连：按客户端这一次报的 Accept-Encoding 原样带上（原生是 gzip, deflate, br, zstd），中转四种都能解开（见 UpstreamResponses）；客户端没报就不带。
+        // 其余模式仍写死 identity：兼容与 API 上游不要求对齐，也避免给它们引入解压路径。
+        var acceptEncoding = options.OfficialAccount && headers is not null ? Header(headers, "Accept-Encoding").ToString() : "";
+        if (!options.OfficialAccount) request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
+        else if (!string.IsNullOrWhiteSpace(acceptEncoding)) request.Headers.TryAddWithoutValidation("Accept-Encoding", acceptEncoding);
         if (!request.Headers.Contains("anthropic-version")) request.Headers.Add("anthropic-version", "2023-06-01");
         // 按客户端这一次发来的 anthropic-beta 原序透传：官方账户要对齐原生直连，顺序和内容都由客户端这次自己决定，中转不重排、不补造（D-013）。
         // 仅 API 密钥模式或未开 oauth beta 的兼容上游去掉 oauth- 项（这类上游不认它）；oauth 模式下客户端没带 oauth beta 时补一个到末尾，保证 OAuth 请求合法（令牌模式的家人客户端不是 OAuth 登录，不会自带）。
