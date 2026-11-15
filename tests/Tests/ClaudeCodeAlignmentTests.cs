@@ -160,6 +160,8 @@ static class ClaudeCodeAlignmentTests
         using var request = new HttpRequestMessage(HttpMethod.Post, web.Url + "/v1/messages?beta=true") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         request.Headers.Authorization = new("Bearer", token);
         if (agent is not null) request.Headers.TryAddWithoutValidation("User-Agent", agent);
+        // 模拟 Claude Code 客户端时补上「按官方直连发请求」开关才有的 X-Client-Request-Id（订单 133 的本地门禁据此放行）。
+        if (agent is not null && agent.StartsWith("claude-cli/", StringComparison.OrdinalIgnoreCase)) request.Headers.TryAddWithoutValidation("X-Client-Request-Id", Guid.NewGuid().ToString());
         return await web.Http.SendAsync(request);
     }
 

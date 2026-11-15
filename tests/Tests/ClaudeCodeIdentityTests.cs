@@ -145,6 +145,36 @@ static class ClaudeCodeIdentityTests
     }
 
     /// <summary>
+    /// 家里 Claude Code 没开「按官方直连发请求」开关（对话请求不带 X-Client-Request-Id）发往官方账户：中转本地拒绝、400、读句含可复制执行的开关命令，模拟上游零请求；
+    /// 非 Claude Code 客户端不受影响。开了开关（带 X-Client-Request-Id）照常通过。
+    /// </summary>
+    public static async Task FirstPartySwitchOffReadsInstruction()
+    {
+        using var claude = new FakeClaudeLauncher("success");
+        await using var mock = await UpstreamFixture.Create();
+        await using var web = await Official(claude, mock);
+        var person = web.Identities.Create("书房");
+        var before = mock.Calls.Count;
+        // claude-cli 客户端但没带 X-Client-Request-Id：视为未开开关。
+        using (var off = await Send(web, person.Token, new string('a', 64), ("User-Agent", "claude-cli/2.1.323 (external, cli)"), ("X-Client-Request-Id", "")))
+        {
+            Check((int)off.StatusCode == 400, "A Claude Code request without the switch is refused locally: " + (int)off.StatusCode);
+            var said = await Message(off);
+            Check(said is not null && said.Contains("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", StringComparison.Ordinal) && said.Contains("SetEnvironmentVariable", StringComparison.Ordinal),
+                "The message carries the copyable switch command: " + said);
+        }
+        Check(mock.Calls.Count == before, "A switched-off Claude Code request never reaches the official upstream");
+        using var lease = web.Relay.Upstreams.Acquire();
+        Check(!lease.Paused && lease.CooldownSeconds == 0, "The local refusal does not pause or cool down the upstream");
+        // 非 Claude Code 客户端（无 claude-cli User-Agent）不判这一条，照旧放行。
+        using (var other = await Send(web, person.Token, new string('a', 64), ("User-Agent", "some-sdk/1.0")))
+            Check(other.StatusCode == HttpStatusCode.OK, "A non-Claude-Code client is not gated: " + await other.Content.ReadAsStringAsync());
+        // 开了开关（带 X-Client-Request-Id）照常通过。
+        using (var on = await Send(web, person.Token, new string('a', 64), ("User-Agent", "claude-cli/2.1.323 (external, cli)"), ("X-Client-Request-Id", Guid.NewGuid().ToString())))
+            Check(on.StatusCode == HttpStatusCode.OK, "A switched-on Claude Code request passes: " + await on.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>
     /// 身份缺失时不发：官方账户在用，本机 Claude Code 被卸掉；客户端拿到 503 和「找不到 Claude Code」的读句，模拟上游一个请求都没收到，
     /// 不进认证暂停也不进冷却；用量页那一行与上游页读出同一句。
     /// </summary>
@@ -374,6 +404,11 @@ static class ClaudeCodeIdentityTests
                 metadata = new { user_id = userId } }), Encoding.UTF8, "application/json")
         };
         request.Headers.Authorization = new("Bearer", token);
+        // 真实 Claude Code 客户端（User-Agent claude-cli）开了「按官方直连发请求」开关才发往官方，每个对话请求都带 X-Client-Request-Id；
+        // 模拟 claude-cli 的请求默认补一个表示已开开关，调用方显式给了就用它的；非 claude-cli 的合成请求不补，用来验证「未发不补」。
+        var claudeCli = headers.Any(h => h.Name.Equals("User-Agent", StringComparison.OrdinalIgnoreCase) && h.Value.StartsWith("claude-cli/", StringComparison.OrdinalIgnoreCase));
+        if (claudeCli && !headers.Any(h => h.Name.Equals("X-Client-Request-Id", StringComparison.OrdinalIgnoreCase)))
+            request.Headers.TryAddWithoutValidation("X-Client-Request-Id", Guid.NewGuid().ToString());
         foreach (var (name, value) in headers) request.Headers.TryAddWithoutValidation(name, value);
         return await web.Http.SendAsync(request);
     }

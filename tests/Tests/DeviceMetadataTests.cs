@@ -188,6 +188,26 @@ public static class DeviceMetadataTests
             Check(request.Headers.AcceptEncoding.ToString() == "identity", "API path keeps identity: " + request.Headers.AcceptEncoding);
     }
 
+    /// <summary>官方账户照原生直连：HTTP/1.1 且显式 Connection: keep-alive，客户端没带 oauth beta 时补在最前；API 上游仍优先 HTTP/2、不加 keep-alive 头。模拟官方实际收到 HTTP/1.1。</summary>
+    public static async Task OfficialUsesNativeTransportAndBetaOrder()
+    {
+        await using var mock = await UpstreamFixture.Create();
+        var body = Encoding.UTF8.GetBytes(Wrap("\"user_" + new string('a', 64) + "_account_account_session_session\""));
+        var headers = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues> { ["anthropic-beta"] = "zeta-2026-01-01,alpha-2026-02-02" };
+        using var official = new UpstreamConnection(new(1, mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true, OAuthBeta = true }, "fixture-secret", accountUuid: Account), Proxy());
+        using (var request = official.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, Identity(), Canonical))
+        {
+            Check(request.Version == System.Net.HttpVersion.Version11 && request.VersionPolicy == System.Net.Http.HttpVersionPolicy.RequestVersionExact, "Official requests use HTTP/1.1 like the native client");
+            Check(request.Headers.Connection.Contains("keep-alive"), "Official requests carry Connection: keep-alive like the native client");
+            Check(string.Join(',', request.Headers.GetValues("anthropic-beta")) == "oauth-2025-04-20,zeta-2026-01-01,alpha-2026-02-02", "The OAuth beta goes first like a native OAuth client: " + string.Join(',', request.Headers.GetValues("anthropic-beta")));
+            using var response = await official.Send(request, CancellationToken.None);
+            Check(response.IsSuccessStatusCode && mock.Calls.Last().Headers.TryGetValue("Connection", out var connection) && connection.Contains("keep-alive", StringComparison.OrdinalIgnoreCase), "The mock official upstream receives keep-alive over HTTP/1.1");
+        }
+        using var api = new UpstreamConnection(new(1, mock.Options(), "fixture-secret"), Proxy());
+        using (var request = api.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers))
+            Check(request.Version == System.Net.HttpVersion.Version20 && !request.Headers.Connection.Contains("keep-alive"), "API upstreams keep the previous transport");
+    }
+
     /// <summary>创建仅访问回环的官方租约；假凭据和假客户端身份不接触真实账户。</summary>
     private static UpstreamConnection Connection(UpstreamFixture mock) => new(new(1,
         mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret", accountUuid: Account), Proxy());

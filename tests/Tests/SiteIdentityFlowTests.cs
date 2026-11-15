@@ -208,6 +208,8 @@ static class SiteIdentityFlowTests
             messages = new[] { new { role = "user", content = "fixture-preseed-cli" } }, metadata = new { user_id = "user_" + new string('c', 64) + "_account__session_preseed-cli" } })))
         {
             request.Headers.TryAddWithoutValidation("User-Agent", $"claude-cli/{claude.Version} (external, cli)");
+            // 家里客户端开了「按官方直连发请求」开关才发往官方，每个对话请求都带 X-Client-Request-Id（订单 133 的本地门禁据此放行）。
+            request.Headers.TryAddWithoutValidation("X-Client-Request-Id", Guid.NewGuid().ToString());
             using var response = await web.Http.SendAsync(request); Check(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         }
         var before = service.Current.DeviceId; var seen = claude.SeenUserIds;

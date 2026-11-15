@@ -71,8 +71,12 @@ internal sealed class UpstreamConnection : IUpstreamLease
         if (options.OfficialAccount) body = DeviceMetadata.ForOfficial(route, body, deviceId, options.OfficialLogin, Snapshot.AccountUuid);
         // 官方只能看到中转所在的那一台设备：统一身份没到手宁可不发，不退回客户端自己的标识，也不用设置里的固定字符串。
         var unified = options.OfficialAccount ? identity ?? throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.Missing) : null;
+        // 官方账户照原生直连用 HTTP/1.1（订单 133 真实线路：2.1.323 原生发 HTTP/1.1，带 Host 与 Connection: keep-alive），其余上游仍优先 HTTP/2。
         var request = new HttpRequestMessage(new HttpMethod(method), UpstreamAddress.Endpoint(options, route, query))
-        { Content = new ByteArrayContent(body), Version = HttpVersion.Version20, VersionPolicy = HttpVersionPolicy.RequestVersionOrLower };
+        { Content = new ByteArrayContent(body), Version = options.OfficialAccount ? HttpVersion.Version11 : HttpVersion.Version20,
+            VersionPolicy = options.OfficialAccount ? HttpVersionPolicy.RequestVersionExact : HttpVersionPolicy.RequestVersionOrLower };
+        // 原生在 HTTP/1.1 上显式带 Connection: keep-alive；.NET 默认长连接但不写这个头，照原生补上。
+        if (options.OfficialAccount) request.Headers.Connection.Add("keep-alive");
         var connectionHeaders = (headers is null ? "" : Header(headers, "Connection").ToString()).Split(',').Select(value => value.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (headers is not null)
             foreach (var header in headers)
@@ -104,7 +108,8 @@ internal sealed class UpstreamConnection : IUpstreamLease
         var allowOauth = options.Mode == "oauth" && options.OAuthBeta;
         var clientBetas = (headers is null ? "" : Header(headers, "anthropic-beta").ToString()).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var betas = clientBetas.Where(value => allowOauth || !value.StartsWith("oauth-", StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase);
-        if (allowOauth && !clientBetas.Any(value => value.StartsWith("oauth-", StringComparison.OrdinalIgnoreCase))) betas = betas.Append("oauth-2025-04-20");
+        // 客户端没带 oauth beta 时补在最前：原生 OAuth 登录的客户端自己把它放在首位（第一段 N、B4–B6 与订单 133 真实线路一致）。
+        if (allowOauth && !clientBetas.Any(value => value.StartsWith("oauth-", StringComparison.OrdinalIgnoreCase))) betas = betas.Prepend("oauth-2025-04-20");
         var beta = string.Join(',', betas);
         if (beta.Length != 0) request.Headers.TryAddWithoutValidation("anthropic-beta", beta);
         if (options.Authentication == "bearer") request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Snapshot.Credential);
@@ -119,8 +124,10 @@ internal sealed class UpstreamConnection : IUpstreamLease
     {
         var options = Snapshot.Options;
         if (!options.OfficialLogin) throw new InvalidOperationException("只有登录官方账户的上游才取账户资料。");
+        // 和推理请求一样照原生走 HTTP/1.1、显式 keep-alive。
         var request = new HttpRequestMessage(HttpMethod.Get, UpstreamAddress.Endpoint(options, "/api/oauth/profile"))
-        { Version = HttpVersion.Version20, VersionPolicy = HttpVersionPolicy.RequestVersionOrLower };
+        { Version = HttpVersion.Version11, VersionPolicy = HttpVersionPolicy.RequestVersionExact };
+        request.Headers.Connection.Add("keep-alive");
         request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
         request.Headers.TryAddWithoutValidation("User-Agent", "claude-code/" + version);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Snapshot.Credential);

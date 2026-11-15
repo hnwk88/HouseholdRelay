@@ -162,6 +162,11 @@ public sealed class RelayServer : IDisposable
             byte[] Body(IUpstreamLease target) => method == "POST" && !target.Snapshot.Options.OfficialAccount && target.Snapshot.Options.Mode == "oauth" && config.NormalizeDeviceMetadata
                 ? normalized ??= DeviceMetadata.Normalize(body, compatibleDevice) : body;
             var upstream = route.Next(model)!;
+            // 发往官方账户要和原生直连一致，家里的 Claude Code 得开「按官方直连发请求」开关（它开了每个对话请求都带 X-Client-Request-Id）。
+            // 没开就少一批只有客户端自己能生成的值，这次不发往官方，把开开关的命令读给使用者，复制执行、重开 Claude Code 再发即可。
+            if (path == "/v1/messages" && upstream.Snapshot.Options.OfficialAccount
+                && FirstPartySwitch.Missing(context.Request.Headers.UserAgent.ToString(), context.Request.Headers["X-Client-Request-Id"].ToString()))
+                throw new RelayFailure(400, FirstPartySwitch.Instruction);
             // 客户端自报的 Claude Code 版本与入口，第一次发往官方账户时才读一次。
             ClaudeCodeClient? caller = null;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
