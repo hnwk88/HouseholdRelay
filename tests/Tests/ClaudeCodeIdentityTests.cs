@@ -115,6 +115,7 @@ static class ClaudeCodeIdentityTests
         using (var first = await Send(web, person.Token, new string('a', 64), ("X-Stainless-Retry-Count", "2"), ("X-Claude-Code-Agent-Id", "agent-one"),
             ("X-Claude-Code-Parent-Agent-Id", "agent-root"), (FakeClaude.UnclassifiedHeader, "client-value"),
             ("X-Claude-Code-Request-Class", "main"), ("X-Claude-1p-Request-Class", "main"), ("X-Claude-Code-Prompt-Id", "11111111-2222-4333-8444-555555555555"),
+            ("X-Client-Request-Id", "22222222-3333-4444-8555-666666666666"), ("X-Claude-Code-Sandy-Plover", "[]"),
             ("anthropic-beta", "zeta-2026-01-01,alpha-2026-02-02")))
             Check(first.StatusCode == HttpStatusCode.OK, await first.Content.ReadAsStringAsync());
         var retried = mock.Calls.Last().Headers;
@@ -123,11 +124,14 @@ static class ClaudeCodeIdentityTests
         // 第 3 项：网关提示头按客户端当次的值透传（客户端开 CLAUDE_CODE_GATEWAY_HINT_HEADERS 才会带）。
         Check(retried["X-Claude-Code-Request-Class"] == "main" && retried["X-Claude-1p-Request-Class"] == "main"
             && retried["X-Claude-Code-Prompt-Id"] == "11111111-2222-4333-8444-555555555555", "Gateway hint headers pass through by this request's value");
+        // 客户端认定地址是官方时才发的请求编号与工具来源列表（ASSUME_1P 回环实测）：按当次值透传。
+        Check(retried["X-Client-Request-Id"] == "22222222-3333-4444-8555-666666666666" && retried["X-Claude-Code-Sandy-Plover"] == "[]", "First-party request headers pass through by this request's value");
         // 第 2 项：anthropic-beta 按客户端这一次的原序原样透传，中转不重排、不补造（oauth 补位另见 UpstreamVersionTests）。
         Check(retried["anthropic-beta"] == "zeta-2026-01-01,alpha-2026-02-02", "anthropic-beta keeps client order verbatim: " + retried["anthropic-beta"]);
         using (var second = await Send(web, person.Token, new string('a', 64), ("X-Stainless-Retry-Count", "0"))) Check(second.StatusCode == HttpStatusCode.OK);
         var main = mock.Calls.Last().Headers;
         Check(main["X-Stainless-Retry-Count"] == "0" && !main.ContainsKey("X-Claude-Code-Agent-Id") && !main.ContainsKey("X-Claude-Code-Parent-Agent-Id"), "A main-session request carries no agent ids");
+        Check(!main.ContainsKey("X-Client-Request-Id") && !main.ContainsKey("X-Claude-Code-Sandy-Plover"), "First-party request headers the client did not send are not invented or replayed");
         using (var third = await Send(web, person.Token, new string('a', 64))) Check(third.StatusCode == HttpStatusCode.OK);
         Check(!mock.Calls.Last().Headers.ContainsKey("X-Stainless-Retry-Count"), "A retry count the client did not send must not be invented or replayed from the capture");
         Check(mock.Calls.All(call => !call.Headers.ContainsKey(FakeClaude.UnclassifiedHeader)), "An unclassified header never reaches the official upstream");

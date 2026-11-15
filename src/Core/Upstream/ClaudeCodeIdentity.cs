@@ -35,7 +35,10 @@ public sealed partial record ClaudeCodeIdentity(IReadOnlyList<KeyValuePair<strin
     { "anthropic-version", "Content-Type", "X-Claude-Code-Session-Id", "X-Stainless-Retry-Count", "X-Claude-Code-Agent-Id", "X-Claude-Code-Parent-Agent-Id",
         // 官方网关提示头：说这一次请求属于哪种（主对话、子代理等）、哪个提示、哪个请求编号，供网关调度与归因；客户端默认只在直连或开 CLAUDE_CODE_GATEWAY_HINT_HEADERS 时发，
         // 中转按客户端当次的值放行、不补造，客户端没开就不带。
-        "X-Claude-Code-Request-Class", "X-Claude-1p-Request-Class", "X-Claude-Code-Prompt-Id" };
+        "X-Claude-Code-Request-Class", "X-Claude-1p-Request-Class", "X-Claude-Code-Prompt-Id",
+        // 客户端认定地址是官方时（直连，或连接页给的 _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL）才发：每个请求新生成的请求编号、本会话的工具来源列表。
+        // 2.1.323 回环实测（订单 133 第二段）每请求各一个新 UUID、整段会话同一个值，都是客户端自己生成的，按当次原样放行。
+        "X-Client-Request-Id", "X-Claude-Code-Sandy-Plover" };
 
     /// <summary>
     /// 逐项确认过、同一份 claude.exe 同一入口每次都一样的稳定身份头，只有它们进缓存并发往官方：User-Agent、Accept、浏览器直连声明、x-app，
