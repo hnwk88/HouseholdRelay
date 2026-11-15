@@ -3,10 +3,16 @@
 namespace Core.Upstream;
 
 /// <summary>请求持有的不可变活动版本；用普通类而非记录类型，避免自动输出凭据。</summary>
-public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, string? candidateId = null, string? name = null, bool failover = false, bool blockedByIdentity = false)
+public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, string? candidateId = null, string? name = null, bool failover = false, bool blockedByIdentity = false, string? accountUuid = null, string? blockedReason = null)
 {
     /// <summary>本次读取被站点维护或私有身份配置校验拒绝；不是凭据丢失，连接池须保留既有暂停和冷却。</summary>
     [JsonIgnore] public bool BlockedByIdentity { get; } = blockedByIdentity;
+
+    /// <summary>私有身份配置拒绝时的读句（固定说明，不含秘密），转发时原样告诉下游；站点维护或没有具体原因时为 null，用通用读句。</summary>
+    [JsonIgnore] public string? BlockedReason { get; } = blockedReason;
+
+    /// <summary>官方账户当前的 oauthAccount.accountUuid（取自账户目录私有配置），只在官方登录上游有值，用于把发往官方的 metadata.user_id 账户段对齐原生直连；非官方上游为 null，永不序列化。</summary>
+    [JsonIgnore] public string? AccountUuid { get; } = accountUuid;
 
     /// <summary>当前生效的已保存上游主键；尚未从任何已保存上游激活（新实例或独立中转）时为 null。</summary>
     public string? CandidateId { get; } = candidateId;

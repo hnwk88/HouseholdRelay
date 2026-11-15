@@ -34,13 +34,15 @@ public static class DeviceMetadataPathTests
         {
             var downstream = new string(digit, 64);
             var original = Sample(embedded, downstream, "fixture-model", claude.Version, "sdk-cli");
-            var expected = original.Replace(downstream, canonical, StringComparison.Ordinal);
+            // 设备段换成站点编号，账户段换成获取模型时向模拟官方取回的账户编号（照原生登录存进账户目录），其余字节原样。
+            var expected = original.Replace(downstream, canonical, StringComparison.Ordinal)
+                .Replace(embedded ? "account_uuid\\u0022 : \\u0022account\\u0022" : "_account_account_", embedded ? "account_uuid\\u0022 : \\u0022" + FakeClaude.AccountUuid + "\\u0022" : "_account_" + FakeClaude.AccountUuid + "_", StringComparison.Ordinal);
             using (var request = UsageFixture.Request(web, token, "metadata-matrix", body: original))
             using (var response = await web.Http.SendAsync(request))
                 Check(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
             AssertSample(mock.Calls.Last(), expected, downstream, canonical, hashes);
             claude.Reinstall("metadata-" + (embedded ? "json-" : "legacy-") + digit, claude.Version);
-            using (var transport = new UpstreamConnection(new(1, options, "fixture-protocol-token"), web.App.Services.GetRequiredService<IUpstreamProxy>()))
+            using (var transport = new UpstreamConnection(new(1, options, "fixture-protocol-token", accountUuid: FakeClaude.AccountUuid), web.App.Services.GetRequiredService<IUpstreamProxy>()))
             {
                 var identity = ClaudeCodeIdentity.From(FakeClaude.Identity(claude.Version), claude.Version, "sdk-cli", DateTimeOffset.UnixEpoch);
                 var reply = await web.App.Services.GetRequiredService<IClaudeCodeProbe>().Run(transport, identity, CancellationToken.None);
@@ -87,6 +89,60 @@ public static class DeviceMetadataPathTests
         Console.WriteLine("Protocol matrix: 8 allowed wire samples, 1 device hash, 0 downstream device occurrences, 0 changes outside device bytes; 8 rejected categories, 0 upstream requests; 32 stage events at one generation.");
     }
 
+    /// <summary>
+    /// 账户编号闭环：导入的登录文件没有 oauthAccount，导入后获取模型照原生登录向模拟官方取一次资料（头与原生一致）并存下，业务请求的账户段即为它；
+    /// 官方那边换了账户，重新测试就同步到账户目录与在用连接；资料接口拒绝时测试读出原因、不通过，转发没有旧编号可用时本地 503、零出站。
+    /// </summary>
+    public static async Task AccountUuidRecordedByTest()
+    {
+        using var claude = new FakeClaudeLauncher("success");
+        await using var mock = await UpstreamFixture.Create();
+        await using var web = await WebFixture.Create(overrides: claude.Register);
+        var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
+        var candidate = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, options, FakeClaude.Credential("fixture-account-token", 60), "模拟官方", CancellationToken.None);
+        var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate, ".claude.json");
+        using (var imported = JsonDocument.Parse(File.ReadAllBytes(configuration))) Check(!imported.RootElement.TryGetProperty("oauthAccount", out _), "An imported login file has no oauthAccount, like a real one");
+        await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
+        var profile = mock.Calls.Single(call => call.Path == "/api/oauth/profile");
+        Check(profile.Body.Length == 0 && profile.Headers["Authorization"] == "Bearer fixture-account-token" && profile.Headers["User-Agent"] == "claude-code/" + claude.Version
+            && profile.Headers["Cache-Control"] == "no-cache" && !profile.Headers.Keys.Any(key => key.StartsWith("x-stainless-", StringComparison.OrdinalIgnoreCase) || key.Equals("anthropic-beta", StringComparison.OrdinalIgnoreCase)),
+            "The profile request carries exactly the native login headers");
+        using (var recorded = JsonDocument.Parse(File.ReadAllBytes(configuration)))
+            Check(recorded.RootElement.GetProperty("oauthAccount").GetProperty("accountUuid").GetString() == FakeClaude.AccountUuid, "Discovery records the official account UUID in the account directory");
+        var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);
+        Check(report.CanActivate, report.Message); web.Upstreams.Activate(candidate);
+        var token = web.Identities.Create("账户编号客户端").Token;
+        async Task<HttpResponseMessage> Business()
+        {
+            using var request = UsageFixture.Request(web, token, "account-uuid", body: Sample(true, new string('a', 64), "fixture-model", claude.Version, "sdk-cli"));
+            return await web.Http.SendAsync(request);
+        }
+        string Wire() { using var outer = JsonDocument.Parse(mock.Calls.Last().Body); using var inner = JsonDocument.Parse(outer.RootElement.GetProperty("metadata").GetProperty("user_id").GetString()!); return inner.RootElement.GetProperty("account_uuid").GetString()!; }
+        using (var response = await Business()) Check(response.IsSuccessStatusCode && Wire() == FakeClaude.AccountUuid, "Business requests carry the recorded account UUID");
+        const string switched = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
+        mock.Profile = context => UpstreamFixture.ProfileReply(context, switched);
+        report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None); Check(report.CanActivate, report.Message);
+        using (var recorded = JsonDocument.Parse(File.ReadAllBytes(configuration)))
+            Check(recorded.RootElement.GetProperty("oauthAccount").GetProperty("accountUuid").GetString() == switched, "A changed official account is synchronized by the next test");
+        using (var response = await Business()) Check(response.IsSuccessStatusCode && Wire() == switched, "The active connection uses the synchronized account UUID");
+        mock.Profile = context => { context.Response.StatusCode = 401; return Task.CompletedTask; };
+        try { await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None); Check(false, "A refused profile must fail the test"); }
+        // 资料接口被拒是本用例的目标：读句说明没有取得账户编号、要重新登录。
+        catch (InvalidOperationException error) { Check(error.Message.Contains("账户编号", StringComparison.Ordinal) && error.Message.Contains("重新登录", StringComparison.Ordinal), error.Message); }
+        var withoutAccount = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(configuration))!.AsObject(); withoutAccount.Remove("oauthAccount");
+        File.WriteAllText(configuration, withoutAccount.ToJsonString());
+        web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>().PrepareExistingAccounts();
+        var sent = mock.Calls.Count;
+        using (var response = await Business())
+        {
+            var said = await response.Content.ReadAsStringAsync();
+            Check((int)response.StatusCode == 503 && said.Contains("测试", StringComparison.Ordinal) && mock.Calls.Count == sent,
+                $"Without an account UUID the relay refuses locally, tells the admin to test, and sends nothing: {(int)response.StatusCode} {said} sent={mock.Calls.Count - sent}");
+        }
+        using var lease = web.Relay.Upstreams.Acquire();
+        Check(!lease.Paused && lease.CooldownSeconds == 0, "The missing account UUID is a local block, not an upstream pause or cooldown");
+    }
+
     /// <summary>构造由假 CLI 和业务客户端共用的确定正文；内嵌 JSON 保留空白、转义、未知扩展和属性顺序。</summary>
     internal static string Sample(bool embedded, string device, string model, string version, string entrypoint)
     {
@@ -101,7 +157,7 @@ public static class DeviceMetadataPathTests
     /// <summary>检查回环服务器实际保存的出站正文；整个字节序列等于仅替换设备值的预期，且只收集设备哈希。</summary>
     private static void AssertSample(UpstreamCall call, string expected, string downstream, string canonical, ISet<string> hashes)
     {
-        Check(Encoding.UTF8.GetBytes(call.Body).SequenceEqual(Encoding.UTF8.GetBytes(expected)), "Non-device bytes, billing content, account and session must remain verbatim on the wire.");
+        Check(Encoding.UTF8.GetBytes(call.Body).SequenceEqual(Encoding.UTF8.GetBytes(expected)), "Only device and account values change; billing content, session and all other bytes remain verbatim on the wire.");
         Check(!call.Body.Contains(downstream, StringComparison.Ordinal), "The original client device must never leave.");
         using var outer = JsonDocument.Parse(call.Body);
         var identifier = outer.RootElement.GetProperty("metadata").GetProperty("user_id").GetString()!;

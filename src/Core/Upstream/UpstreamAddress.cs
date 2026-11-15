@@ -31,11 +31,11 @@ public static class UpstreamAddress
 
     /// <summary>
     /// 把允许的接口路由拼到规范化后的上游根地址上，并合并根地址自带的查询串与本次请求的 <paramref name="query"/>（可带或不带前导 <c>?</c>）。
-    /// 路由只允许 messages、count_tokens、models 和 /api/hello 四个白名单，其余抛出 <see cref="InvalidOperationException"/>，防止中转被用来访问任意路径。
+    /// 路由只允许 messages、count_tokens、models、/api/hello 和 /api/oauth/profile（仅登录官方账户的上游，取账户编号用）五个白名单，其余抛出 <see cref="InvalidOperationException"/>，防止中转被用来访问任意路径。
     /// </summary>
     public static Uri Endpoint(UpstreamOptions options, string route, string query = "")
     {
-        if (route is not ("/v1/messages" or "/v1/messages/count_tokens" or "/v1/models" or "/api/hello"))
+        if (route is not ("/v1/messages" or "/v1/messages/count_tokens" or "/v1/models" or "/api/hello") && !(route == "/api/oauth/profile" && options.OfficialLogin))
             throw new InvalidOperationException("不支持的上游接口。");
         var baseUri = Normalize(options.BaseUrl, options.AllowPrivateNetwork);
         var separator = baseUri.Query.Length == 0 ? "?" : "&";

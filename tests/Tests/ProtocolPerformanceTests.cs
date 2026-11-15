@@ -15,10 +15,11 @@ static class ProtocolPerformanceTests
         var body = Encoding.UTF8.GetBytes("{\"metadata\":{\"user_id\":\"user_" + new string('a', 64)
             + "_account_fixture_session_session\"},\"messages\":[{\"role\":\"user\",\"content\":\"" + new string('x', 8192) + "\"}]}");
         const int iterations = 2048;
-        for (var i = 0; i < 100; i++) { DeviceMetadata.Normalize(body, target); DeviceMetadata.ForOfficial("/v1/messages", body, target); }
+        // 比较只改设备段的两条规则：严格规则走「没有账户目录」口径（账户段原样），才能与旧兼容改写逐字节相等。
+        for (var i = 0; i < 100; i++) { DeviceMetadata.Normalize(body, target); DeviceMetadata.ForOfficial("/v1/messages", body, target, false, null); }
         var old = Measure(() => DeviceMetadata.Normalize(body, target), iterations);
-        var strict = Measure(() => DeviceMetadata.ForOfficial("/v1/messages", body, target), iterations);
-        Check(DeviceMetadata.Normalize(body, target).SequenceEqual(DeviceMetadata.ForOfficial("/v1/messages", body, target)));
+        var strict = Measure(() => DeviceMetadata.ForOfficial("/v1/messages", body, target, false, null), iterations);
+        Check(DeviceMetadata.Normalize(body, target).SequenceEqual(DeviceMetadata.ForOfficial("/v1/messages", body, target, false, null)));
         Console.WriteLine($"NORMALIZATION PERFORMANCE: bytes={body.Length}; iterations={iterations}; "
             + $"legacy_ms={old.Milliseconds:F3}; strict_ms={strict.Milliseconds:F3}; "
             + $"legacy_bytes_per_call={old.Bytes / iterations}; strict_bytes_per_call={strict.Bytes / iterations}; file_io=0; network_io=0. "

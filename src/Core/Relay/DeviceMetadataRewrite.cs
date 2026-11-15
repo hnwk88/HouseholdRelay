@@ -9,8 +9,8 @@ internal static class DeviceMetadataRewrite
     /// <summary>缺失、重复、损坏或未知设备格式时的固定读句；只说明本站支持范围，不冒充官方协议要求。</summary>
     private const string Unsupported = "This relay does not support this device metadata format for official account messages. This request was not sent.";
 
-    /// <summary>按端点执行本站的官方请求合同，完整检查相关 JSON 后才拼接替换设备值。</summary>
-    internal static byte[] Apply(string route, byte[] body, string deviceId)
+    /// <summary>按端点执行本站的官方请求合同，完整检查相关 JSON 后才拼接替换设备值与账户编号；<paramref name="accountUuid"/> 为 null（上游没有账户目录）时账户段原样。</summary>
+    internal static byte[] Apply(string route, byte[] body, string deviceId, string? accountUuid)
     {
         if (route == "/v1/models")
         {
@@ -36,7 +36,7 @@ internal static class DeviceMetadataRewrite
             }
             if (route == "/v1/messages/count_tokens") return body;
             if (!metadataSeen) throw Rejected();
-            return Rewrite(body, identifier, deviceId);
+            return Rewrite(body, identifier, deviceId, accountUuid);
         }
         // 不把解析器里的正文片段或位置交给客户端；所有语法错误统一为本站格式不支持。
         catch (JsonException) { throw Rejected(); }
@@ -62,47 +62,79 @@ internal static class DeviceMetadataRewrite
         return identifier;
     }
 
-    /// <summary>识别两种已支持的 user_id，只替换设备值对应的原始字节区间，保持内外层转义及其他内容。</summary>
-    private static byte[] Rewrite(byte[] body, Identifier identifier, string deviceId)
+    /// <summary>
+    /// 识别两种已支持的 user_id，把设备段改成 <paramref name="deviceId"/>、账户段改成 <paramref name="accountUuid"/>（与原生直连的 oauthAccount.accountUuid 一致），
+    /// 其余字节（会话段、内外层转义及所有其他内容）原样保留。两段现值都已等于目标时原数组返回；只按需替换，按原始字节偏移从后往前拼接，互不影响偏移。
+    /// </summary>
+    private static byte[] Rewrite(byte[] body, Identifier identifier, string deviceId, string? accountUuid)
     {
         var original = identifier.Value;
         if (string.IsNullOrWhiteSpace(original)) throw Rejected();
-        var inner = Encoding.UTF8.GetBytes(original);
-        int start, length;
-        string current;
-        if (DeviceMetadata.LegacyId().IsMatch(original))
-        {
-            start = "user_".Length; length = 64;
-            current = original.Substring(start, length);
-        }
-        else
-        {
-            var reader = new Utf8JsonReader(inner);
-            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) throw Rejected();
-            var found = false;
-            start = length = 0; current = "";
-            while (reader.Read())
-            {
-                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1 || !reader.ValueTextEquals("device_id")) continue;
-                if (found || !reader.Read() || reader.TokenType != JsonTokenType.String) throw Rejected();
-                found = true;
-                start = (int)reader.TokenStartIndex + 1; length = reader.ValueSpan.Length; current = reader.GetString()!;
-            }
-            if (!found || string.IsNullOrWhiteSpace(current)) throw Rejected();
-        }
-        if (current == deviceId) return body;
+        var segments = Locate(original, accountUuid is not null);
+        // 设备段必有值；账户段允许原来是空串（就地填入真实编号），没有真实编号时不动。只有现值与目标不同的段才替换。
+        var edits = segments
+            .Where(segment => segment.Kind == Part.Device || accountUuid is not null)
+            .Select(segment => (segment.Start, segment.Length, Replacement: segment.Kind == Part.Device ? deviceId : accountUuid!, segment.Current))
+            .Where(edit => edit.Current != edit.Replacement)
+            .OrderByDescending(edit => edit.Start)
+            .ToArray();
+        if (edits.Length == 0) return body;
+        // 偏移映射只认原始正文的设备标识区间；按解码位置从大到小替换，靠后的替换不移动靠前段的原始偏移。
         var raw = body.AsSpan(identifier.Start, identifier.Length);
-        var rawStart = RawOffset(raw, start);
-        var rawEnd = RawOffset(raw, start + length);
-        var first = identifier.Start + rawStart;
-        var after = identifier.Start + rawEnd;
-        var replacement = Encoding.ASCII.GetBytes(deviceId);
-        var result = new byte[body.Length - (after - first) + replacement.Length];
-        body.AsSpan(0, first).CopyTo(result);
-        replacement.CopyTo(result.AsSpan(first));
-        body.AsSpan(after).CopyTo(result.AsSpan(first + replacement.Length));
+        var result = body;
+        foreach (var edit in edits)
+        {
+            var first = identifier.Start + RawOffset(raw, edit.Start);
+            var after = identifier.Start + RawOffset(raw, edit.Start + edit.Length);
+            var replacement = Encoding.ASCII.GetBytes(edit.Replacement);
+            var next = new byte[result.Length - (after - first) + replacement.Length];
+            result.AsSpan(0, first).CopyTo(next);
+            replacement.CopyTo(next.AsSpan(first));
+            result.AsSpan(after).CopyTo(next.AsSpan(first + replacement.Length));
+            result = next;
+        }
         return result;
     }
+
+    /// <summary>设备段与账户段在 user_id 解码字符串上的区间与现值：旧格式按固定与分隔符定位，内嵌 JSON 格式按 device_id、account_uuid 两个顶层字符串字段定位；要填账户编号（<paramref name="accountRequired"/>）而账户段缺失时按格式不支持拒绝。</summary>
+    private static (Part Kind, int Start, int Length, string Current)[] Locate(string original, bool accountRequired)
+    {
+        if (DeviceMetadata.LegacyId().IsMatch(original))
+        {
+            // user_{64位十六进制}_account_{账户}_session_{会话}：设备段固定 [5,64]，账户段在 _account_ 之后、_session_ 之前（可空）。
+            const int deviceStart = 5, deviceLength = 64;
+            var accountStart = deviceStart + deviceLength + "_account_".Length;
+            var sessionAt = original.IndexOf("_session_", accountStart, StringComparison.Ordinal);
+            if (sessionAt < 0) throw Rejected();
+            return
+            [
+                (Part.Device, deviceStart, deviceLength, original.Substring(deviceStart, deviceLength)),
+                (Part.Account, accountStart, sessionAt - accountStart, original.Substring(accountStart, sessionAt - accountStart))
+            ];
+        }
+        var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(original));
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) throw Rejected();
+        (int Start, int Length, string Value)? device = null, account = null;
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0) break;
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1) continue;
+            var isDevice = reader.ValueTextEquals("device_id");
+            var isAccount = reader.ValueTextEquals("account_uuid");
+            if (!isDevice && !isAccount) continue;
+            if (!reader.Read() || reader.TokenType != JsonTokenType.String) throw Rejected();
+            var located = ((int)reader.TokenStartIndex + 1, reader.ValueSpan.Length, reader.GetString()!);
+            if (isDevice) { if (device is not null) throw Rejected(); device = located; }
+            else { if (account is not null) throw Rejected(); account = located; }
+        }
+        if (device is not { Value.Length: > 0 } d || accountRequired && account is null) throw Rejected();
+        return account is { } a
+            ? [(Part.Device, d.Start, d.Length, d.Value), (Part.Account, a.Start, a.Length, a.Value)]
+            : [(Part.Device, d.Start, d.Length, d.Value)];
+    }
+
+    /// <summary>user_id 里由本站用真实值改写的两段。</summary>
+    private enum Part { Device, Account }
 
     /// <summary>把解码后 UTF-8 的边界映射到原始 JSON 字符串内容；识别简单转义、Unicode 转义及代理对。</summary>
     private static int RawOffset(ReadOnlySpan<byte> raw, int decodedOffset)

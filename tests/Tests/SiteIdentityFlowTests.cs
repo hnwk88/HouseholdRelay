@@ -160,7 +160,7 @@ static class SiteIdentityFlowTests
             using (var response = await UpstreamFixture.RelayRequest(web, person.Token, "occupied-cold"))
             {
                 blocked = await response.Content.ReadAsStringAsync();
-                Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && blocked.Contains("设备身份暂不可用", StringComparison.Ordinal), blocked);
+                Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && blocked.Contains("正被其他程序占用", StringComparison.Ordinal), blocked);
             }
             Check(official.Calls.Count == calls, "An occupied private configuration must not reach the official upstream");
             web.Upstreams.SetFailover(true);

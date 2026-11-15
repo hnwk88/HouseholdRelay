@@ -11,24 +11,48 @@ public static class DeviceMetadataTests
     /// <summary>本组测试的站点编号；与所有模拟下游设备编号不同。</summary>
     private static readonly string Canonical = new('c', 64);
 
-    /// <summary>两种设备格式及转义变体都只改设备值；同号重写复用原数组，会话、账户和归因原字节保持。</summary>
+    /// <summary>本组官方登录账户目录里的 oauthAccount.accountUuid；与所有模拟下游账户段不同。</summary>
+    private const string Account = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
+    /// <summary>
+    /// 两种设备格式及转义变体：登录官方账户时只改设备值和账户值（含客户端发来的空账户段），手填令牌的官方上游只改设备值；
+    /// 两段都已是目标时复用原数组，会话和归因原字节保持。
+    /// </summary>
     public static async Task OfficialBytesRemainVerbatim()
     {
         await using var mock = await UpstreamFixture.Create();
         using var transport = Connection(mock);
         var identity = Identity();
-        foreach (var (template, original) in Supported())
+        foreach (var (template, device, account) in Supported())
         {
-            var input = Encoding.UTF8.GetBytes(template.Replace("DEVICE_SEGMENT", original, StringComparison.Ordinal));
-            var expected = Encoding.UTF8.GetBytes(template.Replace("DEVICE_SEGMENT", Canonical, StringComparison.Ordinal));
-            var normalized = DeviceMetadata.ForOfficial("/v1/messages", input, Canonical);
-            Check(normalized.SequenceEqual(expected), "Only the device value bytes may change, including nested JSON escapes.");
-            Check(ReferenceEquals(normalized, DeviceMetadata.ForOfficial("/v1/messages", normalized, Canonical)), "The current device identity needs no second copy.");
+            var input = Encoding.UTF8.GetBytes(Fill(template, device, account));
+            var expected = Encoding.UTF8.GetBytes(Fill(template, Canonical, Account));
+            var normalized = DeviceMetadata.ForOfficial("/v1/messages", input, Canonical, true, Account);
+            Check(normalized.SequenceEqual(expected), "Only the device and account value bytes may change, including nested JSON escapes.");
+            Check(ReferenceEquals(normalized, DeviceMetadata.ForOfficial("/v1/messages", normalized, Canonical, true, Account)), "The current device and account identity need no second copy.");
+            var manual = DeviceMetadata.ForOfficial("/v1/messages", input, Canonical, false, null);
+            Check(manual.SequenceEqual(Encoding.UTF8.GetBytes(Fill(template, Canonical, account))), "Without an account directory the account segment stays exactly as the client sent it.");
             using var request = transport.Request("/v1/messages", "?beta=true", input, "POST", "unused", identity: identity, deviceId: Canonical);
             using var response = await transport.Send(request, CancellationToken.None);
             Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(expected), "The common outbound boundary must apply the same byte-preserving rule.");
         }
         Check(mock.Calls.Count == Supported().Count(), "Each allowed sample must send exactly once.");
+    }
+
+    /// <summary>登录官方账户却拿不到真实账户编号（缺失或不是标准 UUID）时在共同出口本地阻断：固定 503、模拟官方零请求、不暂停不冷却。</summary>
+    public static async Task OfficialAccountUuidFailsClosed()
+    {
+        await using var mock = await UpstreamFixture.Create();
+        var body = Encoding.UTF8.GetBytes(Fill(Supported().First().Template, new string('a', 64), ""));
+        foreach (var missing in new string?[] { null, "", "not-a-uuid", "{" + Account + "}" })
+        {
+            using var held = new UpstreamConnection(new(1, mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret", accountUuid: missing), Proxy());
+            Reject(() => held.Request("/v1/messages", "", body, "POST", "unused", identity: Identity(), deviceId: Canonical), 503);
+            Reject(() => held.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: Canonical), 503);
+            held.CheckState();
+            Check(!held.Paused && held.CooldownSeconds == 0, "A missing account identity is a local block, not an upstream pause or cooldown.");
+        }
+        Check(mock.Calls.IsEmpty, "No request may reach the mock official upstream without the real account identity.");
     }
 
     /// <summary>缺失、损坏、未知格式及后置重复键在共同出口拒绝；模拟官方收到零次请求且不进入暂停或冷却。</summary>
@@ -50,6 +74,8 @@ public static class DeviceMetadataTests
             "{\"metadata\":{\"user_id\":" + valid + ",\"user_\\u0069d\":" + valid + "}}",
             Wrap(innerDuplicate), Wrap(innerEscapedDuplicate), Wrap(JsonSerializer.Serialize("{\"device_id\":null}")),
             Wrap(JsonSerializer.Serialize("{\"device_id\":\"\"}")), Wrap(JsonSerializer.Serialize("{\"session_id\":\"s\"}")),
+            Wrap(JsonSerializer.Serialize("{\"device_id\":\"old\"}")), Wrap(JsonSerializer.Serialize("{\"device_id\":\"old\",\"account_uuid\":null}")),
+            Wrap(JsonSerializer.Serialize("{\"device_id\":\"old\",\"account_uuid\":\"\",\"account_uuid\":\"\"}")),
             "{\"metadata\":{\"user_id\":" + valid + "},\"after\":[}",
             Wrap(JsonSerializer.Serialize("{\"device_id\":\"old\"} trailing")), "[]",
             Wrap(JsonSerializer.Serialize("{\"device_id\":\"old\",\"after\":[}")),
@@ -125,19 +151,26 @@ public static class DeviceMetadataTests
     /// <summary>构造完整业务正文，归因、顺序、格式及设备以外的内容必须逐字保留。</summary>
     private static string Wrap(string identifier) => "{ \"system\" : [{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=1.0.0.abc; cc_entrypoint=cli; fingerprint=unchanged;\"}], \"metadata\" : {\"user_id\":" + identifier + ",\"extension\":true}, \"messages\" : [{\"role\":\"user\",\"content\":\"unchanged prompt\"}], \"tools\": [] }";
 
-    /// <summary>覆盖旧格式和内嵌 JSON 的普通、Unicode 及双层转义；嵌套同名扩展不是目标字段。</summary>
-    private static IEnumerable<(string Template, string Original)> Supported()
+    /// <summary>把模板里的设备、账户占位换成给定的原始片段。</summary>
+    private static string Fill(string template, string device, string account) =>
+        template.Replace("DEVICE_SEGMENT", device, StringComparison.Ordinal).Replace("ACCOUNT_SEGMENT", account, StringComparison.Ordinal);
+
+    /// <summary>覆盖旧格式和内嵌 JSON 的普通、Unicode 及双层转义，账户段有普通值、转义值和令牌模式客户端发的空串；嵌套同名扩展不是目标字段。</summary>
+    private static IEnumerable<(string Template, string Device, string Account)> Supported()
     {
         foreach (var digit in new[] { 'a', 'b' })
         {
             var device = new string(digit, 64);
-            yield return (Wrap("\"user_DEVICE_SEGMENT_account_account_session_session\""), device);
-            yield return (Wrap("\"\\u0075ser_DEVICE_SEGMENT_account_\\u0061ccount_session_session\""), string.Concat(Enumerable.Repeat($"\\u00{(int)digit:x2}", 64)));
-            var inner = "{ \"extension\" : [\"中😀\", \"a\\/b\", {\"device_id\":\"nested-unchanged\"}], \"session_id\" : \"s\\u0065ssion\", \"device_id\" : \"DEVICE_SEGMENT\", \"account_uuid\" : \"account\" }";
+            var escaped = string.Concat(Enumerable.Repeat($"\\u00{(int)digit:x2}", 64));
+            yield return (Wrap("\"user_DEVICE_SEGMENT_account_ACCOUNT_SEGMENT_session_session\""), device, "account");
+            yield return (Wrap("\"user_DEVICE_SEGMENT_account_ACCOUNT_SEGMENT_session_session\""), device, "");
+            yield return (Wrap("\"\\u0075ser_DEVICE_SEGMENT_account_ACCOUNT_SEGMENT_session_session\""), escaped, "\\u0061ccount");
+            var inner = "{ \"extension\" : [\"中😀\", \"a\\/b\", {\"device_id\":\"nested-unchanged\",\"account_uuid\":\"nested-unchanged\"}], \"session_id\" : \"s\\u0065ssion\", \"device_id\" : \"DEVICE_SEGMENT\", \"account_uuid\" : \"ACCOUNT_SEGMENT\" }";
             var serialized = JsonSerializer.Serialize(inner);
-            yield return (Wrap(serialized), device);
-            yield return (Wrap(serialized), JsonSerializer.Serialize(string.Concat(Enumerable.Repeat($"\\u00{(int)digit:x2}", 64)))[1..^1]);
-            yield return (Wrap(serialized.Replace("\\u4E2D", "中", StringComparison.Ordinal).Replace("\\uD83D\\uDE00", "😀", StringComparison.Ordinal)), device);
+            yield return (Wrap(serialized), device, "account");
+            yield return (Wrap(serialized), device, "");
+            yield return (Wrap(serialized), JsonSerializer.Serialize(escaped)[1..^1], JsonSerializer.Serialize("\\u0061ccount")[1..^1]);
+            yield return (Wrap(serialized.Replace("\\u4E2D", "中", StringComparison.Ordinal).Replace("\\uD83D\\uDE00", "😀", StringComparison.Ordinal)), device, "account");
         }
     }
 
@@ -157,7 +190,7 @@ public static class DeviceMetadataTests
 
     /// <summary>创建仅访问回环的官方租约；假凭据和假客户端身份不接触真实账户。</summary>
     private static UpstreamConnection Connection(UpstreamFixture mock) => new(new(1,
-        mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret"), Proxy());
+        mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret", accountUuid: Account), Proxy());
 
     /// <summary>固定无代理设置；本组请求目标只能来自本机模拟上游。</summary>
     private static IUpstreamProxy Proxy() => new SystemUpstreamProxy(() => new RelayConfiguration { ProxyMode = "none" });

@@ -19,6 +19,16 @@ static class FakeClaude
     public const string FirstToken = "fixture-login-token-first";
     /// <summary>假刷新（<c>-p /usage</c>）写入的新访问令牌。</summary>
     public const string RefreshedToken = "fixture-login-token-refreshed";
+    /// <summary>假登录像真 CLI 一样写进 .claude.json 的 oauthAccount.accountUuid；中转发往官方时用它对齐 metadata.user_id 的账户段。</summary>
+    public const string AccountUuid = "0b6f5f4e-1c2d-4e3f-8a9b-7c6d5e4f3a2b";
+
+    /// <summary>照真 <c>claude auth login</c> 把登录账户写进 .claude.json 顶层 oauthAccount，其余字段原样保留。</summary>
+    private static void WriteAccount(string configuration)
+    {
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(configuration))!.AsObject();
+        json["oauthAccount"] = new System.Text.Json.Nodes.JsonObject { ["accountUuid"] = AccountUuid, ["emailAddress"] = Email };
+        File.WriteAllText(configuration, json.ToJsonString());
+    }
 
     /// <summary>
     /// 按场景扮演 claude：<c>auth login</c> 在 success 下写入一小时后到期的令牌、expired 下写入已过期的令牌、no-credential 下什么也不写，cancel 下以退出码 1 结束；
@@ -43,7 +53,7 @@ static class FakeClaude
         if (command == "auth login")
         {
             if (scenario == "cancel") return 1;
-            if (scenario != "no-credential") Write(directory, FirstToken, scenario == "expired" ? -1 : 60);
+            if (scenario != "no-credential") { Write(directory, FirstToken, scenario == "expired" ? -1 : 60); WriteAccount(configuration); }
             return 0;
         }
         if (command == "auth status --json") { Console.WriteLine(JsonSerializer.Serialize(new { loggedIn = true, authMethod = "claude.ai", email = Email })); return 0; }

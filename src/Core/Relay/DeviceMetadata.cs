@@ -13,11 +13,15 @@ public static partial class DeviceMetadata
     /// 官方账户共同出站规则：Messages 只接受本站支持的设备格式并仅替换设备值；models 只接受空正文；
     /// count_tokens 不添加 metadata，本站暂不支持该端点携带 metadata 扩展。编号缺损时拒绝，不生成替代值。
     /// </summary>
-    public static byte[] ForOfficial(string route, byte[] body, string? deviceId)
+    public static byte[] ForOfficial(string route, byte[] body, string? deviceId, bool officialLogin, string? accountUuid)
     {
         if (!SiteDeviceIdentity.IsValid(deviceId))
             throw new RelayFailure(503, "Site device identity is unavailable. This request was not sent.");
-        return DeviceMetadataRewrite.Apply(route, body, deviceId!);
+        // 登录官方账户的上游：account_uuid 和 device_id 一样是本机真实值，取自它账户目录的 oauthAccount.accountUuid，取不到或不是标准 UUID 就本地阻断、宁可不发（不进暂停冷却）。
+        // 手填令牌的官方上游没有账户目录、没有真实来源，账户段保持客户端原样，不编造。
+        if (officialLogin && !Guid.TryParseExact(accountUuid, "D", out _))
+            throw new RelayFailure(503, "Official account identity is unavailable. This request was not sent.");
+        return DeviceMetadataRewrite.Apply(route, body, deviceId!, officialLogin ? accountUuid : null);
     }
 
     // Only recognized metadata.user_id formats are changed. Session IDs, account IDs,

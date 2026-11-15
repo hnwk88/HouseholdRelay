@@ -131,7 +131,8 @@ static class ClaudeCodeIdentityTests
         using (var third = await Send(web, person.Token, new string('a', 64))) Check(third.StatusCode == HttpStatusCode.OK);
         Check(!mock.Calls.Last().Headers.ContainsKey("X-Stainless-Retry-Count"), "A retry count the client did not send must not be invented or replayed from the capture");
         Check(mock.Calls.All(call => !call.Headers.ContainsKey(FakeClaude.UnclassifiedHeader)), "An unclassified header never reaches the official upstream");
-        Check(mock.Calls.All(call => call.Headers["X-Stainless-OS"] == "FakeOS" && call.Headers["User-Agent"].StartsWith("claude-cli/", StringComparison.Ordinal)), "Stable identity still goes out");
+        // 取账户资料照原生登录只带 claude-code/版本，不是推理请求，不在统一身份之列。
+        Check(mock.Calls.Where(call => call.Path != "/api/oauth/profile").All(call => call.Headers["X-Stainless-OS"] == "FakeOS" && call.Headers["User-Agent"].StartsWith("claude-cli/", StringComparison.Ordinal)), "Stable identity still goes out");
         await web.Login();
         var page = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + "/Upstream"));
         Check(page.Contains("发现未分类请求头 " + FakeClaude.UnclassifiedHeader + "：", StringComparison.Ordinal) && page.Contains("请更新中转。", StringComparison.Ordinal), "The upstream page must read the unclassified notice");
@@ -223,7 +224,9 @@ static class ClaudeCodeIdentityTests
         await using var web = await Official(claude, mock);
         var messages = mock.Calls.Where(call => call.Path.StartsWith("/v1/messages", StringComparison.Ordinal)).ToArray();
         Check(messages.Length == 1 && messages[0].Body.Contains("fixture system", StringComparison.Ordinal), "The official test must be one real Claude Code call");
-        foreach (var call in mock.Calls)
+        // 取账户资料照原生登录只带 claude-code/版本（另有专门用例核对），其余每个请求都带统一身份。
+        Check(mock.Calls.Where(call => call.Path == "/api/oauth/profile").All(call => call.Headers["User-Agent"] == "claude-code/1.0.0"), "The profile request uses the native login User-Agent");
+        foreach (var call in mock.Calls.Where(call => call.Path != "/api/oauth/profile"))
         {
             Check(call.Headers["User-Agent"] == "claude-cli/1.0.0 (external, sdk-cli)" && call.Headers["X-Stainless-OS"] == "FakeOS" && call.Headers["x-app"] == "cli", call.Path);
             Check(!call.Headers.Values.Any(value => value.Contains("HouseholdRelay/", StringComparison.Ordinal)), call.Path);

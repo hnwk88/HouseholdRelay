@@ -20,8 +20,13 @@ sealed class UpstreamFixture : IAsyncDisposable
     public string Url => App.Urls.Single();
     /// <summary>模拟上游收到的每次请求（路径含查询串、请求头、请求体），用于断言中转转发了什么。</summary>
     public ConcurrentQueue<UpstreamCall> Calls { get; } = new();
-    /// <summary>测试可替换的应答逻辑；为空时用 <see cref="Success"/> 给出标准成功响应。</summary>
+    /// <summary>测试可替换的应答逻辑；为空时用 <see cref="Success"/> 给出标准成功响应。<c>/api/oauth/profile</c> 不走这里，由 <see cref="Profile"/> 回答。</summary>
     public Func<HttpContext, Task>? Handler { get; set; }
+    /// <summary>模拟官方的账户资料接口（中转在获取模型与测试前照原生登录取一次）：默认回 <see cref="FakeClaude.AccountUuid"/> 这个账户；测试可换成别的账户或错误应答。</summary>
+    public Func<HttpContext, Task> Profile { get; set; } = context => ProfileReply(context, FakeClaude.AccountUuid);
+    /// <summary>按官方资料的形状回答一个账户。</summary>
+    public static Task ProfileReply(HttpContext context, string accountUuid) => context.Response.WriteAsJsonAsync(new
+    { account = new { uuid = accountUuid, email = FakeClaude.Email }, organization = new { uuid = "9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a" } });
     /// <summary>构建模拟上游（尚未启动）：先完整读入并记录请求，再交给 <see cref="Handler"/> 或默认成功应答。</summary>
     private UpstreamFixture(X509Certificate2? certificate)
     {
@@ -32,7 +37,8 @@ sealed class UpstreamFixture : IAsyncDisposable
         {
             using var reader = new StreamReader(context.Request.Body); var body = await reader.ReadToEndAsync(context.RequestAborted);
             Calls.Enqueue(new(context.Request.Path + context.Request.QueryString, context.Request.Headers.ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase), body));
-            if (Handler is not null) await Handler(context); else await Success(context);
+            if (context.Request.Path.Value == "/api/oauth/profile") await Profile(context);
+            else if (Handler is not null) await Handler(context); else await Success(context);
         });
     }
     /// <summary>构建并启动模拟上游；传入证书时以 HTTPS 提供服务。</summary>

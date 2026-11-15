@@ -18,6 +18,8 @@ internal sealed class UpstreamConnection : IUpstreamLease
     private readonly Func<bool>? officialAvailable;
     /// <summary>最近一次凭据读取因维护或私有身份配置失败而关闭；独立于认证暂停和限流，成功重读才清除。</summary>
     private int identityReadBlocked;
+    /// <summary>最近一次私有身份配置拒绝的读句（固定说明）；null 时用通用读句。与 <see cref="identityReadBlocked"/> 一起更新。</summary>
+    private string? identityBlockedReason;
     private long cooldownUntil;
     private int paused, references = 1;
     private UpstreamAvoidance? avoidance;
@@ -34,6 +36,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
         Snapshot = snapshot;
         this.officialAvailable = officialAvailable;
         identityReadBlocked = snapshot.BlockedByIdentity ? 1 : 0;
+        identityBlockedReason = snapshot.BlockedReason;
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false, AutomaticDecompression = DecompressionMethods.None,
@@ -47,6 +50,9 @@ internal sealed class UpstreamConnection : IUpstreamLease
     /// <summary>发请求前检查上游是否可用：未配置或认证已暂停时抛 503，冷却期内抛 429 并带剩余秒数，让中转直接拒绝而不去消耗上游额度。</summary>
     public void CheckState()
     {
+        // 私有配置拒绝（如还没有账户编号）把具体原因直接告诉下游；站点维护等没有具体原因的用通用读句。
+        if (Snapshot.Options.OfficialAccount && IdentityReadBlocked && Volatile.Read(ref identityBlockedReason) is { } reason)
+            throw new RelayFailure(503, reason);
         if (Snapshot.Options.OfficialAccount && (IdentityReadBlocked || officialAvailable?.Invoke() == false))
             throw new RelayFailure(503, "官方账户的设备身份暂不可用。请在本机管理页查看设备维护状态或修复本站私有配置；独立 API 上游仍可使用。");
         if (!Snapshot.Configured) throw new RelayFailure(503, "Upstream is not configured.");
@@ -62,7 +68,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
     public HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null, ClaudeCodeIdentity? identity = null, string? deviceId = null)
     {
         var options = Snapshot.Options;
-        if (options.OfficialAccount) body = DeviceMetadata.ForOfficial(route, body, deviceId);
+        if (options.OfficialAccount) body = DeviceMetadata.ForOfficial(route, body, deviceId, options.OfficialLogin, Snapshot.AccountUuid);
         // 官方只能看到中转所在的那一台设备：统一身份没到手宁可不发，不退回客户端自己的标识，也不用设置里的固定字符串。
         var unified = options.OfficialAccount ? identity ?? throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.Missing) : null;
         var request = new HttpRequestMessage(new HttpMethod(method), UpstreamAddress.Endpoint(options, route, query))
@@ -103,6 +109,22 @@ internal sealed class UpstreamConnection : IUpstreamLease
         if (beta.Length != 0) request.Headers.TryAddWithoutValidation("anthropic-beta", beta);
         if (options.Authentication == "bearer") request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Snapshot.Credential);
         else request.Headers.TryAddWithoutValidation("x-api-key", Snapshot.Credential);
+        return request;
+    }
+    /// <summary>
+    /// 照原生 <c>claude auth login</c> 取账户资料的写法（2.1.323 的 Kw()：GET {BASE_API_URL}/api/oauth/profile，头只有 User-Agent <c>claude-code/版本</c>、Bearer 令牌、Cache-Control: no-cache，
+    /// 外加 axios 默认的 Accept）组装请求；不带正文，所以不带 Content-Type，也不带统一身份的 x-stainless 等推理请求头。只给登录官方账户的上游用，其余抛出 <see cref="InvalidOperationException"/>。返回的请求由调用方释放。
+    /// </summary>
+    public HttpRequestMessage ProfileRequest(string version)
+    {
+        var options = Snapshot.Options;
+        if (!options.OfficialLogin) throw new InvalidOperationException("只有登录官方账户的上游才取账户资料。");
+        var request = new HttpRequestMessage(HttpMethod.Get, UpstreamAddress.Endpoint(options, "/api/oauth/profile"))
+        { Version = HttpVersion.Version20, VersionPolicy = HttpVersionPolicy.RequestVersionOrLower };
+        request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+        request.Headers.TryAddWithoutValidation("User-Agent", "claude-code/" + version);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Snapshot.Credential);
+        request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
         return request;
     }
     /// <summary>发送请求，读到响应头即返回以便流式转发；上游返回 3xx 时释放响应并抛 502，拒绝被重定向到未校验的地址。返回的响应由调用方释放。</summary>
@@ -149,7 +171,12 @@ internal sealed class UpstreamConnection : IUpstreamLease
     internal bool IdentityReadBlocked => Volatile.Read(ref identityReadBlocked) != 0;
 
     /// <summary>连接池按读取顺序更新本地身份可用性，不改写连接快照、凭据、认证暂停或冷却。</summary>
-    internal void SetIdentityReadBlocked(bool blocked) => Volatile.Write(ref identityReadBlocked, blocked ? 1 : 0);
+    internal void SetIdentityReadBlocked(bool blocked, string? reason = null)
+    {
+        // 先写原因再写标志：并发的 CheckState 看到阻断时读到的是这一次的原因。
+        Volatile.Write(ref identityBlockedReason, blocked ? reason : null);
+        Volatile.Write(ref identityReadBlocked, blocked ? 1 : 0);
+    }
 
     /// <summary>归还一次引用；最后一个持有者（连接池或在途请求的租约）归还时才销毁 HTTP 客户端，保证版本切换不会打断仍在进行的请求。</summary>
     public void Dispose() { if (Interlocked.Decrement(ref references) == 0) http.Dispose(); }

@@ -26,6 +26,12 @@ public interface IOfficialAccountLogin
     /// <summary>读取 <paramref name="accountId"/> 目录里最新的访问令牌；快到期时让 CLI 刷新，已过期时等刷新结束（有上限）再读。没有凭据时返回 null。</summary>
     string? ReadAccessToken(string accountId);
 
+    /// <summary>读 <paramref name="accountId"/> 的 oauthAccount.accountUuid（发往官方时对齐账户段用）；已删除或搬走的账户返回 null，缺失或格式不对时按本地身份阻断抛出。不读令牌、不触发续期。</summary>
+    string? ReadAccountUuid(string accountId);
+
+    /// <summary>把获取模型或测试时向官方取到的账户资料存进 <paramref name="accountId"/> 的私有配置（见 <see cref="ClaudeCode.IClaudeConfigurationPreparation.RecordAccount"/>）；已删除或搬走的账户不写，抛 <see cref="InvalidOperationException"/>。</summary>
+    void RecordAccount(string accountId, Core.Upstream.OfficialAccountProfile profile);
+
     /// <summary>
     /// 导出即搬走：这些账户此后不再续期（正在跑的续期先等它结束），按顺序读出各自的 <c>.credentials.json</c> 原文交给 <paramref name="commit"/>（加密打包、在库里记为已导出），返回它的结果；
     /// 读出的字节在返回后清零，<paramref name="commit"/> 要用就当场用完。凭据不在、续期迟迟不结束或 <paramref name="commit"/> 抛出时恢复续期并抛出（读出的原因不含文件内容）。

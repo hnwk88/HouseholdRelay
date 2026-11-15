@@ -131,6 +131,22 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         return Read(directory)?.AccessToken ?? credential.AccessToken;
     }
 
+    /// <summary>读官方账户当前的 oauthAccount.accountUuid（发往官方时对齐账户段用）；已删除或搬走的账户返回 null，缺失或格式不对时抛出由上游读取处按本地身份阻断处理。不读令牌、不触发续期。</summary>
+    public string? ReadAccountUuid(string accountId)
+    {
+        // 与删除、搬走共用这把锁，读到的是最新状态：已删除或搬走的账户不再读私有配置，也不因此触发续期。
+        lock (refreshes) if (removed.Contains(accountId) || moved.Contains(accountId)) return null;
+        return configuration.AccountUuid(accountId);
+    }
+
+    /// <summary>把官方返回的账户资料存进账户私有配置；已删除或搬走的账户不写（搬走后本机不再用它）。</summary>
+    public void RecordAccount(string accountId, Core.Upstream.OfficialAccountProfile profile)
+    {
+        // 与删除、搬走共用这把锁判断最新状态。
+        lock (refreshes) if (removed.Contains(accountId) || moved.Contains(accountId)) throw new InvalidOperationException("这个官方账户已经删除或搬走，本机不再保存它的账户资料。");
+        configuration.RecordAccount(accountId, profile);
+    }
+
     /// <summary>
     /// 上游被删除时删掉它的账户目录：先记为已删除并取消正在跑的刷新，等它结束进程树（最多 <see cref="RemoveWait"/>）再删，免得 CLI 占着文件或把目录重新写出；
     /// 主键不合格式时拒绝，删不掉时放弃。

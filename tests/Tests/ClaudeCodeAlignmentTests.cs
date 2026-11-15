@@ -59,8 +59,10 @@ static class ClaudeCodeAlignmentTests
             messages = new[] { new { role = "user", content = "hi" } }
         });
         using (var response = await Send(web, person.Token, body, null)) Check(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
-        var expected = body.Replace(downstreamDevice, web.Settings.Read().Value.DeviceId, StringComparison.Ordinal);
-        Check(mock.Calls.Last().Body == expected, "The environment section, tools, billing content and every byte outside the device value must reach the upstream unchanged");
+        // 设备段换成站点编号、账户段换成测试时向官方取回的账户编号，其余字节原样。
+        var expected = body.Replace(downstreamDevice, web.Settings.Read().Value.DeviceId, StringComparison.Ordinal)
+            .Replace("_account_account_", "_account_" + FakeClaude.AccountUuid + "_", StringComparison.Ordinal);
+        Check(mock.Calls.Last().Body == expected, "The environment section, tools, billing content and every byte outside the device and account values must reach the upstream unchanged");
     }
 
     /// <summary>

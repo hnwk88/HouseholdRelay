@@ -81,6 +81,77 @@ static class ClaudeConfigurationTests
         Check(prepared.RootElement.GetProperty("machineID").GetString() == "keep");
     }
 
+    /// <summary>
+    /// 账户编号取自私有配置 oauthAccount.accountUuid：本代身份下命中缓存不再读文件，重新准备后失效读到新值；
+    /// 缺失、类型不对或不是标准 UUID 时本地拒绝且不缓存失败，文件补好后下一次即可读到。
+    /// </summary>
+    public static async Task AccountUuidFromPrivateConfiguration()
+    {
+        await using var web = await WebFixture.Create();
+        var preparation = web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>();
+        var directory = DirectoryFor(web); WindowsSecrets.ProtectDirectory(directory);
+        var path = Path.Combine(directory, ".claude.json");
+        const string first = "11111111-2222-4333-8444-555555555555", second = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+        string With(string account) => "{\"userID\":\"" + preparation.DeviceId + "\",\"oauthAccount\":{\"emailAddress\":\"x@example.com\",\"accountUuid\":" + account + "}}";
+        File.WriteAllText(path, With("\"" + first + "\"")); preparation.PrepareAccount(AccountId); preparation.ValidateAccount(AccountId);
+        Check(preparation.AccountUuid(AccountId) == first, "The account UUID comes from oauthAccount.accountUuid");
+        File.WriteAllText(path, With("\"" + second + "\""));
+        Check(preparation.AccountUuid(AccountId) == first, "Within one identity generation the cached value is used without reading the file again");
+        preparation.PrepareExistingAccounts();
+        Check(preparation.AccountUuid(AccountId) == second, "Preparing again invalidates the cached account UUID");
+        foreach (var invalid in new[] { "{\"userID\":\"" + preparation.DeviceId + "\"}", With("null"), With("12"), With("\"not-a-uuid\""), With("\"{" + first + "}\"") })
+        {
+            File.WriteAllText(path, invalid); preparation.PrepareAccount(AccountId);
+            Refused(() => preparation.AccountUuid(AccountId));
+        }
+        File.WriteAllText(path, With("\"" + first + "\""));
+        Check(preparation.AccountUuid(AccountId) == first, "A refused read is not cached; the next read after the file is fixed succeeds");
+    }
+
+    /// <summary>
+    /// 照原生登录保存账户资料：没有 oauthAccount 时补在根对象末尾、其余字节不动；同一账户再存不写文件；换账户整段替换并同步缓存；
+    /// 编号不是标准 UUID 时拒绝且文件不变。
+    /// </summary>
+    public static async Task RecordAccountFollowsOfficialProfile()
+    {
+        await using var web = await WebFixture.Create();
+        var preparation = web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>();
+        var directory = DirectoryFor(web); WindowsSecrets.ProtectDirectory(directory);
+        var path = Path.Combine(directory, ".claude.json");
+        const string first = "11111111-2222-4333-8444-555555555555", second = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+        var head = "{\r\n  \"machineID\": \"keep\", \"userID\" : \"" + new string('a', 64) + "\", \"unknown\": {\"escaped\":\"\\u4e2d\"}\r\n";
+        byte[] original = [0xef, 0xbb, 0xbf, .. Encoding.UTF8.GetBytes(head + "}\r\n")]; File.WriteAllBytes(path, original);
+        preparation.PrepareAccount(AccountId);
+        var prepared = File.ReadAllBytes(path);
+        Refused(() => preparation.AccountUuid(AccountId));
+        preparation.RecordAccount(AccountId, new(first, "x@example.com", "99999999-8888-4777-a666-555555555555"));
+        var recorded = File.ReadAllBytes(path);
+        var close = Array.LastIndexOf(prepared, (byte)'}');
+        Check(recorded.AsSpan(0, close).SequenceEqual(prepared.AsSpan(0, close)) && recorded.AsSpan(recorded.Length - 3).SequenceEqual(prepared.AsSpan(prepared.Length - 3)),
+            "Adding oauthAccount keeps every existing byte, BOM and the closing bytes");
+        using (var json = JsonDocument.Parse(recorded.AsMemory(3)))
+        {
+            var account = json.RootElement.GetProperty("oauthAccount");
+            Check(account.GetProperty("accountUuid").GetString() == first && account.GetProperty("emailAddress").GetString() == "x@example.com"
+                && json.RootElement.GetProperty("machineID").GetString() == "keep", "oauthAccount holds the official profile fields like a native login");
+        }
+        Check(preparation.AccountUuid(AccountId) == first, "The recorded UUID is used immediately");
+        var modified = File.GetLastWriteTimeUtc(path);
+        preparation.RecordAccount(AccountId, new(first, "x@example.com", null));
+        Check(File.GetLastWriteTimeUtc(path) == modified && File.ReadAllBytes(path).SequenceEqual(recorded), "The same account is not written again");
+        preparation.RecordAccount(AccountId, new(second, "y@example.com", null));
+        using (var json = JsonDocument.Parse(File.ReadAllBytes(path).AsMemory(3)))
+        {
+            var account = json.RootElement.GetProperty("oauthAccount");
+            Check(account.GetProperty("accountUuid").GetString() == second && account.GetProperty("emailAddress").GetString() == "y@example.com"
+                && !account.TryGetProperty("organizationUuid", out _), "A different account replaces the whole oauthAccount");
+        }
+        Check(preparation.AccountUuid(AccountId) == second, "A changed account updates the cached UUID at once");
+        var before = File.ReadAllBytes(path);
+        Refused(() => preparation.RecordAccount(AccountId, new("not-a-uuid", null, null)));
+        Check(File.ReadAllBytes(path).SequenceEqual(before) && preparation.AccountUuid(AccountId) == second, "An invalid UUID is refused without touching the file or cache");
+    }
+
     /// <summary>非法账户主键与工程外目录均拒绝；允许的独立诊断目录在启动前得到本站编号。</summary>
     public static async Task RestrictTransientPaths()
     {

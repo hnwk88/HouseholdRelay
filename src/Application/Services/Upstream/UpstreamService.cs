@@ -24,8 +24,8 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     public UpstreamSnapshot ReadActive()
     {
         var (row, options) = Active();
-        var (credential, blocked) = ReadCredential(options, row.ProtectedCredential, row.Exported, row.CandidateId);
-        return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name, row.Failover, blocked);
+        var (credential, accountUuid, blocked, reason) = ReadCredential(options, row.ProtectedCredential, row.Exported, row.CandidateId);
+        return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name, row.Failover, blocked, accountUuid, reason);
     }
 
     /// <summary>
@@ -41,24 +41,28 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
             try { options = Parse<UpstreamOptions>(row.OptionsJson); report = Report(row); }
             // 一家的配置坏了只让它不参与切换，在用的那家和其余备用照常；它在上游页上照样读得出来，由管理员重新测试或删除。
             catch (Exception error) when (error is JsonException or InvalidOperationException) { continue; }
-            var (credential, blocked) = ReadCredential(options, row.ProtectedCredential, false, row.CandidateId);
-            snapshots.Add(new(row.Version, options, credential, report, row.CandidateId, row.Name, blockedByIdentity: blocked));
+            var (credential, accountUuid, blocked, reason) = ReadCredential(options, row.ProtectedCredential, false, row.CandidateId);
+            snapshots.Add(new(row.Version, options, credential, report, row.CandidateId, row.Name, blockedByIdentity: blocked, accountUuid: accountUuid, blockedReason: reason));
         }
         return snapshots;
     }
 
     /// <summary>先原子取得官方许可再读取凭据；维护竞争只关闭这个官方候选，不中断后续独立 API 候选。</summary>
-    private (string? Credential, bool Blocked) ReadCredential(UpstreamOptions options, byte[]? protectedCredential, bool exported, string? accountId)
+    private (string? Credential, string? AccountUuid, bool Blocked, string? Reason) ReadCredential(UpstreamOptions options, byte[]? protectedCredential, bool exported, string? accountId)
     {
-        if (protectedCredential is null || exported) return (null, false);
+        if (protectedCredential is null || exported) return (null, null, false, null);
         try
         {
             using var operation = options.OfficialAccount ? siteIdentity.Enter() : null;
+            // 官方登录上游同时读账户编号（oauthAccount.accountUuid），用于把发往官方的账户段对齐原生直连；两者共用账户目录的代次缓存，正常转发不多开文件。取不到按本地身份阻断。
             var credential = options.OfficialLogin ? accountId is null ? null : officialAccounts.ReadAccessToken(accountId) : Decrypt(protectedCredential);
-            return (credential, false);
+            var accountUuid = options.OfficialLogin && accountId is not null ? officialAccounts.ReadAccountUuid(accountId) : null;
+            return (credential, accountUuid, false, null);
         }
         // 只接住明确的维护或私有身份配置拒绝，包含账户读取内部再次准入的竞争；凭据解密损坏或未知异常仍按原规则暴露。
-        catch (Exception error) when (error is SiteIdentityUnavailableException or ClaudeConfigurationUnavailableException) { return (null, true); }
+        // 私有配置拒绝的读句是固定说明（如「还没有账户编号，请按测试」），带给下游；站点维护用通用读句。
+        catch (Exception error) when (error is SiteIdentityUnavailableException or ClaudeConfigurationUnavailableException)
+        { return (null, null, true, error is ClaudeConfigurationUnavailableException ? error.Message : null); }
     }
 
     /// <summary>打开或关闭自动切换；保存即生效，下一个请求就按新开关取尝试顺序，不改在用的那一家。</summary>
@@ -147,11 +151,11 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     {
         var candidate = ReadCandidate(id);
         using var operation = candidate.Options.OfficialAccount ? siteIdentity.Enter() : null;
-        var token = LoginToken(candidate);
+        var (token, accountUuid) = await LoginToken(candidate, cancellation);
         var kept = candidate.Report is { } previous && repository.ReadActive()?.CandidateId == id ? previous : null;
         var secret = repository.BeginCandidateTest(id);
         ModelCatalog catalog;
-        try { catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret)), cancellation); }
+        try { catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation); }
         // 在用的那个获取途中失败或被取消：写回原样，不让它停在「检测中」、丢掉测试结论。
         catch when (kept is not null) { repository.FinishCandidateTest(id, candidate.State, Serialize(kept), Serialize(candidate.Options)); throw; }
         if (kept is not null)
@@ -190,10 +194,10 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
         var candidate = ReadCandidate(id);
         using var operation = candidate.Options.OfficialAccount ? siteIdentity.Enter() : null;
         if (candidate.Options.Model.Length == 0) throw new InvalidOperationException("请先选择或填写要测试的模型，再测试。");
-        var token = LoginToken(candidate);
+        var (token, accountUuid) = await LoginToken(candidate, cancellation);
         var secret = repository.BeginCandidateTest(id);
         // 网络等待不占用写事务，也不接触当前服务的暂停和冷却状态。
-        var result = await probe.Run(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret)), cancellation);
+        var result = await probe.Run(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation);
         repository.FinishCandidateTest(id, result.Report.CanActivate ? "passed" : "failed", Serialize(result.Report), Serialize(result.Used));
         return result.Report;
     }
@@ -335,9 +339,17 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     /// 官方登录上游在标记检测开始之前先读它配置目录里的最新令牌，取不到时抛出 <see cref="InvalidOperationException"/> 提示重新登录，上游状态不变；
     /// 已导出搬走的不读令牌（读令牌可能触发续期，把新电脑上那份挤掉），直接拒绝。其余上游返回 null，由调用方解密库中凭据。
     /// </summary>
-    private string? LoginToken(UpstreamCandidate candidate) => !candidate.Options.OfficialLogin ? null
-        : candidate.ExportedAt is not null ? throw new InvalidOperationException($"「{candidate.Name}」已经导出搬走，本机不再用它，也不再获取模型或测试。不再需要它时可以删除。")
-        : officialAccounts.ReadAccessToken(candidate.Id) ?? throw new InvalidOperationException("这个官方账户的登录凭据已经不在了，请重新按「登录官方账户」。");
+    private async Task<(string? Token, string? AccountUuid)> LoginToken(UpstreamCandidate candidate, CancellationToken cancellation)
+    {
+        if (!candidate.Options.OfficialLogin) return (null, null);
+        if (candidate.ExportedAt is not null) throw new InvalidOperationException($"「{candidate.Name}」已经导出搬走，本机不再用它，也不再获取模型或测试。不再需要它时可以删除。");
+        var token = officialAccounts.ReadAccessToken(candidate.Id) ?? throw new InvalidOperationException("这个官方账户的登录凭据已经不在了，请重新按「登录官方账户」。");
+        // 每次获取模型和测试都照原生登录向官方取一次账户资料并存进账户目录：导入的账户（只有凭据、没有 oauthAccount）由此补上编号，换了账户由此同步；
+        // 取不到就抛出，这次不获取、不测试，转发也因没有编号继续本地阻断。导入后必须测试通过才能切换，所以每个在用的官方账户都经过这一步。
+        var profile = await probe.Profile(new(candidate.ExpectedVersion, candidate.Options, token), cancellation);
+        officialAccounts.RecordAccount(candidate.Id, profile);
+        return (token, profile.AccountUuid);
+    }
 
     /// <summary>解密凭据并返回 UTF-8 字符串，解密出的字节缓冲在返回前清零。</summary>
     private string Decrypt(byte[] encrypted)

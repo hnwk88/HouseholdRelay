@@ -61,15 +61,17 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
             if (current is not null && snapshot.BlockedByIdentity && current.Snapshot.Version == snapshot.Version
                 && current.Snapshot.CandidateId == snapshot.CandidateId && current.Snapshot.Options == snapshot.Options)
             {
-                if (read > installed) { installed = read; current.SetIdentityReadBlocked(true); }
+                if (read > installed) { installed = read; current.SetIdentityReadBlocked(true, snapshot.BlockedReason); }
                 return current.Retain();
             }
-            if (current is null || read > installed && (current.Snapshot.Version != snapshot.Version || !string.Equals(current.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)))
+            // 账户编号和凭据一样随账户目录变化（重新登录换了账户）；不比它会让在用连接继续带旧账户段。
+            if (current is null || read > installed && (current.Snapshot.Version != snapshot.Version || !string.Equals(current.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
+                || !string.Equals(current.Snapshot.AccountUuid, snapshot.AccountUuid, StringComparison.Ordinal)))
             {
                 var replacement = new UpstreamConnection(snapshot, proxy, maxConnections, () => siteIdentity?.Available ?? true);
                 var previous = current; current = replacement; installed = read; previous?.Dispose();
             }
-            else if (read > installed) { installed = read; current.SetIdentityReadBlocked(snapshot.BlockedByIdentity); }
+            else if (read > installed) { installed = read; current.SetIdentityReadBlocked(snapshot.BlockedByIdentity, snapshot.BlockedReason); }
             return current.Retain();
         }
     }
@@ -93,11 +95,12 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
                 standby.TryGetValue(id, out var connection);
                 var keepBlocked = snapshot.BlockedByIdentity && connection is not null && connection.Snapshot.Version == snapshot.Version && connection.Snapshot.Options == snapshot.Options;
                 if (!stale && !keepBlocked && (connection is null || connection.Snapshot.Version != snapshot.Version || connection.Snapshot.Options != snapshot.Options
-                    || !string.Equals(connection.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)))
+                    || !string.Equals(connection.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
+                    || !string.Equals(connection.Snapshot.AccountUuid, snapshot.AccountUuid, StringComparison.Ordinal)))
                 { connection?.Dispose(); connection = new UpstreamConnection(snapshot, proxy, maxConnections, () => siteIdentity?.Available ?? true); standby[id] = connection; }
                 if (connection is not null)
                 {
-                    if (!stale) connection.SetIdentityReadBlocked(snapshot.BlockedByIdentity);
+                    if (!stale) connection.SetIdentityReadBlocked(snapshot.BlockedByIdentity, snapshot.BlockedReason);
                     leases.Add(connection.Retain());
                 }
             }

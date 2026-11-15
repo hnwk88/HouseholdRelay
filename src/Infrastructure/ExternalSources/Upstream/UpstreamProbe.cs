@@ -84,7 +84,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
             foreach (var method in catalog.Authentication is { } accepted ? UpstreamDetection.StartingFrom(order, accepted) : order)
             {
                 var attempt = options with { Authentication = method };
-                using var transport = new UpstreamConnection(new(snapshot.Version, attempt, snapshot.Credential), proxy, 1);
+                using var transport = new UpstreamConnection(new(snapshot.Version, attempt, snapshot.Credential, accountUuid: snapshot.AccountUuid), proxy, 1);
                 var (reply, diagnostic, triedClaude) = await Call(transport, attempt, identity, timeout.Token);
                 used = attempt with { Diagnostic = diagnostic };
                 // 401/403 说明这种认证方式不被接受，换下一种；全部用完再判失败。
@@ -121,6 +121,52 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     }
 
     /// <summary>
+    /// 照原生登录取一次账户资料（30 秒上限）：User-Agent 用本机 Claude Code 统一身份的版本，令牌用快照里的这一份；只认 account.uuid 是标准 UUID 的回复。
+    /// 401/403、429、其余非 2xx、连接失败、跳转或超限、回复形状不对都抛 <see cref="InvalidOperationException"/>，读句不含秘密、不转述上游正文。
+    /// </summary>
+    public async Task<OfficialAccountProfile> Profile(UpstreamSnapshot snapshot, CancellationToken cancellation)
+    {
+        using var timeout = Limit(cancellation, 30);
+        using var operation = siteIdentity?.Enter();
+        const string next = "这个官方账户没有取得账户编号，中转不会用它转发。";
+        try
+        {
+            var identity = await identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token);
+            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options, snapshot.Credential), proxy, 1);
+            using var request = transport.ProfileRequest(identity.Version);
+            using var response = await transport.Send(request, timeout.Token);
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) throw new InvalidOperationException(next + "官方拒绝了这个账户的登录凭据，请重新登录官方账户。");
+            if (response.StatusCode == HttpStatusCode.TooManyRequests) throw new InvalidOperationException(next + "官方请求过多，请稍后再试。");
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException(next + $"官方返回 HTTP {(int)response.StatusCode}，请稍后再试。");
+            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+            using var body = JsonDocument.Parse(await UpstreamResponses.ReadBounded(stream, 1024 * 1024, timeout.Token));
+            return ReadProfile(body.RootElement) ?? throw new InvalidOperationException(next + "官方返回的账户资料里没有可用的账户编号。");
+        }
+        // 取不到本机 Claude Code 的统一身份或代理：一个请求都没发，读出原因。
+        catch (Exception error) when (error is ClaudeCodeIdentityUnavailableException or UpstreamProxyUnavailableException) { throw new InvalidOperationException(next + error.Message); }
+        // 区分管理员取消与超时。
+        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) { throw new InvalidOperationException(next + "取账户资料超时（30 秒），请检查网络和代理后重试。"); }
+        // 建连、TLS 或代理失败。
+        catch (HttpRequestException error) { throw new InvalidOperationException(next + ConnectionMessage(error)); }
+        // 跳转或超限：固定说明。
+        catch (RelayFailure) { throw new InvalidOperationException(next + "官方返回跳转、过大或不支持的响应。"); }
+        // 回复不是 JSON 或读取中断：不转述正文。
+        catch (Exception error) when (error is JsonException or IOException) { throw new InvalidOperationException(next + "官方返回的账户资料无法读取，请重试。"); }
+    }
+
+    /// <summary>照原生的形状校验（account.uuid、account.email、organization.uuid 都是字符串）取三项；账户编号不是标准 UUID 或形状不对时返回 null。</summary>
+    private static OfficialAccountProfile? ReadProfile(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("account", out var account) || account.ValueKind != JsonValueKind.Object
+            || !account.TryGetProperty("uuid", out var uuid) || uuid.ValueKind != JsonValueKind.String
+            || !Guid.TryParseExact(uuid.GetString(), "D", out _)) return null;
+        static string? Text(JsonElement owner, string name) => owner.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        var organization = root.TryGetProperty("organization", out var found) && found.ValueKind == JsonValueKind.Object ? Text(found, "uuid") : null;
+        return new(uuid.GetString()!, Text(account, "email"), organization);
+    }
+
+    /// <summary>
     /// 读模型目录：按 <paramref name="order"/> 逐个认证方式请求 <c>/v1/models</c>，第一个被接受的就是结果。照 MyCoAI 的判断：
     /// 400、401、403 且还有下一种方式时换下一种（部分中转缺认证头时回 400）；最后一种也是 401/403、或试过两种以上仍是 400 时判为都被拒。
     /// 404/405 视为不提供目录；其余非 2xx 为 <c>failed</c>（此时 <see cref="ModelCatalog.Message"/> 暂存状态码，由调用方改写成句子）。
@@ -131,7 +177,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         for (var index = 0; index < order.Length; index++)
         {
             var method = order[index];
-            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options with { Authentication = method }, snapshot.Credential), proxy, 1);
+            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options with { Authentication = method }, snapshot.Credential, accountUuid: snapshot.AccountUuid), proxy, 1);
             using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0", identity: identity, deviceId: siteIdentity?.Current.DeviceId);
             using var response = await transport.Send(request, cancellation);
             var refused = response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;

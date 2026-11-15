@@ -15,6 +15,15 @@ public interface IClaudeConfigurationPreparation
     /// </summary>
     void ValidateAccount(string accountId, bool reread = false);
 
+    /// <summary>读出官方账户当前的 oauthAccount.accountUuid，供对齐发往官方的账户段；本代身份下命中缓存不再读文件，缺失或格式不对时拒绝。</summary>
+    string AccountUuid(string accountId);
+
+    /// <summary>
+    /// 把官方返回的账户资料照原生登录写进账户私有配置顶层 oauthAccount：账户编号与现值相同时不写文件；没有 oauthAccount 时补上；换了账户时整段换成新账户的三项。
+    /// 其余字节原样、原子替换保 ACL，写完同步本代缓存。私有配置损坏或读不到时抛 <see cref="Core.Configuration.ClaudeConfigurationUnavailableException"/>。
+    /// </summary>
+    void RecordAccount(string accountId, Core.Upstream.OfficialAccountProfile profile);
+
     /// <summary>为本次隔离回环诊断准备设备编号；目录必须属于工程命名的临时诊断目录。</summary>
     void PrepareTransient(string configDirectory);
 
