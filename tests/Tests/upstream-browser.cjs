@@ -158,6 +158,8 @@ async function relay(url, token, stream = false) {
         // 模拟按地区屏蔽当前网络出口：照 sftoken 现场回 503 和一张说明网页。
         if (regionBlocked) { response.writeHead(503, { 'content-type': 'text/html; charset=utf-8' }); response.end('<title>该网页在当前地区不可用</title>'); return; }
         if (rejectAccount && account) { response.writeHead(401, { 'content-type': 'application/json' }); response.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: accountSecret } })); return; }
+        // 中转在获取模型与测试前照原生登录取一次账户资料（订单 133），按官方形状回一个虚构账户。
+        if (request.url.includes('/api/oauth/profile')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ account: { uuid: '0b6f5f4e-1c2d-4e3f-8a9b-7c6d5e4f3a2b', email: 'family.member@example.com' }, organization: { uuid: '9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a' } })); return; }
         if (request.url.includes('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'fixture-model' }] })); return; }
         const body = JSON.parse(raw);
         if (body.stream) {
@@ -355,6 +357,13 @@ async function relay(url, token, stream = false) {
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), await page.locator('#trust-command').textContent());
     await page.getByRole('button', { name: '复制根地址', exact: true }).focus(); await page.keyboard.press('Enter');
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `https://localhost:${privatePort}`);
+    // 订单 133：一次复制带上三行，第三行是让 Claude Code 按官方直连方式发请求的开关，家人不多按键。
+    await page.getByRole('button', { name: '复制三个变量', exact: true }).click();
+    // Windows 剪贴板把换行写成 CRLF（粘贴进 PowerShell 正好），按统一换行比较内容。
+    const variables = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    assert.equal(variables, await page.locator('#claude-variables').textContent());
+    assert.deepEqual(variables.split('\n').map(line => line.split(' = ')[0]), ['$env:ANTHROPIC_BASE_URL', '$env:ANTHROPIC_AUTH_TOKEN', '$env:_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL']);
+    assert.ok(variables.endsWith("$env:_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL = '1'"), '开关的值固定为 1');
     assert.ok(!(await page.content()).includes(accountSecret) && !(await page.content()).includes(token));
     await screenshot(page, '15-private-connection');
     await context.close(); await stop(); ({ url, code } = await start(listenPort)); assert.equal(code, undefined);
@@ -366,7 +375,8 @@ async function relay(url, token, stream = false) {
     await screenshot(page, '13-connection-mobile'); assert.deepEqual(errors, []);
     assert.ok(calls.some(call => call.mode === 'account' && call.beta.includes('oauth-')));
     assert.ok(calls.filter(call => call.mode === 'api').every(call => !call.beta.includes('oauth-')));
-    assert.ok(calls.every(call => call.path.startsWith('/gateway/v1/') && call.path.includes('tenant=browser')));
+    // 取账户资料只给登录或导入的官方账户（订单 133），其余请求都在 /v1/ 下；两者都保留地址自带的前缀与查询串。
+    assert.ok(calls.every(call => (call.path.startsWith('/gateway/v1/') || call.path.startsWith('/gateway/api/oauth/profile') && ['login', 'import'].includes(call.mode)) && call.path.includes('tenant=browser')));
     steps.push('真实网页只填名称、地址、密钥接入 API 与账户令牌：获取模型、下拉选模型、按写明费用的按钮测试、按名称切换；既有个人令牌保持可用。读屏顺序见 *.aria.yml。');
     steps.push('实际 JSON/SSE 请求与路径前缀/查询参数通过；账户 401 后暂停，网页重新保存和激活后恢复。');
     steps.push('连接说明无上游或个人令牌回填；无效 PFX 在网页被拒绝；重启后活动配置、检测结果及调用仍有效。');

@@ -21,7 +21,7 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
     public string[] Models { get; private set; } = [];
     /// <summary>面向家人的 HTTPS 状态说明：未配置、已过期、私有 CA 需一次性信任、已导入可信证书四种情况之一。</summary>
     public string HttpsStatus { get; private set; } = "";
-    /// <summary>PowerShell 环境变量设置示例（ANTHROPIC_BASE_URL 与 ANTHROPIC_AUTH_TOKEN）；令牌处固定为占位符，页面绝不回显任何真实个人令牌。</summary>
+    /// <summary>PowerShell 环境变量设置示例（ANTHROPIC_BASE_URL、ANTHROPIC_AUTH_TOKEN 与对齐原生直连的 _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL）；令牌处固定为占位符，页面绝不回显任何真实个人令牌。</summary>
     public string Variables { get; private set; } = "";
     /// <summary>用 Authorization: Bearer 头调用 /v1/messages 的 curl 示例，令牌为占位符。</summary>
     public string BearerExample { get; private set; } = "";
@@ -48,7 +48,9 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
         AuthorityFingerprint = certificates.AuthorityFingerprint();
         TrustCommand = $".\\Install-RelayTrust.ps1 -ExpectedSha256 {AuthorityFingerprint}";
         var address = RootUrl.Length == 0 ? "https://YOUR_RELAY_HOST" : RootUrl;
-        Variables = $"$env:ANTHROPIC_BASE_URL = '{address}'\n$env:ANTHROPIC_AUTH_TOKEN = '<你的个人中转令牌>'";
+        // 第三行让 Claude Code 把中转当官方地址，自己生成与原生直连一致的请求头和正文字段（订单 133 回环实测：不多连接、不多路由、对话工具流式照常）；
+        // 和前两行一起复制，家人不多按键。
+        Variables = $"$env:ANTHROPIC_BASE_URL = '{address}'\n$env:ANTHROPIC_AUTH_TOKEN = '<你的个人中转令牌>'\n$env:_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL = '1'";
         var model = RecommendedModel.Length == 0 ? "YOUR_MODEL" : RecommendedModel;
         var body = $"{{\"model\":\"{model}\",\"max_tokens\":32,\"messages\":[{{\"role\":\"user\",\"content\":\"Hello\"}}]}}";
         string Example(string authentication) => $"curl --no-buffer '{address}/v1/messages' \\\n  -H '{authentication}' \\\n  -H 'anthropic-version: 2023-06-01' \\\n  -H 'content-type: application/json' \\\n  -d '{body}'";
