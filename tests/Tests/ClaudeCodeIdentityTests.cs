@@ -113,11 +113,18 @@ static class ClaudeCodeIdentityTests
         await using var web = await Official(claude, mock);
         var person = web.Identities.Create("书房");
         using (var first = await Send(web, person.Token, new string('a', 64), ("X-Stainless-Retry-Count", "2"), ("X-Claude-Code-Agent-Id", "agent-one"),
-            ("X-Claude-Code-Parent-Agent-Id", "agent-root"), (FakeClaude.UnclassifiedHeader, "client-value")))
+            ("X-Claude-Code-Parent-Agent-Id", "agent-root"), (FakeClaude.UnclassifiedHeader, "client-value"),
+            ("X-Claude-Code-Request-Class", "main"), ("X-Claude-1p-Request-Class", "main"), ("X-Claude-Code-Prompt-Id", "11111111-2222-4333-8444-555555555555"),
+            ("anthropic-beta", "zeta-2026-01-01,alpha-2026-02-02")))
             Check(first.StatusCode == HttpStatusCode.OK, await first.Content.ReadAsStringAsync());
         var retried = mock.Calls.Last().Headers;
         Check(retried["X-Stainless-Retry-Count"] == "2" && retried["X-Claude-Code-Agent-Id"] == "agent-one" && retried["X-Claude-Code-Parent-Agent-Id"] == "agent-root",
             "Per-request headers carry this request's values: " + string.Join(", ", retried.Select(header => header.Key + "=" + header.Value)));
+        // 第 3 项：网关提示头按客户端当次的值透传（客户端开 CLAUDE_CODE_GATEWAY_HINT_HEADERS 才会带）。
+        Check(retried["X-Claude-Code-Request-Class"] == "main" && retried["X-Claude-1p-Request-Class"] == "main"
+            && retried["X-Claude-Code-Prompt-Id"] == "11111111-2222-4333-8444-555555555555", "Gateway hint headers pass through by this request's value");
+        // 第 2 项：anthropic-beta 按客户端这一次的原序原样透传，中转不重排、不补造（oauth 补位另见 UpstreamVersionTests）。
+        Check(retried["anthropic-beta"] == "zeta-2026-01-01,alpha-2026-02-02", "anthropic-beta keeps client order verbatim: " + retried["anthropic-beta"]);
         using (var second = await Send(web, person.Token, new string('a', 64), ("X-Stainless-Retry-Count", "0"))) Check(second.StatusCode == HttpStatusCode.OK);
         var main = mock.Calls.Last().Headers;
         Check(main["X-Stainless-Retry-Count"] == "0" && !main.ContainsKey("X-Claude-Code-Agent-Id") && !main.ContainsKey("X-Claude-Code-Parent-Agent-Id"), "A main-session request carries no agent ids");

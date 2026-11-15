@@ -89,10 +89,13 @@ internal sealed class UpstreamConnection : IUpstreamLease
         }
         request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
         if (!request.Headers.Contains("anthropic-version")) request.Headers.Add("anthropic-version", "2023-06-01");
-        var betas = (headers is null ? "" : Header(headers, "anthropic-beta").ToString()).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(value => options.Mode == "oauth" && options.OAuthBeta || !value.StartsWith("oauth-", StringComparison.OrdinalIgnoreCase));
-        if (options.Mode == "oauth" && options.OAuthBeta) betas = betas.Append("oauth-2025-04-20");
-        var beta = string.Join(',', betas.Distinct());
+        // 按客户端这一次发来的 anthropic-beta 原序透传：官方账户要对齐原生直连，顺序和内容都由客户端这次自己决定，中转不重排、不补造（D-013）。
+        // 仅 API 密钥模式或未开 oauth beta 的兼容上游去掉 oauth- 项（这类上游不认它）；oauth 模式下客户端没带 oauth beta 时补一个到末尾，保证 OAuth 请求合法（令牌模式的家人客户端不是 OAuth 登录，不会自带）。
+        var allowOauth = options.Mode == "oauth" && options.OAuthBeta;
+        var clientBetas = (headers is null ? "" : Header(headers, "anthropic-beta").ToString()).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var betas = clientBetas.Where(value => allowOauth || !value.StartsWith("oauth-", StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase);
+        if (allowOauth && !clientBetas.Any(value => value.StartsWith("oauth-", StringComparison.OrdinalIgnoreCase))) betas = betas.Append("oauth-2025-04-20");
+        var beta = string.Join(',', betas);
         if (beta.Length != 0) request.Headers.TryAddWithoutValidation("anthropic-beta", beta);
         if (options.Authentication == "bearer") request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Snapshot.Credential);
         else request.Headers.TryAddWithoutValidation("x-api-key", Snapshot.Credential);

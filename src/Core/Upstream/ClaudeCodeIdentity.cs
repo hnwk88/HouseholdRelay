@@ -32,7 +32,10 @@ public sealed partial record ClaudeCodeIdentity(IReadOnlyList<KeyValuePair<strin
     /// （官方网关文档：代理编号标识代理，不是人或设备）。它们说的是这一次请求，不是哪台设备，所以也不进身份缓存。anthropic-beta 另按账户设置处理。
     /// </summary>
     public static readonly IReadOnlySet<string> RequestHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    { "anthropic-version", "Content-Type", "X-Claude-Code-Session-Id", "X-Stainless-Retry-Count", "X-Claude-Code-Agent-Id", "X-Claude-Code-Parent-Agent-Id" };
+    { "anthropic-version", "Content-Type", "X-Claude-Code-Session-Id", "X-Stainless-Retry-Count", "X-Claude-Code-Agent-Id", "X-Claude-Code-Parent-Agent-Id",
+        // 官方网关提示头：说这一次请求属于哪种（主对话、子代理等）、哪个提示、哪个请求编号，供网关调度与归因；客户端默认只在直连或开 CLAUDE_CODE_GATEWAY_HINT_HEADERS 时发，
+        // 中转按客户端当次的值放行、不补造，客户端没开就不带。
+        "X-Claude-Code-Request-Class", "X-Claude-1p-Request-Class", "X-Claude-Code-Prompt-Id" };
 
     /// <summary>
     /// 逐项确认过、同一份 claude.exe 同一入口每次都一样的稳定身份头，只有它们进缓存并发往官方：User-Agent、Accept、浏览器直连声明、x-app，
