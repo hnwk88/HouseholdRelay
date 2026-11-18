@@ -1,0 +1,69 @@
+﻿{
+  "rule": "check_repository_no_state_transition",
+  "守着": [
+    "GZ-S-047"
+  ],
+  "说明": {
+    "护住什么": "仓储只做稳定通用的数据搬运，状态推进留在应用服务（GZ-S-047）。按行为判：仓储代码给对象的状态字段赋值就是在仓储里推进状态，不看方法叫什么。",
+    "口径": "src 下文件名以 Repository.cs 结尾的 .cs，去掉注释与字符串后找「标识符.某某Status = 」（不含 ==、!=、=>）。查询投影里的 Status = e.Status 前面没有「对象.」，不算。",
+    "来源": "取代中康 zk-repository-flow 的 check_repository_business_method（按方法名里的流程词判）。冲突清单乙 32 定「判据守行为与结构，不钉方法名」，2026-11-18 改写。删除前引用检查、业务范围解释两样暂无机器判据，人判断。"
+  },
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "Repository\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "仓储推进状态",
+              "type": "expression",
+              "value": "\\b[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*\\.([A-Za-z_]\\w*Status)\\s*=(?![=>])"
+            }
+          ]
+        },
+        {
+          "step": "emit",
+          "rule": "repository-state-transition",
+          "severity": "error",
+          "message": "仓储里给状态字段 {1} 赋值：状态推进属于业务，留在应用服务（GZ-S-047）。",
+          "suggestion": "仓储只按应用服务给的结果搬运数据；状态从哪一步走到哪一步，由应用服务判断并改好实体后再交给仓储保存。"
+        }
+      ]
+    }
+  ]
+}

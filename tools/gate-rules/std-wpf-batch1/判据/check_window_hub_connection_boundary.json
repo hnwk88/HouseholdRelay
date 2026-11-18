@@ -1,0 +1,67 @@
+﻿{
+  "rule": "check_window_hub_connection_boundary",
+  "守着": [
+    "GZ-S-036"
+  ],
+  "说明": {
+    "护住什么": "[GZ-S-036] 补充句与 [GZ-S-036]：通知连接同样只在 Api 客户端层。HubConnection、HubConnectionBuilder 及其状态、扩展类型只许出现在 接口客户端层（Api、Clients 目录）；窗口与主窗口经 IDesktopFactSink、本机总队列和分拣员拿事实。\n守的规则：[GZ-S-036] HubConnection 只许出现在桌面 Api/Clients。 [GZ-S-036] 窗口与主窗口不持有通知连接，只经总队列拿事实。",
+    "扫描面": "桌面工程与 Helpers：通用 Helper 里自建连接同样绕开了 Api 客户端层。",
+    "为什么按目录排除而不进例外": "Api/Clients 是规则原文点名的唯一许可位置，这是判据的定义，不是「某个文件不归它管」。",
+    "去掉注释与字符串": "先按 C# 去掉注释与字符串再找；IZkMedicalSystemNotificationConnection 这类本工程接口名不含 HubConnection，不受影响。"
+  },
+  "pipeline": [
+    {
+      "step": "selectFiles",
+      "as": "桌面选集",
+      "where": [
+        {
+          "type": "extension",
+          "value": [
+            ".cs"
+          ]
+        },
+        {
+          "type": "root",
+          "value": [
+            "src",
+            "Helpers"
+          ]
+        },
+        {
+          "type": "excludeFolder",
+          "value": [
+            "{scan.ignoredDirectories}"
+          ]
+        },
+        {
+          "type": "excludePath",
+          "value": [
+            "(^|/)(?:Api|Clients|ApiClients)/"
+          ]
+        }
+      ],
+      "至少几个": 1
+    },
+    {
+      "step": "mask",
+      "mode": "csharp"
+    },
+    {
+      "step": "find",
+      "patterns": [
+        {
+          "id": "通知连接类型",
+          "type": "expression",
+          "value": "\\bHubConnection\\w*\\b"
+        }
+      ]
+    },
+    {
+      "step": "emit",
+      "rule": "desktop-hub-connection-boundary",
+      "severity": "error",
+      "message": "这里直接持有或创建了 SignalR 通知连接（[GZ-S-036]、[GZ-S-036]）：HubConnection 只许出现在 Api/Clients。",
+      "suggestion": "窗口只认接口客户端层给的通知连接接口与本机事实队列；要新的推送就在接口客户端层的通知连接上登记回调，把事实投进本机总队列，由分拣转给对应部门（GZ-S-036）。"
+    }
+  ]
+}

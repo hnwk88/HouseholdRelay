@@ -1,0 +1,368 @@
+﻿{
+  "rule": "check_reviews_index",
+  "例外": [
+    {
+      "路径": "docs/reviews/README.md",
+      "理由": "索引自己：「目录里有哪些文章」那个集合不算索引本身，「每篇文章都要登记进索引」也不查索引本身；另几段专门查索引。（原先硬写在判据这两段的 excludePath 里，A0bz 挪到这里）",
+      "只在": [
+        "目录里有的文章选集",
+        "要登记的文章选集"
+      ]
+    }
+  ],
+  "按文件并行": true,
+  "说明": {
+    "为什么可以按文件并行": "这条规则的判定是「逐份文章各看一遍」：forEach 里问的是「这一份文章在索引里登记了没有」，**答案只由这一份的路径决定**。它用到的那张索引集合是 forEach **之前**就算好的一批参照物，循环体只读它、不改它，所以几份同时判读到的是同一份索引。**没有跨文件依赖**，也不数总数。"
+  },
+  "pipeline": [
+    {
+      "step": "selectFiles",
+      "角色": "参照",
+      "where": [
+        {
+          "type": "extension",
+          "value": [
+            ".md"
+          ]
+        },
+        {
+          "type": "root",
+          "value": [
+            "docs/reviews"
+          ]
+        },
+        {
+          "type": "excludeFolder",
+          "value": [
+            "{scan.ignoredDirectories}"
+          ]
+        },
+        {
+          "type": "includePath",
+          "value": [
+            "^docs/reviews/README[.]md$"
+          ]
+        }
+      ],
+      "as": "索引",
+      "至少几个": 1
+    },
+    {
+      "combinator": "if",
+      "condition": [
+        {
+          "step": "assert",
+          "from": "索引",
+          "predicate": "countIs",
+          "count": 0
+        }
+      ],
+      "then": [
+        {
+          "step": "emit",
+          "rule": "reviews-index",
+          "severity": "error",
+          "at": {
+            "path": "docs/reviews/README.md",
+            "line": 1
+          },
+          "message": "缺少评估报告目录：docs/reviews/README.md",
+          "suggestion": "恢复 docs/reviews/README.md；它是评估报告的唯一目录，缺了谁也找不到历史报告。"
+        }
+      ],
+      "else": [
+        {
+          "combinator": "sequence",
+          "steps": [
+            {
+              "step": "selectFiles",
+              "角色": "参照",
+              "where": [
+                {
+                  "type": "extension",
+                  "value": [
+                    ".md"
+                  ]
+                },
+                {
+                  "type": "root",
+                  "value": [
+                    "docs/reviews"
+                  ]
+                },
+                {
+                  "type": "excludeFolder",
+                  "value": [
+                    "{scan.ignoredDirectories}"
+                  ]
+                },
+                {
+                  "type": "includePath",
+                  "value": [
+                    "^docs/reviews/README[.]md$"
+                  ]
+                }
+              ],
+              "至少几个": 1
+            },
+            {
+              "step": "find",
+              "patterns": [
+                {
+                  "id": "索引链接",
+                  "type": "expression",
+                  "value": "\\[[^\\]]+\\]\\(\\s*(?!#)((?:(?!://)[^)])+?\\.md)\\s*\\)"
+                }
+              ]
+            },
+            {
+              "step": "function",
+              "name": "跨文件事实集合",
+              "arguments": [
+                {
+                  "name": "来源",
+                  "kind": "SpanList",
+                  "source": "stream"
+                },
+                {
+                  "name": "键",
+                  "kind": "SpanList",
+                  "source": "literal",
+                  "value": [
+                    "捕获1"
+                  ]
+                }
+              ],
+              "as": "索引里登记的"
+            }
+          ]
+        },
+        {
+          "combinator": "sequence",
+          "steps": [
+            {
+              "step": "selectFiles",
+              "as": "目录里有的文章选集",
+              "角色": "参照",
+              "where": [
+                {
+                  "type": "extension",
+                  "value": [
+                    ".md"
+                  ]
+                },
+                {
+                  "type": "root",
+                  "value": [
+                    "docs/reviews"
+                  ]
+                },
+                {
+                  "type": "excludeFolder",
+                  "value": [
+                    "{scan.ignoredDirectories}"
+                  ]
+                }
+              ],
+              "至少几个": 1
+            },
+            {
+              "step": "function",
+              "name": "跨文件事实集合",
+              "arguments": [
+                {
+                  "name": "来源",
+                  "kind": "SpanList",
+                  "source": "stream"
+                },
+                {
+                  "name": "键",
+                  "kind": "SpanList",
+                  "source": "literal",
+                  "value": [
+                    "文件名"
+                  ]
+                }
+              ],
+              "as": "目录里有的"
+            }
+          ]
+        },
+        {
+          "combinator": "sequence",
+          "steps": [
+            {
+              "step": "selectFiles",
+              "as": "要登记的文章选集",
+              "where": [
+                {
+                  "type": "extension",
+                  "value": [
+                    ".md"
+                  ]
+                },
+                {
+                  "type": "root",
+                  "value": [
+                    "docs/reviews"
+                  ]
+                },
+                {
+                  "type": "excludeFolder",
+                  "value": [
+                    "{scan.ignoredDirectories}"
+                  ]
+                }
+              ],
+              "至少几个": 1
+            },
+            {
+              "combinator": "forEach",
+              "each": "正文",
+              "body": [
+                {
+                  "combinator": "if",
+                  "condition": [
+                    {
+                      "step": "function",
+                      "name": "跨文件事实集合",
+                      "arguments": [
+                        {
+                          "name": "来源",
+                          "kind": "SpanList",
+                          "source": "stream"
+                        },
+                        {
+                          "name": "键",
+                          "kind": "SpanList",
+                          "source": "literal",
+                          "value": [
+                            "文件名"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "step": "assert",
+                      "predicate": "notIn",
+                      "values": [
+                        {
+                          "type": "from",
+                          "value": "索引里登记的"
+                        }
+                      ]
+                    }
+                  ],
+                  "then": [
+                    {
+                      "step": "emit",
+                      "rule": "reviews-index",
+                      "severity": "error",
+                      "message": "评估报告未收录到目录。",
+                      "suggestion": "把这一份按现有格式登记进 docs/reviews/README.md 的链接清单：一行一条，写成 [标题](文件名.md)。索引与正文双向求差，少登记一份和多登记一条都会被这条门禁报出来，所以编号对不上这件事门禁看得见。"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "combinator": "sequence",
+          "steps": [
+            {
+              "step": "selectFiles",
+              "角色": "参照",
+              "where": [
+                {
+                  "type": "extension",
+                  "value": [
+                    ".md"
+                  ]
+                },
+                {
+                  "type": "root",
+                  "value": [
+                    "docs/reviews"
+                  ]
+                },
+                {
+                  "type": "excludeFolder",
+                  "value": [
+                    "{scan.ignoredDirectories}"
+                  ]
+                },
+                {
+                  "type": "includePath",
+                  "value": [
+                    "^docs/reviews/README[.]md$"
+                  ]
+                }
+              ],
+              "至少几个": 1
+            },
+            {
+              "step": "find",
+              "patterns": [
+                {
+                  "id": "索引链接",
+                  "type": "expression",
+                  "value": "\\[[^\\]]+\\]\\(\\s*(?!#)((?:(?!://)[^)])+?\\.md)\\s*\\)"
+                }
+              ]
+            },
+            {
+              "combinator": "forEach",
+              "each": "链接",
+              "body": [
+                {
+                  "combinator": "if",
+                  "condition": [
+                    {
+                      "step": "function",
+                      "name": "跨文件事实集合",
+                      "arguments": [
+                        {
+                          "name": "来源",
+                          "kind": "SpanList",
+                          "source": "stream"
+                        },
+                        {
+                          "name": "键",
+                          "kind": "SpanList",
+                          "source": "literal",
+                          "value": [
+                            "捕获1"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "step": "assert",
+                      "predicate": "notIn",
+                      "values": [
+                        {
+                          "type": "from",
+                          "value": "目录里有的"
+                        }
+                      ]
+                    }
+                  ],
+                  "then": [
+                    {
+                      "step": "emit",
+                      "rule": "reviews-index",
+                      "severity": "error",
+                      "message": "评估报告目录指向不存在的文件：docs/reviews/{1}",
+                      "suggestion": "索引里这条链接指的文件不在 docs/reviews/ 下：正文改名了就同步改链接，正文删了就把这一条也删掉。"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

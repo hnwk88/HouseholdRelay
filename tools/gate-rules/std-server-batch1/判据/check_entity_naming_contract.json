@@ -1,0 +1,606 @@
+﻿{
+  "rule": "check_entity_naming_contract",
+  "说明": {
+    "护住什么": "实体名、EF 配置、领域文件与命名合同词汇表四处说同一个名字（GZ-W-128、GZ-W-128；用户 2026-08-27「将来改名不能有遗漏」）：防实体、配置、词汇表各说各话，以及把模块名冒充实体词根登记。\n守的规则：[GZ-W-128] 实体名、EF 配置、领域文件与命名合同词汇表四处说同一个名字。人要知道、本门禁不判的部分见台账工程规则 GZ-W-128。",
+    "从哪来": "A0cf 阶段二按意图重建旧 check_entity_naming_contract。按用户定的原则：只核对合同自身的两项（词汇表条目来源表、显示名非空）不重建；计数基线全 0，改成逐处报真实位置；不再写债务清单。",
+    "实体全集": "src 下 EF 配置类 XxxConfiguration : IEntityTypeConfiguration<…> 的类名词根（取类名而不是泛型参数，就不用还原 using 别名）；历史迁移目录按形状排除。",
+    "配置类名对得上实体": "类名词根与泛型参数不同就报，唯一放过的是同一份文件里用 using 别名把泛型参数指回同名实体（处方一族因命名空间末段与实体同名才这样写）。",
+    "领域类型": "领域层声明的 class／record／enum 名字；文件名与类型名一致由命名审计那条门禁守，这里不重复。"
+  },
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "角色": "参照",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "Migrations"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "Configuration\\.cs$"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "实体配置",
+              "type": "expression",
+              "value": "\\bclass\\s+(\\w+)Configuration\\s*:\\s*IEntityTypeConfiguration\\s*<"
+            }
+          ]
+        },
+        {
+          "step": "function",
+          "name": "跨文件事实集合",
+          "arguments": [
+            {
+              "name": "来源",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "键",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "捕获1"
+              ]
+            }
+          ],
+          "as": "实体全集"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "角色": "参照",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^src/(?:(?:.*/)?(?:Domain|[^/]+\\.(?:Domain|Core))|Core)/"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "领域类型",
+              "type": "expression",
+              "value": "\\b(?:class|record|enum)\\s+([A-Za-z_]\\w*)"
+            }
+          ]
+        },
+        {
+          "step": "function",
+          "name": "跨文件事实集合",
+          "arguments": [
+            {
+              "name": "来源",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "键",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "捕获1"
+              ]
+            }
+          ],
+          "as": "领域类型"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "角色": "参照",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".json"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "tools"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^tools/naming-conventions\\.json$"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "function",
+          "name": "读结构化字段",
+          "arguments": [
+            {
+              "name": "文档",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "路径",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "aggregateVocabulary",
+                {
+                  "each": true
+                },
+                "technicalRoot"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "词根",
+              "type": "expression",
+              "value": "^\"(\\w+)\"$"
+            }
+          ]
+        },
+        {
+          "step": "function",
+          "name": "跨文件事实集合",
+          "arguments": [
+            {
+              "name": "来源",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "键",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "捕获1"
+              ]
+            }
+          ],
+          "as": "词汇表"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "as": "配置类名",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "Migrations"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "Configuration\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "配置类名对不上实体",
+              "type": "expression",
+              "value": "\\bclass\\s+(\\w+)Configuration\\s*:\\s*IEntityTypeConfiguration\\s*<\\s*(?!\\1\\s*>)(\\w+)\\s*>(?<!(?s:\\busing\\s+\\2\\s*=\\s*[\\w.]*\\.\\1\\s*;.*))"
+            }
+          ]
+        },
+        {
+          "step": "emit",
+          "rule": "entity-naming-configuration-filename",
+          "severity": "error",
+          "message": "EF 配置类 {1}Configuration 配置的却是 {2}（GZ-W-128）：配置类名必须是「实体名＋Configuration」。",
+          "suggestion": "把配置类（连同文件名）改成 {2}Configuration，或确认它配置的实体就是 {1}。"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "as": "实体要有领域类型",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "Migrations"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "Configuration\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "实体配置",
+              "type": "expression",
+              "value": "\\bclass\\s+(\\w+)Configuration\\s*:\\s*IEntityTypeConfiguration\\s*<"
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "命中",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "function",
+                  "name": "跨文件事实集合",
+                  "arguments": [
+                    {
+                      "name": "来源",
+                      "kind": "SpanList",
+                      "source": "stream"
+                    },
+                    {
+                      "name": "键",
+                      "kind": "SpanList",
+                      "source": "literal",
+                      "value": [
+                        "捕获1"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "step": "assert",
+                  "predicate": "notIn",
+                  "values": [
+                    {
+                      "type": "from",
+                      "value": "领域类型"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "entity-naming-domain-file-missing",
+                  "severity": "error",
+                  "message": "实体 {1} 有 EF 配置，领域层里却没有同名类型（GZ-W-128）。",
+                  "suggestion": "在领域层（Domain 目录、.Domain／.Core 项目或 src 下直接叫 Core 的项目）补 {1}，或把配置改成指向真实实体。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "as": "实体要登记",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "Migrations"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "Configuration\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "实体配置",
+              "type": "expression",
+              "value": "\\bclass\\s+(\\w+)Configuration\\s*:\\s*IEntityTypeConfiguration\\s*<"
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "命中",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "function",
+                  "name": "跨文件事实集合",
+                  "arguments": [
+                    {
+                      "name": "来源",
+                      "kind": "SpanList",
+                      "source": "stream"
+                    },
+                    {
+                      "name": "键",
+                      "kind": "SpanList",
+                      "source": "literal",
+                      "value": [
+                        "捕获1"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "step": "assert",
+                  "predicate": "notIn",
+                  "values": [
+                    {
+                      "type": "from",
+                      "value": "词汇表"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "entity-naming-unregistered-entity",
+                  "severity": "error",
+                  "message": "实体 {1} 没有登记进命名合同词汇表（GZ-W-128）。",
+                  "suggestion": "在 tools/naming-conventions.json 的 aggregateVocabulary 里登记 technicalRoot、userDisplayName 与 sourceTable。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "as": "词汇表要有实体",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".json"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "tools"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^tools/naming-conventions\\.json$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "function",
+          "name": "读结构化字段",
+          "arguments": [
+            {
+              "name": "文档",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "路径",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "aggregateVocabulary",
+                {
+                  "each": true
+                },
+                "technicalRoot"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "词根",
+              "type": "expression",
+              "value": "^\"(\\w+)\"$"
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "命中",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "function",
+                  "name": "跨文件事实集合",
+                  "arguments": [
+                    {
+                      "name": "来源",
+                      "kind": "SpanList",
+                      "source": "stream"
+                    },
+                    {
+                      "name": "键",
+                      "kind": "SpanList",
+                      "source": "literal",
+                      "value": [
+                        "捕获1"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "step": "assert",
+                  "predicate": "notIn",
+                  "values": [
+                    {
+                      "type": "from",
+                      "value": "实体全集"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "entity-naming-vocabulary-without-entity",
+                  "severity": "error",
+                  "message": "命名合同词汇表登记了 {1}，但没有这个实体（GZ-W-128）：模块名不得冒充实体词根。",
+                  "suggestion": "实体已改名或删除就同步改词汇表；模块名请登记在 moduleVocabulary。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "守着": [
+    "GZ-W-128"
+  ]
+}

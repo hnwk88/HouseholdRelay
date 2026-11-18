@@ -1,14 +1,4 @@
-﻿# >>> 门禁引擎：本机运行时、报告与安装记录不进仓库（project install／upgrade 维护，uninstall 删掉这一段；别手改）
-.gate-engine/
-.gate-cache/
-artifacts/gate-reports/
-tools/gate-engine.install.json
-tools/.gate-settings.lock
-.githooks/*.before-gate-engine
-.githooks/*.gate-engine.json
-.githooks/*.gate-engine.lock
-# <<< 门禁引擎
-
+﻿
 # 本实例数据与可重建验证输出（台账 D-006：大体积证据验收后即删，不进仓库）
 .state/
 .relay-instance
@@ -19,3 +9,13 @@ artifacts/
 bin/
 obj/
 *.user
+
+# >>> 门禁引擎：本机运行时、报告与安装记录不进仓库（project install／upgrade 维护，uninstall 删掉这一段；别手改）
+.gate-engine/
+.gate-cache/
+tools/gate-engine.install.json
+tools/.gate-settings.lock
+.githooks/*.before-gate-engine
+.githooks/*.gate-engine.json
+.githooks/*.gate-engine.lock
+# <<< 门禁引擎

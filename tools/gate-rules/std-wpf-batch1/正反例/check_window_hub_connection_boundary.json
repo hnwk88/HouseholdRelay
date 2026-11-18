@@ -1,0 +1,42 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Api/Clients/ZkMedicalSystemNotificationConnection.cs",
+      "内容": "namespace Desk;\n\npublic sealed class ZkMedicalSystemNotificationConnection\n{\n    private readonly HubConnection _connection = new HubConnectionBuilder().Build();\n    public HubConnectionState State => _connection.State;\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/MainWindow.Part09.cs",
+      "内容": "namespace Desk;\n\n// 注释里提到 HubConnection 不算；本工程接口 IZkMedicalSystemNotificationConnection 也不算。\npublic sealed partial class MainWindow\n{\n    private readonly IZkMedicalSystemNotificationConnection _connection;\n    public string Hint => \"不要直接 new HubConnectionBuilder\";\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/BadWindow.xaml.cs",
+      "内容": "namespace Desk;\n\npublic sealed class BadWindow\n{\n    private HubConnection? _connection;\n    public void Open() => _connection = new HubConnectionBuilder().WithUrl(\"http://x/hubs/notifications\").Build();\n}\n",
+      "期望": [
+        {
+          "行": 5,
+          "规则": "desktop-hub-connection-boundary"
+        },
+        {
+          "行": 6,
+          "规则": "desktop-hub-connection-boundary"
+        }
+      ]
+    },
+    {
+      "路径": "Helpers/WpfNavigation/PushHelper.cs",
+      "内容": "namespace Helpers;\n\npublic static class PushHelper\n{\n    public static bool IsUp(HubConnectionState state) => state == HubConnectionState.Connected;\n}\n",
+      "期望": [
+        {
+          "行": 5,
+          "规则": "desktop-hub-connection-boundary"
+        },
+        {
+          "行": 5,
+          "规则": "desktop-hub-connection-boundary"
+        }
+      ]
+    }
+  ]
+}

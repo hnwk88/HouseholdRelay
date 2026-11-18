@@ -1,0 +1,354 @@
+﻿{
+  "rule": "check_enforced_rule_landing",
+  "说明": {
+    "护住什么": "守的规则：[GZ-W-128] 标着脚本强制的规则编号，必须有一条开着的门禁在「守着」里认领。",
+    "守什么": "工程规则正文（工程配置「rules.textFiles」列的那几份，不写就是 AGENTS.md；本工程是 AGENTS.md 与强制规则索引 docs/rules/enforced-rules.md）里标着「[脚本强制]」的规则，每一个编号都要有一条开着的门禁在「守着」里认领它（D-073 第 4 条：写着脚本强制的用户规则必须真有一条门禁在守）；标着脚本强制却没有编号的，无从认领，也报。",
+    "怎么判": "引擎交出门禁目录（每条门禁开在哪几级、守着哪几条编号），取「至少开在一级」的那些门禁守着的编号做成集合；规则正文里用标记的行（不是讲解标记的行），行首那串方括号里的每一个编号都要在这个集合里。",
+    "认领写在哪": "写在守它的那条门禁自己的配置顶层「守着」（规则包判据、tools/gate-pipelines 下的配置都认）；随发布的通用认领写在引擎目录里，同样算。",
+    "为什么是配置": "原先只有 MyCoAI 的内置 C# 判据 EnforcedRuleLandingVerdict 在判、而且只看引擎目录里的认领、不看开没开；D-071 不许放宽内置判据，这里用底座新加的「门禁目录」事实加现成的集合求差写成配置。",
+    "编号怎么认": "A0cd（用户 2026-10-08：「就维护引擎一份编号。不要两份。」）：规则编号的认法只在引擎一处（步骤「规则编号」，行首那串方括号里形如 ABC-001 的），规则包准入取的也是它；这份配置原先自带的两条正则删了。哪些行算数（标着脚本强制、不是讲解这个标记的行）仍由这里判。",
+    "读哪份": "：哪几份是规则正文只在工程配置「rules.textFiles」说一次，选文件那一步的 includePath 写 {rules.textFiles} 引用它；规则包准入核对「守着」读的是同一格。这份配置随引擎出厂，不写那一格的工程只读 AGENTS.md。（D-084）起本工程的强制编号集中在 docs/rules/enforced-rules.md，每行「- [编号][脚本强制] → 门禁完整标识」。判定不变。"
+  },
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "门禁目录"
+        },
+        {
+          "step": "function",
+          "name": "读结构化字段",
+          "arguments": [
+            {
+              "name": "文档",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "路径",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "门禁",
+                {
+                  "each": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "门禁",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "function",
+                  "name": "读结构化字段",
+                  "arguments": [
+                    {
+                      "name": "文档",
+                      "kind": "SpanList",
+                      "source": "stream"
+                    },
+                    {
+                      "name": "路径",
+                      "kind": "SpanList",
+                      "source": "literal",
+                      "value": [
+                        "开着的级",
+                        {
+                          "each": true
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "step": "assert",
+                  "predicate": "not",
+                  "clauses": [
+                    {
+                      "predicate": "countIs",
+                      "count": 0
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "function",
+                  "name": "读结构化字段",
+                  "arguments": [
+                    {
+                      "name": "文档",
+                      "kind": "SpanList",
+                      "source": "stream"
+                    },
+                    {
+                      "name": "路径",
+                      "kind": "SpanList",
+                      "source": "literal",
+                      "value": [
+                        "守着",
+                        {
+                          "each": true
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "step": "find",
+                  "patterns": [
+                    {
+                      "id": "编号",
+                      "type": "expression",
+                      "value": "^\"(.+)\"$"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "step": "function",
+          "name": "跨文件事实集合",
+          "arguments": [
+            {
+              "name": "来源",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "键",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "捕获1"
+              ]
+            }
+          ],
+          "as": "开着的门禁守着的"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "as": "规则正文",
+          "where": [
+            {
+              "type": "root"
+            },
+            {
+              "type": "extension",
+              "value": [
+                ".md"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "{rules.textFiles}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "split",
+          "by": "lines"
+        },
+        {
+          "combinator": "forEach",
+          "each": "行",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "all",
+                  "clauses": [
+                    {
+                      "predicate": "contains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "[脚本强制]"
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "notContains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "`[脚本强制]`"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "规则编号"
+                },
+                {
+                  "combinator": "forEach",
+                  "each": "编号",
+                  "body": [
+                    {
+                      "combinator": "if",
+                      "condition": [
+                        {
+                          "step": "function",
+                          "name": "跨文件事实集合",
+                          "arguments": [
+                            {
+                              "name": "来源",
+                              "kind": "SpanList",
+                              "source": "stream"
+                            },
+                            {
+                              "name": "键",
+                              "kind": "SpanList",
+                              "source": "literal",
+                              "value": [
+                                "捕获1"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "step": "assert",
+                          "predicate": "notIn",
+                          "values": [
+                            {
+                              "type": "from",
+                              "value": "开着的门禁守着的"
+                            }
+                          ]
+                        }
+                      ],
+                      "then": [
+                        {
+                          "step": "emit",
+                          "rule": "enforced-rule-without-landing",
+                          "severity": "warning",
+                          "message": "规则 {1} 标着脚本强制，却没有一条开着的门禁在「守着」里认领它。",
+                          "suggestion": "让守着它的那条门禁在自己配置的「守着」里写上这个编号；真的没有门禁守它，就请用户把它的脚本强制标记降下来——标着强制而没人验证，比不标更坏。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "as": "规则正文·无编号",
+          "where": [
+            {
+              "type": "root"
+            },
+            {
+              "type": "extension",
+              "value": [
+                ".md"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "{rules.textFiles}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "split",
+          "by": "lines"
+        },
+        {
+          "combinator": "forEach",
+          "each": "行",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "all",
+                  "clauses": [
+                    {
+                      "predicate": "contains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "[脚本强制]"
+                        }
+                      ]
+                    },
+                    {
+                      "predicate": "notContains",
+                      "values": [
+                        {
+                          "type": "text",
+                          "value": "`[脚本强制]`"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "combinator": "if",
+                  "condition": [
+                    {
+                      "step": "规则编号"
+                    },
+                    {
+                      "step": "assert",
+                      "predicate": "countIs",
+                      "count": 0
+                    }
+                  ],
+                  "then": [
+                    {
+                      "step": "emit",
+                      "rule": "enforced-rule-without-identifier",
+                      "severity": "warning",
+                      "message": "这条规则标着脚本强制却没有规则编号，门禁无从认领它。",
+                      "suggestion": "给它一个规则编号（形如 ABC-001，写在行首那串方括号里），再让守着它的那条门禁在「守着」里认领。"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "棘轮登记": {
+    "方向": "只许减",
+    "按": "路径与诊断标识",
+    "登记": []
+  }
+}

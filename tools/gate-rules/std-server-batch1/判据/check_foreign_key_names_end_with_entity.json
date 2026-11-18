@@ -1,0 +1,198 @@
+﻿{
+  "rule": "check_foreign_key_names_end_with_entity",
+  "守着": [
+    "GZ-W-128"
+  ],
+  "说明": {
+    "护住什么": "GZ-W-128 外键条款（用户 2026-09-04 拍板）：外键固定为目标实体全名加 Id，前面可以加角色修饰（CreatedByStaffAccountId）；指向统一业务选项的外键按业务语义命名。\n守的规则：[GZ-W-128] 外键名是目标实体全名加 Id，可加角色修饰。人要知道、本门禁不判的部分见台账工程规则 GZ-W-128。",
+    "口径": "领域层（Domain 目录、.Domain／.Core 项目或 src 下直接叫 Core 的项目）里 public long／long? 的 XxxId 属性：Id 前面那段词干，按大写字母切开的任何一个后缀是实体名就合规；一个都不是就报。实体全集取自 src 下 EF 配置类（*Configuration.cs，迁移目录除外）的 IEntityTypeConfiguration<T> 实参，以及这些文件里 using 别名指向的类型末段（Domain.Prescription.PrescriptionInfo 这种命名空间末段与实体同名的只能用别名）。遮罩注释与字面量。",
+    "不算违规": "主键 Id；Legacy／Source 开头的来源原值列（GZ-W-128）；9 个业务选项语义外键词干（Bank、Category、SubCategory、Gender、MaritalStatus、Status、PendingReviewStatus、TransactionType、PaymentSource，今天 13 处），新增一个语义外键要同时改这里的正则。",
+    "与旧实现的差别": "旧实现还有改名连带（F1）、指向已删实体（F3）两组——改名表的旧根名今天没有一个还是实体，结构上走不到；核对命名合同自身（F4）与判据自证（F5）是死代码，判据自证由本包正反例承担。都不重建（A0cf 续篇替用户定）。旧实现按基线分 warning／error，今天存量是 0，一律 error。"
+  },
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "Migrations"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "Configuration\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "配置的实体",
+              "type": "expression",
+              "value": "IEntityTypeConfiguration<\\s*([A-Za-z0-9_]+)\\s*>"
+            },
+            {
+              "id": "别名指向的实体",
+              "type": "expression",
+              "value": "\\busing\\s+[A-Za-z0-9_]+\\s*=\\s*[A-Za-z0-9_.]*\\.([A-Za-z0-9_]+)\\s*;"
+            }
+          ]
+        },
+        {
+          "step": "function",
+          "name": "跨文件事实集合",
+          "arguments": [
+            {
+              "name": "来源",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "键",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "捕获1"
+              ]
+            }
+          ],
+          "as": "实体"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^src/(?:(?:.*/)?(?:Domain|[^/]+\\.(?:Domain|Core))|Core)/"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "外键词干",
+              "type": "expression",
+              "value": "(?<=^[ \\t]*public\\s+(?:required\\s+)?(?:virtual\\s+)?long\\s*\\??\\s+)(?!Legacy|Source)(?!(?:Bank|Category|SubCategory|Gender|MaritalStatus|Status|PendingReviewStatus|TransactionType|PaymentSource)Id\\b)[A-Z][A-Za-z0-9_]*?(?=Id\\s*(?:\\{|=>|;|$))",
+              "multiline": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "命中",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "find",
+                  "patterns": [
+                    {
+                      "id": "词干后缀",
+                      "type": "expression",
+                      "value": "(?=([A-Z][A-Za-z0-9_]*)$)"
+                    }
+                  ]
+                },
+                {
+                  "step": "function",
+                  "name": "跨文件事实集合",
+                  "arguments": [
+                    {
+                      "name": "来源",
+                      "kind": "SpanList",
+                      "source": "stream"
+                    },
+                    {
+                      "name": "键",
+                      "kind": "SpanList",
+                      "source": "literal",
+                      "value": [
+                        "捕获1"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "step": "assert",
+                  "predicate": "notIn",
+                  "values": [
+                    {
+                      "type": "from",
+                      "value": "实体"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "foreign-key-missing-entity-root",
+                  "severity": "error",
+                  "message": "外键 {0}Id 的名字尾部不是任何实体名：外键必须是「目标实体全名＋Id」，前面可以加角色修饰（GZ-W-128）。",
+                  "suggestion": "改成 {被指向实体全名}Id（或 {角色}{实体全名}Id）；指向统一业务选项的外键按业务语义命名，并把新词干加进这条门禁配置的语义外键清单。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

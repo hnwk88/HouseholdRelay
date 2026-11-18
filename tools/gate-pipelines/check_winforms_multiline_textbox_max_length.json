@@ -1,0 +1,89 @@
+﻿{
+  "rule": "check_winforms_multiline_textbox_max_length",
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "多行文本框",
+              "type": "expression",
+              "value": "^(?!\\s*(?://|\\*)).*Multiline = true",
+              "multiline": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "命中",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "scope",
+                  "of": "window",
+                  "backwardLines": 24,
+                  "forwardLines": 25
+                },
+                {
+                  "step": "assert",
+                  "predicate": "not",
+                  "clauses": [
+                    {
+                      "predicate": "contains",
+                      "values": [
+                        {
+                          "type": "expression",
+                          "value": "^(?!\\s*(?://|\\*)).*MaxLength",
+                          "multiline": true
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "winforms-multiline-textbox-max-length",
+                  "severity": "error",
+                  "message": "多行 TextBox 没有显式设置 MaxLength。",
+                  "suggestion": "显式写 MaxLength = 0。默认上限 32767 会静默截断正文：不报错、无提示，读屏用户看不到滚动条位置，只会读到一半发现没了（WINFORMS-A11Y-005）。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "说明": {
+    "护住什么": "守的规则：[WINFORMS-A11Y-005] WinForms 多行文本框显式 MaxLength = 0。人要知道、本门禁不判的部分见台账工程规则 WINFORMS-A11Y-001。"
+  }
+}

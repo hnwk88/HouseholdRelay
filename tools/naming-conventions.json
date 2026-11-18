@@ -1,0 +1,81 @@
+﻿{
+  "schemaVersion": 1,
+  "说明": "CodeStandard 标准默认命名合同（2026-11-18，以中康 ZKMedicalSystem 那份为底，去掉业务内容）。装标准门禁时整份带进被扫工程的 tools/。通用口径照用；aggregateVocabulary、moduleVocabulary、architecture 由工程自己填。对应台账 GZ-W-128、GZ-W-130。",
+  "architecture": {
+    "projects": [],
+    "coreMeaning": "Domain",
+    "applicationRoleDirectories": [
+      "Contracts",
+      "Interfaces",
+      "Services",
+      "Mappings",
+      "Rules"
+    ],
+    "infrastructureRoleDirectories": [
+      "Persistence",
+      "Integrations",
+      "ExternalSources",
+      "DependencyInjection"
+    ]
+  },
+  "typeSuffixes": {
+    "configuration": "{Entity}Configuration",
+    "controller": "{Aggregate}Controller",
+    "dto": "Dto",
+    "efRepository": "Ef{Aggregate}Repository",
+    "externalResult": "ResultDto",
+    "internalResult": "Result",
+    "jobExecutor": "{Aggregate}JobExecutor",
+    "jobService": "{Aggregate}JobService",
+    "lookupSource": "{Aggregate}LookupSource",
+    "mapping": "{Aggregate}MappingProfile",
+    "memoryRepository": "InMemory{Aggregate}Repository",
+    "policy": "{Aggregate}Policy",
+    "provider": "{Aggregate}Provider",
+    "query": "Query",
+    "repositoryInterface": "I{Aggregate}Repository",
+    "request": "Request",
+    "ruleEngine": "{Aggregate}RuleEngine",
+    "service": "{Aggregate}Service",
+    "serviceInterface": "I{Aggregate}Service",
+    "hub": "{Aggregate}Hub"
+  },
+  "memberNaming": {
+    "asyncSuffix": "Async",
+    "booleanPrefixes": [
+      "Is",
+      "Has",
+      "Can",
+      "Should"
+    ],
+    "parametersAndLocals": "camelCase",
+    "privateFields": "_camelCase",
+    "typesAndPublicMembers": "PascalCase"
+  },
+  "entityNaming": {
+    "principle": "同一聚合根在实体、EF 配置、DTO、服务、仓储、控制器各层用同一个词根；扩展类型在词根后接 typeSuffixes 里的后缀。每个正式实体在 aggregateVocabulary 登记 technicalRoot 与 userDisplayName。",
+    "forbidden": [
+      "同一聚合根在不同层使用不同词根",
+      "实体已存在但未登记 aggregateVocabulary"
+    ]
+  },
+  "foreignKeyNaming": {
+    "principle": "外键字段名固定为 {目标实体根名}Id：前缀是被指向的实体类名，后缀是 Id 表示指向其主键。",
+    "pattern": "{EntityRoot}Id",
+    "forbidden": [
+      "外键名不含被指向实体的根名（如 SourceId、ItemId 这类无主语命名）",
+      "同一被指向实体在不同表使用不同外键名",
+      "外键名保留来源文本列名（如 订单号、来源_id 的直译）",
+      "同一列指向两张表的多态外键"
+    ],
+    "consistencyRequirement": "外键名随实体改名同步变更；实体根名变更后残留的旧外键名视为同一笔债务，不得分批留存。"
+  },
+  "aggregateVocabulary": [],
+  "moduleVocabulary": [],
+  "legacyDebtPolicy": {
+    "allowNewDebt": false,
+    "forbidDatabaseOrRouteRenameDuringMechanicalCleanup": true,
+    "migrationMode": "新增代码不得引入命名债务；存量由工程自己登记、只许减少",
+    "privateFieldSeverity": "error"
+  }
+}

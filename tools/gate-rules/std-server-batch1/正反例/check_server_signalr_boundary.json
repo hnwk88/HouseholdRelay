@@ -1,0 +1,57 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Infrastructure/Notification/GoodPublisher.cs",
+      "内容": "namespace Server;\n\n/// <summary>发送方按连接号发。</summary>\npublic sealed class GoodPublisher(IHubContext<NotificationHub, INotificationReceiver> hub)\n{\n    public Task SendAsync(IReadOnlyList<string> ids) => hub.Clients.Clients(ids).ReceivePresenceSummary(new());\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Application/Services/Identity/BadService.cs",
+      "内容": "namespace Server;\n\npublic sealed class BadService\n{\n    private readonly IHubContext<NotificationHub> _hub;\n    public Task Send(string id) => _hub.Clients.Client(id).SendAsync(\"x\");\n    public Task Shout() => _hub.Clients.All.SendAsync(\"x\");\n}\n",
+      "期望": [
+        {
+          "行": 5,
+          "规则": "server-signalr-boundary"
+        },
+        {
+          "行": 6,
+          "规则": "server-signalr-boundary"
+        },
+        {
+          "行": 7,
+          "规则": "server-signalr-boundary"
+        }
+      ]
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Api/Hubs/BadHub.cs",
+      "内容": "namespace Server;\n\npublic sealed class BadHub : Hub\n{\n    public Task Shout() => Clients.All.SendAsync(\"x\");\n    public Task Others() => Clients.AllExcept([Context.ConnectionId]).SendAsync(\"x\");\n    public Task Me() => Clients.Caller.SendAsync(\"x\");\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Application/Services/Identity/CommentOnly.cs",
+      "内容": "namespace Server;\n\n// 推送按连接，禁止 Clients.All，也不要直接拿 IHubContext。\npublic sealed class CommentOnly\n{\n    public string Hint => \"不要写 Clients.All\";\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/HouseholdRelay/Relay/RelayServer.cs",
+      "内容": "namespace Relay;\n\npublic sealed class RelayServer\n{\n    public required ClientRegistry Clients { get; init; }\n    public bool Check(string token) => Clients.Authenticate(token) is not null;\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/Server/Application/Services/StrayHub.cs",
+      "内容": "namespace Server;\n\npublic sealed class StrayHub : Hub<INotificationReceiver>\n{\n    public Task Me() => Clients.Caller.Ping();\n}\n",
+      "期望": [
+        {
+          "行": 3,
+          "规则": "server-signalr-boundary"
+        }
+      ]
+    },
+    {
+      "路径": "tests/ZKMedicalSystemWebAPI.Tests/Integration/BroadcastFake.cs",
+      "内容": "namespace Tests;\n\npublic sealed class BroadcastFake : Hub\n{\n    public override Task OnConnectedAsync() => Clients.All.SendAsync(\"x\");\n}\n",
+      "期望": []
+    }
+  ]
+}

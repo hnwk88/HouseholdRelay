@@ -1,0 +1,51 @@
+﻿{
+  "包名": "std-wpf-batch1",
+  "版本": "1.0.3",
+  "说明": "标准第一批·桌面（C# 与 WPF 专属）：表单回车、播报场景、朗读归口、窗口不直连推送中心。原样取自中康规则包，未改判据。",
+  "判据": [
+    {
+      "rule": "check_form_button_no_is_default",
+      "标题": "桌面界面不许写 IsDefault，回车提交由表单宿主接管",
+      "配置": "判据/check_form_button_no_is_default.json",
+      "正反例": "正反例/check_form_button_no_is_default.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".xaml"
+      ]
+    },
+    {
+      "rule": "check_status_announcement_scenarios",
+      "标题": "主动播报只留给失败与空结果",
+      "配置": "判据/check_status_announcement_scenarios.json",
+      "正反例": "正反例/check_status_announcement_scenarios.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    },
+    {
+      "rule": "check_speech_only_in_speech_department",
+      "标题": "只许朗读部门调朗读接口",
+      "配置": "判据/check_speech_only_in_speech_department.json",
+      "正反例": "正反例/check_speech_only_in_speech_department.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    },
+    {
+      "rule": "check_window_hub_connection_boundary",
+      "标题": "窗口不许持有通知连接",
+      "配置": "判据/check_window_hub_connection_boundary.json",
+      "正反例": "正反例/check_window_hub_connection_boundary.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    }
+  ]
+}

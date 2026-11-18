@@ -1,0 +1,21 @@
+﻿{
+  "解法": "外部命令",
+  "rule": "task.compile",
+  "标题": "工程构建",
+  "命令": [
+    "powershell",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/Invoke-LowPriorityDotnet.ps1",
+    "build",
+    "-v:q"
+  ],
+  "不算输入": [
+    "docs/reviews/",
+    "docs/KnowledgeBase/",
+    "docs/releases/"
+  ],
+  "说明": "构建整个解决方案（dotnet 自己找工程根目录下唯一的 .sln；根目录有多个 .sln 的工程装时在命令里补上名字）。经 tools/Invoke-LowPriorityDotnet.ps1 以低优先级单节点跑，不抢读屏和音频；脚本在标准「默认文件」里随门禁带进被扫工程。来源：MyCoAI task.compile，2026-11-18 去掉 MyCoAI.sln 与已退役的 portable-rule-kit 目录。"
+}

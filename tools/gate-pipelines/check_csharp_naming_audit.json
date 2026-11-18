@@ -1,0 +1,559 @@
+﻿{
+  "解法": "完整管线",
+  "rule": "check_csharp_naming_audit",
+  "守着": [
+    "GZ-W-128",
+    "GZ-W-130"
+  ],
+  "说明": {
+    "为什么是完整管线": "这条判据要报 7 个不同的诊断标识，而四种门面解法每一份只有一个「诊断标识」；另外它有一处早退（合同不在就不盘点债务），那要 if。这两样只有完整管线做得到。段里仍然尽量用「解法」节点，只有 IService 那一支走原生三步——理由见那一段的注释。",
+    "A0cf 阶段二做成共用": "四个工程共用这一份判据：IService、Controllers 两段原先写死 SmartBrailleTranslator 的目录（从 SBT 抄过来的残留，在 MyCoAI 上永远命不中），改成工程无关的 Application/IService/、Api/Controllers/；扫描面纳入 Helpers；五类命名债务四个工程今天都已清零，从「汇总一条提醒、共 N 处」改成「每处一条 error」，新增即拦（ZK 旧实现是计数棘轮，基线全 0 时两者等价）。",
+    "护住什么": "守的规则：[GZ-W-128] 命名合同与 .editorconfig 命名规则必须在且能解析。 [GZ-W-128] 一个文件只一个顶层类型，文件名与类型名一致。 [GZ-W-128] 类型与公开成员 PascalCase、接口 I 前缀、私有只读字段 _camelCase。人要知道、本门禁不判的部分见台账工程规则 GZ-W-128。"
+  },
+  "pipeline": [
+    {
+      "step": "解法",
+      "解法": "逐项核对",
+      "rule": "check_csharp_naming_audit",
+      "诊断标识": "naming-contract-missing",
+      "在哪": [
+        {
+          "路径": "tools/naming-conventions.json"
+        }
+      ],
+      "怎么看": "文本",
+      "严重度": "error",
+      "必须有": [
+        {
+          "找": "typeSuffixes"
+        }
+      ],
+      "文案": {
+        "点空": "缺少命名合同。",
+        "点空建议": "恢复 tools/naming-conventions.json，不能只在台账里口头约定。",
+        "缺了": "{1} 缺少：{0}",
+        "建议": "把这一项补进命名合同。"
+      }
+    },
+    {
+      "step": "解法",
+      "解法": "逐项核对",
+      "rule": "check_csharp_naming_audit",
+      "诊断标识": "editorconfig-naming-rule-missing",
+      "在哪": [
+        {
+          "路径": ".editorconfig"
+        }
+      ],
+      "怎么看": "文本",
+      "严重度": "error",
+      "必须有": [
+        {
+          "找": "interfaces_must_start_with_i"
+        },
+        {
+          "找": "types_use_pascal_case"
+        },
+        {
+          "找": "public_members_use_pascal_case"
+        },
+        {
+          "找": "private_readonly_fields_use_underscore"
+        }
+      ],
+      "文案": {
+        "点空": ".editorconfig 不在：那四条 Roslyn 命名规则一条都核不了。",
+        "点空建议": "恢复 .editorconfig 与其中的 Roslyn 命名规则；禁止只靠人工记忆。",
+        "缺了": ".editorconfig 缺少命名规则 {0}。",
+        "建议": "恢复 Roslyn 命名规则；禁止只靠人工记忆。"
+      }
+    },
+    {
+      "combinator": "if",
+      "condition": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".json"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "tools"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^tools/naming\\-conventions\\.json$"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "assert",
+          "predicate": "not",
+          "clauses": [
+            {
+              "predicate": "countIs",
+              "count": 0
+            }
+          ]
+        }
+      ],
+      "then": [
+        {
+          "step": "解法",
+          "解法": "逐项核对",
+          "rule": "check_csharp_naming_audit",
+          "诊断标识": "naming-contract-invalid",
+          "在哪": [
+            {
+              "路径": "tools/naming-conventions.json"
+            }
+          ],
+          "怎么看": "文本",
+          "必须解析得动": "JSON 对象",
+          "严重度": "error",
+          "必须有": [
+            {
+              "找": "typeSuffixes"
+            }
+          ],
+          "文案": {
+            "点空": "缺少命名合同。",
+            "点空建议": "恢复 tools/naming-conventions.json。",
+            "解析不动": "命名合同无法读取：{原因}",
+            "缺了": "{1} 缺少：{0}",
+            "建议": "修复 JSON 后重新运行全量检查。"
+          }
+        }
+      ]
+    },
+    {
+      "combinator": "if",
+      "condition": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".json"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "tools"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^tools/naming\\-conventions\\.json$"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "assert",
+          "predicate": "not",
+          "clauses": [
+            {
+              "predicate": "countIs",
+              "count": 0
+            }
+          ]
+        }
+      ],
+      "then": [
+        {
+          "step": "解法",
+          "解法": "按语法树看",
+          "rule": "check_csharp_naming_audit",
+          "诊断标识": "naming-multiple-top-level-types",
+          "在哪": [
+            {
+              "正则": "^(?:src|tests|tools|Helpers)/.+\\.cs$"
+            }
+          ],
+          "排除": [
+            {
+              "正则": "(^|/)(?:bin|obj|__pycache__|artifacts|publish|\\.git|\\.vs|nvda|offline\\-deployment\\-kit)(/|$)"
+            }
+          ],
+          "看哪种节点": "顶层类型",
+          "严重度": "error",
+          "跳过生成代码": true,
+          "文案": {
+            "太多了": "这份文件有不止一个顶层公开或内部类型（GZ-W-128：一类型一文件）。",
+            "建议": "按命名合同拆成一类型一文件；WPF partial、迁移生成代码和私有嵌套类型除外。"
+          },
+          "至多几个": 1
+        },
+        {
+          "step": "解法",
+          "解法": "按语法树看",
+          "rule": "check_csharp_naming_audit",
+          "诊断标识": "naming-filename-type-mismatch",
+          "在哪": [
+            {
+              "正则": "^(?:src|tests|tools|Helpers)/.+\\.cs$"
+            }
+          ],
+          "排除": [
+            {
+              "正则": "(^|/)(?:bin|obj|__pycache__|artifacts|publish|\\.git|\\.vs|nvda|offline\\-deployment\\-kit)(/|$)"
+            },
+            {
+              "正则": "(^|/)Program\\.cs$"
+            },
+            {
+              "正则": "/Persistence/Migrations/"
+            },
+            {
+              "正则": "\\.cshtml\\.cs$"
+            }
+          ],
+          "看哪种节点": "顶层类型",
+          "严重度": "error",
+          "跳过生成代码": true,
+          "文案": {
+            "缺了": "文件名与唯一顶层类型名不一致（GZ-W-128）。",
+            "建议": "使用符号级重命名，让文件名与主类型完全一致。"
+          },
+          "只看": [
+            {
+              "找": "独一份"
+            }
+          ],
+          "必须有": [
+            {
+              "找": "文件主名一致"
+            }
+          ],
+          "说明": {
+            "为什么排除 .cshtml.cs": "Razor 页面后台代码按 ASP.NET Core 约定是 Xxx.cshtml.cs 里放 XxxModel，文件主名带着 .cshtml、类型名带着 Model，「文件主名一致」判不了这种成对写法；2026-11-19 装进 HouseholdRelay 时 12 个页面全被报，都是框架约定不是毛病。页面模型名对不对由人看。",
+            "为什么只看独一份": "老判据只在「这份文件恰好一个顶层类型」时才判这一支（declarations.Count == 1）。不写这一格的话，有多个顶层类型的文件里每个类型各判一次——2026-10-01 实测同一批样本会报 4 处而老判据报 1 处，而那种文件已经被naming-multiple-top-level-types 报过一次了，再报一次只会让「共 N 处」那个债务数比真实的大。"
+          }
+        },
+        {
+          "combinator": "sequence",
+          "steps": [
+            {
+              "step": "selectFiles",
+              "where": [
+                {
+                  "type": "extension",
+                  "value": [
+                    ".cs"
+                  ]
+                },
+                {
+                  "type": "root",
+                  "value": [
+                    "src",
+                    "tests",
+                    "tools",
+                    "Helpers"
+                  ]
+                },
+                {
+                  "type": "excludeFolder",
+                  "value": [
+                    "{scan.ignoredDirectories}"
+                  ]
+                },
+                {
+                  "type": "includePath",
+                  "value": [
+                    "(^|/)Application/IService/"
+                  ]
+                }
+              ]
+            },
+            {
+              "step": "find",
+              "patterns": [
+                {
+                  "说明": "零宽模式：每份文件只命中一次，位置在偏移 0，于是行号是第 1 行——与老判据写死的那个 1 逐字相同。这一支不看内容，所以不需要别的模式。",
+                  "id": "旧目录里的文件",
+                  "type": "expression",
+                  "value": "\\A"
+                }
+              ]
+            },
+            {
+              "step": "emit",
+              "rule": "naming-legacy-iservice-directory",
+              "severity": "error",
+              "message": "Application/IService 旧目录里还有接口文件（GZ-W-128：按模块迁到 Application/Interfaces/<业务>）。",
+              "suggestion": "按模块迁移到 Application/Interfaces/<业务>，禁止继续新增旧目录文件。"
+            }
+          ]
+        },
+        {
+          "step": "解法",
+          "解法": "按语法树看",
+          "rule": "check_csharp_naming_audit",
+          "诊断标识": "naming-controller-contract",
+          "在哪": [
+            {
+              "正则": "^(?:src|tests|tools|Helpers)/(?:.*/)?(?:[^/]*\\.)?Api/Controllers/[^/]+\\.cs$"
+            }
+          ],
+          "排除": [
+            {
+              "正则": "(^|/)(?:bin|obj|__pycache__|artifacts|publish|\\.git|\\.vs|nvda|offline\\-deployment\\-kit)(/|$)"
+            }
+          ],
+          "看哪种节点": "顶层类型",
+          "严重度": "error",
+          "跳过生成代码": true,
+          "文案": {
+            "有了": "Controller 文件里内嵌了公开的请求或返回类型（共享契约要放 Application/Contracts）。",
+            "建议": "把共享契约移到 Application/Contracts/<业务>。"
+          },
+          "这份文件里有": [
+            {
+              "找": "名字",
+              "含正则": "Controller$"
+            }
+          ],
+          "不许有": [
+            {
+              "找": "名字",
+              "含正则": "(?:Request|Dto|Query|Result)$"
+            }
+          ],
+          "说明": {
+            "为什么用这份文件里有": "老判据的前提是「这一份里有某个类型以 Controller 结尾」，而要报的是另外那些以 Request／Dto／Query／Result 结尾的类型。「这份文件里有」刻意不受「不许有」筛选，正好表达这个前提——两格要是共用一张清单，这条永远问不出来。"
+          }
+        },
+        {
+          "step": "解法",
+          "解法": "按语法树看",
+          "rule": "check_csharp_naming_audit",
+          "诊断标识": "naming-private-readonly-field",
+          "在哪": [
+            {
+              "正则": "^(?:src|tests|tools|Helpers)/.+\\.cs$"
+            }
+          ],
+          "排除": [
+            {
+              "正则": "(^|/)(?:bin|obj|__pycache__|artifacts|publish|\\.git|\\.vs|nvda|offline\\-deployment\\-kit)(/|$)"
+            }
+          ],
+          "看哪种节点": "字段",
+          "严重度": "error",
+          "跳过生成代码": true,
+          "文案": {
+            "缺了": "私有只读字段没有用 _camelCase（GZ-W-128）。",
+            "建议": "使用 IDE/Roslyn 符号级重命名成 _camelCase。"
+          },
+          "只看": [
+            {
+              "找": "修饰符",
+              "含": "private"
+            },
+            {
+              "找": "修饰符",
+              "含": "readonly"
+            }
+          ],
+          "必须有": [
+            {
+              "找": "名字",
+              "含正则": "^_"
+            }
+          ],
+          "说明": {
+            "为什么看字段这一档": "「有可见性的声明」走的是「要写文档注释的那一批」，private 字段不在其中。而「字段」那一档把每个声明符各算一个：private readonly int a, b; 是一条声明两个名字，老判据也是每个名字各判一次。"
+          }
+        }
+      ]
+    }
+  ],
+  "棘轮登记": {
+    "方向": "只许减",
+    "按": "路径",
+    "登记": [
+      {
+        "路径": "src/Application/Services/Configuration/SiteIdentityService.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Application/Services/Identity/IdentityService.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Application/Services/Relay/ProtocolDiagnostics.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Application/Services/Usage/UsageService.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Core/Identity/ClientRegistry.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Core/Relay/Admission.cs",
+        "数": 3,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Core/Upstream/ClaudeCodeIdentity.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Core/Usage/UpstreamAttempt.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/HouseholdRelay/Relay/RelayServer.cs",
+        "数": 8,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/ClaudeCode/ChildProxyEnvironment.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/ClaudeCode/ClaudeCodeIdentitySource.cs",
+        "数": 4,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/ClaudeCode/ClaudeCodeUpdater.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/ClaudeCode/ClaudeConfigurationPreparation.cs",
+        "数": 3,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/ClaudeCode/OfficialAccountLogin.cs",
+        "数": 8,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/ClaudeCode/OwnedClaudeProcesses.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/ClaudeCode/PseudoConsoleProcess.cs",
+        "数": 9,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/Upstream/UpstreamConnection.cs",
+        "数": 3,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/Upstream/UpstreamPool.cs",
+        "数": 3,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/Upstream/UpstreamResponses.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/ExternalSources/Upstream/UpstreamRoute.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/Persistence/RelayDatabase.cs",
+        "数": 4,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/Repositories/Configuration/SiteIdentityRepository.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/Security/AdministratorPasswordHasher.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/Security/PasswordFileCipher.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/ClaudeCodeIdentityTests.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/DeviceMetadataTests.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/FakeClaude.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/NativeCliIsolationLauncher.cs",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/Program.cs",
+        "数": 4,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/SiteIdentityMaintenanceTests.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/TestProcess.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/UpstreamProxyTests.cs",
+        "数": 4,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tests/Tests/UsageStorageTests.cs",
+        "数": 2,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      },
+      {
+        "路径": "tools/gate-pipelines/check_csharp_naming_audit.json",
+        "数": 1,
+        "理由": "2026-11-19 装标准门禁时的存量（私有只读字段不是 _camelCase、缺 .editorconfig），整改计划第五批改，只许减少，改一处减一。"
+      }
+    ]
+  }
+}

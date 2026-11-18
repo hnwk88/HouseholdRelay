@@ -1,0 +1,18 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/甲Window.xaml.cs",
+      "内容": "public partial class 甲Window\n{\n    async Task SaveAsync()\n    {\n        SetStatus(\"已保存\", true);\n        try { await Save(); SetStatus(\"保存中\", announce: true); }\n        catch (HttpServiceException ex) { SetStatus(\"保存失败\", true); }\n        SetStatus(PagingControlCoordinator.BuildStatusText(page), rows.Length == 0);\n        SetStatus(\"普通\", false);\n    }\n}\n",
+      "期望": [
+        {
+          "行": 5,
+          "规则": "screen-reader-announcement-contract"
+        },
+        {
+          "行": 6,
+          "规则": "screen-reader-announcement-contract"
+        }
+      ]
+    }
+  ]
+}

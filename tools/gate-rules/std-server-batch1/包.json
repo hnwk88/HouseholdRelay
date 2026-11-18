@@ -1,0 +1,85 @@
+﻿{
+  "包名": "std-server-batch1",
+  "版本": "1.0.7",
+  "说明": "标准第一批·服务端（网页与服务端专属）：外键命名、推送边界、事件发布、实体命名、依赖注入入口、仓储方法与分层。原样取自中康规则包，未改判据。",
+  "判据": [
+    {
+      "rule": "check_foreign_key_names_end_with_entity",
+      "标题": "外键名尾部必须是目标实体全名",
+      "配置": "判据/check_foreign_key_names_end_with_entity.json",
+      "正反例": "正反例/check_foreign_key_names_end_with_entity.json",
+      "查什么": "global-only",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    },
+    {
+      "rule": "check_server_signalr_boundary",
+      "标题": "服务端 SignalR 只在集线器与发送方两处",
+      "配置": "判据/check_server_signalr_boundary.json",
+      "正反例": "正反例/check_server_signalr_boundary.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    },
+    {
+      "rule": "check_publisher_only_in_event_processors",
+      "标题": "发布只经领域事件",
+      "配置": "判据/check_publisher_only_in_event_processors.json",
+      "正反例": "正反例/check_publisher_only_in_event_processors.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    },
+    {
+      "rule": "check_entity_naming_contract",
+      "标题": "实体、EF 配置、领域类型与词汇表登记一致",
+      "配置": "判据/check_entity_naming_contract.json",
+      "正反例": "正反例/check_entity_naming_contract.json",
+      "查什么": "global-only",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs",
+        ".json"
+      ]
+    },
+    {
+      "rule": "check_di_registration_entry",
+      "标题": "依赖注入只有一个统一入口，每条注册带中文职责与生命周期原因",
+      "配置": "判据/check_di_registration_entry.json",
+      "正反例": "正反例/check_di_registration_entry.json",
+      "查什么": "global-only",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    },
+    {
+      "rule": "check_repository_no_state_transition",
+      "标题": "仓储不推进状态：不给对象的状态字段赋值",
+      "配置": "判据/check_repository_no_state_transition.json",
+      "正反例": "正反例/check_repository_no_state_transition.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    },
+    {
+      "rule": "check_repository_no_network_or_mapping",
+      "标题": "仓储不碰网络与对象映射",
+      "配置": "判据/check_repository_no_network_or_mapping.json",
+      "正反例": "正反例/check_repository_no_network_or_mapping.json",
+      "查什么": "global-only",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    }
+  ]
+}

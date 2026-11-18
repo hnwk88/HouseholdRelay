@@ -1,0 +1,68 @@
+﻿{
+  "rule": "check_repository_no_network_or_mapping",
+  "守着": [
+    "GZ-S-047"
+  ],
+  "说明": {
+    "护住什么": "仓储只做通用数据搬运，不碰网络（HttpClient、IHttpClientFactory）和对象映射（IMapper）。守的规则：[GZ-S-047]。",
+    "口径": "仓储文件＝src 下文件名以 Repository.cs 结尾的 .cs，按原文找整词，每处一条（注释里写了也报）。",
+    "来源": "中康 zk-architecture 包 check_layer_dependency_boundaries 第一段原样拆出（2026-11-18）；第二段「Helpers 不引用业务项目命名空间」属第二批 check_helpers_no_project_reference。"
+  },
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "bin",
+                "obj"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^src/([^/]+/)*[^/]*Repository\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "禁止写法",
+              "type": "expression",
+              "value": "\\b(?:HttpClient|IHttpClientFactory|IMapper)\\b",
+              "multiline": false
+            }
+          ]
+        },
+        {
+          "step": "emit",
+          "rule": "repository-cross-layer-dependency",
+          "severity": "error",
+          "message": "仓储里出现了 {0}：仓储只做通用数据搬运，不许碰网络与对象映射。",
+          "suggestion": "仓储只依赖持久化基础设施，网络与 DTO 映射放在对应服务层；顶层 Helpers 是可移植通用件，不许引用本工程三个项目的命名空间（GZ-S-047、GZ-S-047）。"
+        }
+      ]
+    }
+  ]
+}

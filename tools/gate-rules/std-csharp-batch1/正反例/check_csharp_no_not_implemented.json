@@ -1,0 +1,29 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/App/Services/ReportService.cs",
+      "内容": "namespace App.Services;\npublic sealed class ReportService\n{\n    public void Export()\n    {\n        throw new NotImplementedException();\n    }\n}\n",
+      "期望": [
+        {
+          "行": 6,
+          "规则": "not-implemented"
+        }
+      ]
+    },
+    {
+      "路径": "src/App/Services/DoneService.cs",
+      "内容": "namespace App.Services;\npublic sealed class DoneService\n{\n    public int Count() => 0;\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/App/Services/CommentOnly.cs",
+      "内容": "namespace App.Services;\n// 以前这里是 throw new NotImplementedException\npublic sealed class CommentOnly { }\n",
+      "期望": [
+        {
+          "行": 2,
+          "规则": "not-implemented"
+        }
+      ]
+    }
+  ]
+}

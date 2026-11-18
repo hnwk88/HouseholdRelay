@@ -1,0 +1,77 @@
+﻿{
+  "rule": "check_server_signalr_boundary",
+  "守着": [
+    "GZ-S-036"
+  ],
+  "说明": {
+    "护住什么": "服务端只有集线器（Hubs）和发送方（Infrastructure/Notification）两处碰 SignalR 的发送面；业务服务要推送只记领域事件，由处理方经发送方接口发出。守的规则：[GZ-S-036]。",
+    "来源": "中康 zk-notification 包同名判据第一段；2026-11-18 改成通用：根从中康 WebAPI 目录改为 src，许可目录按目录名匹配；第二段「全工程禁 Clients.All」按冲突清单乙 23 只给中康，不进标准。2026-11-19：原先只要写了 Clients. 就报，HouseholdRelay 把名叫 Clients 的普通属性（Clients.Authenticate）误报 5 条；改成只认 SignalR 本身：IHubContext、派生 Hub 的类、经集线器变量取的 hub.Clients.。",
+    "为什么不再认裸的 Clients.": "在集线器类里直接写的 Clients. 一定落在 Hub 派生类里，许可目录外的派生类本身已被报出；裸的 Clients. 在别处没有 SignalR 含义。"
+  },
+  "pipeline": [
+    {
+      "step": "selectFiles",
+      "as": "服务端选集",
+      "where": [
+        {
+          "type": "extension",
+          "value": [
+            ".cs"
+          ]
+        },
+        {
+          "type": "root",
+          "value": [
+            "src"
+          ]
+        },
+        {
+          "type": "excludeFolder",
+          "value": [
+            "{scan.ignoredDirectories}"
+          ]
+        },
+        {
+          "type": "excludePath",
+          "value": [
+            "(^|/)Api/Hubs/",
+            "(^|/)Hubs/",
+            "(^|/)Infrastructure/Notification/"
+          ]
+        }
+      ],
+      "至少几个": 1
+    },
+    {
+      "step": "mask",
+      "mode": "csharp"
+    },
+    {
+      "step": "find",
+      "patterns": [
+        {
+          "id": "集线器上下文",
+          "type": "expression",
+          "value": "\\bIHubContext\\b"
+        },
+        {
+          "id": "集线器派生类",
+          "type": "expression",
+          "value": ":\\s*Hub\\b"
+        },
+        {
+          "id": "经集线器取收件范围",
+          "type": "expression",
+          "value": "\\b\\w*[Hh]ub\\w*\\s*\\.\\s*Clients\\s*\\."
+        }
+      ]
+    },
+    {
+      "step": "emit",
+      "rule": "server-signalr-boundary",
+      "severity": "error",
+      "message": "这里直接碰了 SignalR 的发送面（GZ-S-036）：IHubContext、派生 Hub 的类、经集线器取的 Clients. 只许出现在 Hubs 与 Infrastructure/Notification。",
+      "suggestion": "业务里记领域事件，由领域事件处理方调用 Infrastructure/Notification 下的发送方接口按连接号发；不要在服务、控制器或后台任务里直接拿 IHubContext。"
+    }
+  ]
+}

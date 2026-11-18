@@ -1,0 +1,71 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/App.Api/Program.cs",
+      "内容": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddApplication();\nbuilder.Services.AddScoped<IOrderService, OrderService>();\nvar app = builder.Build();\napp.Run();\n",
+      "期望": [
+        {
+          "行": 3,
+          "规则": "di-registration"
+        },
+        {
+          "行": 3,
+          "规则": "di-registration"
+        }
+      ]
+    },
+    {
+      "路径": "src/App.Migration/Program.cs",
+      "内容": "var services = new ServiceCollection();\nservices.AddScoped<IMigrationRunner, MigrationRunner>();\nservices.AddSingleton(TimeProvider.System);\n",
+      "期望": []
+    },
+    {
+      "路径": "src/App.Application/DependencyInjection/ApplicationServiceCollectionExtensions.cs",
+      "内容": "namespace App.Application.DependencyInjection;\n\npublic static class ApplicationServiceCollectionExtensions\n{\n    public static IServiceCollection AddApplication(this IServiceCollection services)\n    {\n        // IPatientService / PatientService：维护患者资料；使用 Scoped，保证一次请求共享同一工作单元。\n        services.AddScoped<IPatientService, PatientService>();\n        // IPatientDemographicOptionResolver：把患者性别解析为业务选项，患者资料维护与接诊共用。\n\n        // Scoped：生命周期必须与当前请求的工作单元一致。\n        services.AddScoped<IPatientDemographicOptionResolver, PatientDemographicOptionResolver>();\n        // ITaskProgressEventChannel / TaskProgressEventChannel：提供进程内任务进度广播；使用 Singleton，保证线程安全事件通道被共享。\n        services.AddSingleton<ITaskProgressEventChannel, TaskProgressEventChannel>();\n        // 无状态格式化器：提供金额格式化；Transient 无状态，每次取新实例。\n        services\n            .AddTransient<IMoneyFormatter, MoneyFormatter>();\n        services.AddScoped<RegistrationOrderInfoSourceHandler>();\n        services.AddScoped<IOrderInfoSourceHandler>(provider => provider.GetRequiredService<RegistrationOrderInfoSourceHandler>());\n        // services.AddScoped<ICommentedService, CommentedService>();\n        services.AddScoped<IDepartmentService, DepartmentService>(); // 维护科室；Scoped 保证一次请求\n        services.AddScoped<IStaffMemberService, StaffMemberService>();\n        // IClinicProfileService / ClinicProfileService：维护诊所资料。\n        services.AddScoped<IClinicProfileService, ClinicProfileService>();\n        // ITimeSource / TimeSource：提供系统时钟；使用 Scoped，保证一次请求内时间一致。\n        services.AddSingleton<ITimeSource, TimeSource>();\n        return services;\n    }\n}\n",
+      "期望": [
+        {
+          "行": 21,
+          "规则": "di-comment"
+        },
+        {
+          "行": 22,
+          "规则": "di-comment"
+        },
+        {
+          "行": 24,
+          "规则": "di-comment"
+        },
+        {
+          "行": 26,
+          "规则": "di-comment",
+          "说了": "Singleton"
+        }
+      ]
+    },
+    {
+      "路径": "src/App.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs",
+      "内容": "namespace I;\n\npublic static class InfrastructureServiceCollectionExtensions\n{\n    public static void Add(IServiceCollection services)\n    {\n        services.AddScoped<IClock, SystemClock>();\n        services.TryAddScoped<IFooService, FooService>();\n        // services.AddScoped<IBarService, BarService>();\n    }\n}\n",
+      "期望": [
+        {
+          "行": 7,
+          "规则": "di-comment"
+        }
+      ]
+    },
+    {
+      "路径": "src/App.Application/Services/ServiceBootstrapper.cs",
+      "内容": "namespace A;\n\npublic static class ServiceBootstrapper\n{\n    public static void Add(IServiceCollection services)\n    {\n        services.AddScoped<IPatientService, PatientService>();\n        services.AddTransient<Application.Interfaces.IInsuranceOperationCoordinator, Application.Services.InsuranceOperationCoordinator>();\n    }\n}\n",
+      "期望": [
+        {
+          "行": 7,
+          "规则": "di-registration",
+          "说了": "PatientService"
+        },
+        {
+          "行": 8,
+          "说了": "InsuranceOperationCoordinator"
+        }
+      ]
+    }
+  ]
+}

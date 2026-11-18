@@ -1,0 +1,16 @@
+﻿{
+  "说明": "这个工程从引擎目录里选用了哪几条门禁。随发布的那几条接入就有，不写在这里。只经 catalog adopt / catalog drop 改。",
+  "选用": [
+    "check_atomic_local_data_write",
+    "check_chinese_reply_hook",
+    "check_csharp_naming_audit",
+    "check_edit_control_access_keys",
+    "check_enforced_rule_landing",
+    "check_gate_hook_allowlist",
+    "check_knowledge_index",
+    "check_list_double_click_keyboard_entry",
+    "check_reviews_index",
+    "check_winforms_multiline_textbox_max_length"
+  ],
+  "内置判据": []
+}

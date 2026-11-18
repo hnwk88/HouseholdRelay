@@ -1,0 +1,33 @@
+﻿{
+  "解法": "逐项核对",
+  "rule": "check_chinese_reply_hook",
+  "诊断标识": "chinese-reply-hook",
+  "在哪": [
+    {
+      "路径": ".claude/settings.json"
+    }
+  ],
+  "怎么看": "正则",
+  "视图": "原文",
+  "必须解析得动": "JSON 对象",
+  "说明": {
+    "护住什么": "守的规则：[LC-079] 回复全中文：回复挂点要在 PreToolUse 与 Stop 两个时机都装着；中文判据本身在 reply.chinese。人要知道的见在场文档 LC-101。",
+    "必须解析得动是为了什么": "这一格挡的是一种静默全绿：下面那两条按正则找标记，而**正则在坏掉的 JSON 上照样找得到标记**。可那份文件的语法一坏，Claude Code 根本不加载它，挂点当场失效，门禁却报 0 问题。加上这一格，语法坏了会报在坏掉那一行。"
+  },
+  "严重度": "error",
+  "文案": {
+    "缺了": "{1} 里没有装上回复挂点：{0}",
+    "解析不动": ".claude/settings.json 解析不动，Claude Code 不会加载它，回复挂点当场失效：{原因}",
+    "建议": "回复挂点由门禁引擎的安装命令装：在工程根运行 GateAnalysisHost.exe install --levels L0,L1，PreToolUse 上装 reply（检查每次工具调用前刚输出的那一段），Stop 上装 reply-end（回合末尾兜底整回合正文）；判据在 tools/gate-pipelines/reply.*.json，门禁管理里按格子改。只挂 Stop 不成立——2026-09-02 实测，一整轮连续二十多次工具调用中间它一次都不会运行，用户中途打断时它永远没有机会跑。"
+  },
+  "必须有": [
+    {
+      "找": "\"PreToolUse\"((?!\"Stop\")[\\s\\S])*?GateAnalysisHost(\\.exe)? reply --host claude",
+      "缺了说": "{1} 的 PreToolUse 时机上没有装回复挂点（GateAnalysisHost reply --host claude）。"
+    },
+    {
+      "找": "\"Stop\"[\\s\\S]*?GateAnalysisHost(\\.exe)? reply-end --host claude",
+      "缺了说": "{1} 的 Stop 时机上没有装回复挂点（GateAnalysisHost reply-end --host claude）。"
+    }
+  ]
+}

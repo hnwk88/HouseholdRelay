@@ -1,0 +1,75 @@
+﻿{
+  "rule": "check_csharp_no_not_implemented",
+  "说明": {
+    "护住什么": "交付的代码里不许留 throw new NotImplementedException：要么实现，要么删掉不可达分支。",
+    "来源": "中康 tools/gate-pipelines/check_csharp_blocking_patterns.json 第 1 段原样拆出；2026-11-18 把中康迁移目录例外改成选文件时跳过任意 Migrations 目录（EF 生成文件）。"
+  },
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "Migrations"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "split",
+          "by": "lines"
+        },
+        {
+          "combinator": "forEach",
+          "each": "行",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "contains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "throw new NotImplementedException"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "not-implemented",
+                  "severity": "error",
+                  "message": "发现未实现异常残留。",
+                  "suggestion": "实现该分支，或删除不可达代码；不能把未实现路径留到收尾认证之后。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

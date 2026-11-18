@@ -1,0 +1,32 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/CleanEditWindow.xaml",
+      "内容": "<Window>\n    <StackPanel>\n        <Button x:Name=\"SaveButton\" Content=\"保存(_S)\" />\n        <Button x:Name=\"CancelButton\" Content=\"取消(_X)\" IsCancel=\"True\" />\n    </StackPanel>\n</Window>\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/DefaultButtonWindow.xaml",
+      "内容": "<Window>\n    <StackPanel>\n        <Button x:Name=\"SaveButton\" Content=\"保存(_S)\" IsDefault=\"True\" />\n        <Button x:Name=\"CancelButton\" Content=\"取消(_X)\" IsCancel=\"True\" />\n    </StackPanel>\n</Window>\n",
+      "期望": [
+        {
+          "行": 3
+        }
+      ]
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/LowerCaseWindow.xaml",
+      "内容": "<Window>\n    <Button x:Name=\"OkButton\"\n            IsDefault=\"true\" />\n</Window>\n",
+      "期望": [
+        {
+          "行": 3
+        }
+      ]
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/Elsewhere.cs",
+      "内容": "// IsDefault=\"True\" 写在代码注释里不归本条管。\n",
+      "期望": []
+    }
+  ]
+}

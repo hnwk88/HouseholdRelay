@@ -1362,6 +1362,7 @@
     }
   ],
   "说明": {
+    "护住什么": "守的规则：集合控件的行容器要有无障碍名称（原 AGENTS.md@539101d9 第 172 行）。人要知道、本门禁不判的部分见台账工程规则 L161。",
     "显式样式 TextBlock 两段为什么带条件": "这两段的前提是工程里有一份全局隐式 TextBlock 样式把可见文字同步成 UIA 名称（MyCoAI 在 Accessibility/AccessibilityResources.xaml），显式 Style 会让 TextBlock 拿不到它。没有这份隐式样式的工程（2026-10-06 实测 SBT、ZK、ClassGenerator 都没有）前提不成立，这两段不查。A0cf 阶段二做成四个工程共用时加的条件，判据本身一字未改。"
   }
 }

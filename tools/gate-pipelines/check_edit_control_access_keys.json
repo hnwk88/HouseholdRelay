@@ -1,0 +1,47 @@
+﻿{
+  "解法": "按 XAML 树看",
+  "rule": "check_edit_control_access_keys",
+  "诊断标识": "wpf-edit-control-access-key",
+  "守着": [
+    "GZ-W-169",
+    "GZ-W-005"
+  ],
+  "说明": {
+    "护住什么": "守的规则：[GZ-W-169] 编辑框一律不配 Alt 助记符。人要知道、本门禁不判的部分见台账工程规则 L212。 编辑框一律不配 Alt 助记符（GZ-W-169，用户 2026-08-28 明确要求的硬约束）：凡是 Target 指向 TextBox 或 PasswordBox 的 Label，Content 里不得出现 (_X)；ComboBox、CheckBox、Button、菜单项不在此列。",
+    "从哪来": "A0cf 阶段五：原先是内置 C# 判据 EditControlAccessKeysVerdict（D-071 只许删）。改写成配置，用「按 XAML 树看」新加的取值「指向」（标签的 Target 指着的是什么控件），按 XML 树认，注释掉的控件不参与、成对写法的 Label 也查得到、x:Name 与 Name 都认。",
+    "例外": "原先登记在 tools/access-key-scopes.json 的 editControlAccessKeyExceptions（今天是空的）；今后确实要例外，由用户提出，写进这条门禁自己的「例外」。",
+    "比旧判据少认的一种写法": "旧判据认 ElementName 等号两边带空格的写法（ElementName = 框），这一份不认；四个工程的界面里 0 处这样写。"
+  },
+  "在哪": [
+    {
+      "正则": "^(?:src|tests|tools)/.+\\.xaml$"
+    }
+  ],
+  "排除": [
+    {
+      "正则": "/(bin|obj)/"
+    }
+  ],
+  "看哪些元素": [
+    "Label"
+  ],
+  "只看": [
+    {
+      "找": "指向",
+      "哪个": "Target",
+      "含正则": "^(?:TextBox|PasswordBox)$"
+    }
+  ],
+  "严重度": "error",
+  "不许有": [
+    {
+      "找": "属性",
+      "哪个": "Content",
+      "含正则": "\\(_[A-Za-z]\\)",
+      "有了说": "{文件} 第 {行} 行：编辑框标签 `{找到的值}` 带了 Alt 助记符。"
+    }
+  ],
+  "文案": {
+    "建议": "编辑框一律不配助记符（GZ-W-169）：去掉 Content 里的 `(_X)`，但必须保留 Target 和 SyncTargetName，否则读屏就念不出这个框是干什么的。确实需要例外时，由用户提出并写进这条门禁配置的「例外」。"
+  }
+}

@@ -1,0 +1,55 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Infrastructure/Persistence/Configurations/StaffAccountConfiguration.cs",
+      "内容": "namespace C;\n\ninternal sealed class StaffAccountConfiguration : IEntityTypeConfiguration<StaffAccount> { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Infrastructure/Persistence/Configurations/PatientConfiguration.cs",
+      "内容": "namespace C;\n\ninternal sealed class PatientConfiguration : IEntityTypeConfiguration<Patient> { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Infrastructure/Persistence/Configurations/PrescriptionInfoConfiguration.cs",
+      "内容": "using PrescriptionInfoEntity = Z.Domain.Prescription.PrescriptionInfo;\n\nnamespace C;\n\ninternal sealed class PrescriptionInfoConfiguration : IEntityTypeConfiguration<PrescriptionInfoEntity> { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Infrastructure/Persistence/Migrations/OldConfiguration.cs",
+      "内容": "namespace M;\n\nclass OldConfiguration : IEntityTypeConfiguration<Doctor> { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Domain/Billing/OrderInfo.cs",
+      "内容": "namespace D;\n\npublic sealed class OrderInfo\n{\n    public long Id { get; set; }\n    public long PatientId { get; set; }\n    public long? CreatedByStaffAccountId { get; set; }\n    public long PrescriptionInfoId { get; set; }\n    public long DoctorId { get; set; }\n    public long OperatorId { get; set; }\n    public long LegacyDoctorId { get; set; }\n    public long GenderId { get; set; }\n    public long CategoryId { get; set; }\n    public long PatientGenderId { get; set; }\n    // public long CommentOnlyId { get; set; }\n    public string ExternalId { get; set; } = \"\";\n}\n",
+      "期望": [
+        {
+          "行": 9,
+          "规则": "foreign-key-missing-entity-root"
+        },
+        {
+          "行": 10
+        },
+        {
+          "行": 14
+        }
+      ]
+    },
+    {
+      "路径": "src/Core/Usage/UsageRecord.cs",
+      "内容": "namespace Core;\n\npublic sealed class UsageRecord\n{\n    public long PatientId { get; set; }\n    public long UpstreamId { get; set; }\n}\n",
+      "期望": [
+        {
+          "行": 6,
+          "规则": "foreign-key-missing-entity-root"
+        }
+      ]
+    },
+    {
+      "路径": "src/Infrastructure/Core/Cache/CacheEntry.cs",
+      "内容": "namespace Infra;\n\npublic sealed class CacheEntry\n{\n    public long UpstreamId { get; set; }\n}\n",
+      "期望": []
+    }
+  ]
+}

@@ -1,0 +1,308 @@
+﻿{
+  "rule": "check_knowledge_index",
+  "例外": [],
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "角色": "参照",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".md"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "docs/KnowledgeBase"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^docs/KnowledgeBase/[^/]+/README[.]md$"
+              ]
+            }
+          ],
+          "as": "索引里的链接",
+          "至少几个": 1
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "索引链接",
+              "type": "expression",
+              "value": "\\(([^)]+\\.md)\\)"
+            }
+          ]
+        },
+        {
+          "step": "function",
+          "name": "跨文件事实集合",
+          "arguments": [
+            {
+              "name": "来源",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "键",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "捕获1"
+              ]
+            }
+          ],
+          "as": "索引里登记的"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "as": "目录里有的文章选集",
+          "角色": "参照",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".md"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "docs/KnowledgeBase"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "function",
+          "name": "跨文件事实集合",
+          "arguments": [
+            {
+              "name": "来源",
+              "kind": "SpanList",
+              "source": "stream"
+            },
+            {
+              "name": "键",
+              "kind": "SpanList",
+              "source": "literal",
+              "value": [
+                "文件名"
+              ]
+            }
+          ],
+          "as": "目录里有的"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "as": "要登记的文章选集",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".md"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "docs/KnowledgeBase"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            },
+            {
+              "type": "excludePath",
+              "value": [
+                "(^|/)README\\.md$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "combinator": "forEach",
+          "each": "正文",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "function",
+                  "name": "跨文件事实集合",
+                  "arguments": [
+                    {
+                      "name": "来源",
+                      "kind": "SpanList",
+                      "source": "stream"
+                    },
+                    {
+                      "name": "键",
+                      "kind": "SpanList",
+                      "source": "literal",
+                      "value": [
+                        "文件名"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "step": "assert",
+                  "predicate": "notIn",
+                  "values": [
+                    {
+                      "type": "from",
+                      "value": "索引里登记的"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "knowledge-index",
+                  "severity": "error",
+                  "message": "知识文章未收录到目录。",
+                  "suggestion": "把这一篇按现有格式登记进知识目录的链接清单：一行一条，写成 [标题](文件名.md)，顺序与目录里的正文一致。目录与正文双向求差，少登记一篇和多登记一条都会被这条门禁报出来。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "角色": "参照",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".md"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "docs/KnowledgeBase"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^docs/KnowledgeBase/[^/]+/README[.]md$"
+              ]
+            }
+          ],
+          "as": "索引里的链接（查点空）",
+          "至少几个": 1
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "索引链接",
+              "type": "expression",
+              "value": "\\(([^)]+\\.md)\\)"
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "链接",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "function",
+                  "name": "跨文件事实集合",
+                  "arguments": [
+                    {
+                      "name": "来源",
+                      "kind": "SpanList",
+                      "source": "stream"
+                    },
+                    {
+                      "name": "键",
+                      "kind": "SpanList",
+                      "source": "literal",
+                      "value": [
+                        "捕获1"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "step": "assert",
+                  "predicate": "notIn",
+                  "values": [
+                    {
+                      "type": "from",
+                      "value": "目录里有的"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "knowledge-index",
+                  "severity": "error",
+                  "message": "知识目录指向不存在的文章：{1}",
+                  "suggestion": "索引里这条链接指的文章不在这个目录下：正文改名了就同步改链接，正文删了就把这一条也删掉。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "说明": {
+    "知识库目录为什么写成通用的": "知识库根写 docs/KnowledgeBase、索引认 docs/KnowledgeBase/某目录/README.md；本工程自己那一个以外的知识库目录（别的工程拷来的）写在各工程自己的「例外」里，点名四个选文件步骤。这样各工程这份判据一字不差，工程名只出现在例外里（A0ck）。"
+  }
+}

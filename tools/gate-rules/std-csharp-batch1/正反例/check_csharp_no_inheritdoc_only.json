@@ -1,0 +1,24 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/App/Services/OrderService.cs",
+      "内容": "namespace App.Services;\npublic sealed class OrderService : IOrderService\n{\n    /// <inheritdoc />\n    public void Submit() { }\n}\n",
+      "期望": [
+        {
+          "行": 4,
+          "规则": "inheritdoc-summary"
+        }
+      ]
+    },
+    {
+      "路径": "src/App/Services/GoodService.cs",
+      "内容": "namespace App.Services;\n/// <summary>负责提交订单。</summary>\npublic sealed class GoodService\n{\n    /// <summary>提交订单；重复提交时直接返回。</summary>\n    public void Submit() { }\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/App/Migrations/20261118_Init.cs",
+      "内容": "namespace App.Migrations;\npublic partial class Init\n{\n    /// <inheritdoc />\n    protected void Up() { }\n}\n",
+      "期望": []
+    }
+  ]
+}

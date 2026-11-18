@@ -2,6 +2,37 @@
   "schemaVersion": 1,
   "projectName": "HouseholdRelay",
   "cacheDirectory": ".gate-cache",
+  "scan": {
+    "roots": [
+      "src",
+      "tests",
+      "tools",
+      "docs"
+    ],
+    "extensions": [
+      ".cs",
+      ".xaml",
+      ".cshtml",
+      ".js",
+      ".cjs",
+      ".css",
+      ".html",
+      ".py",
+      ".json",
+      ".md",
+      ".ps1"
+    ],
+    "ignoredDirectories": [
+      "bin",
+      "obj",
+      ".git",
+      "artifacts",
+      "__pycache__",
+      "publish",
+      ".vs",
+      "node_modules"
+    ]
+  },
   "levels": {
     "L0": {
       "enabled": true,
@@ -23,5 +54,10 @@
       "budgetSeconds": null,
       "blocking": true
     }
+  },
+  "rules": {
+    "textFiles": [
+      "门禁认领编号.md"
+    ]
   }
 }

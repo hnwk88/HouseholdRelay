@@ -1,0 +1,46 @@
+﻿{
+  "解法": "按语法树看",
+  "rule": "check_publisher_only_in_event_processors",
+  "守着": [
+    "GZ-S-035"
+  ],
+  "诊断标识": "notification-publisher-outside-event-processor",
+  "说明": {
+    "护住什么": "[GZ-S-035]：只在提交后经领域事件发布。INotificationPublisher 只许被 IDomainEventProcessor<> 的实现引用（另有组合根登记、接口本身与 SignalR 实现）；业务服务直接调发布器，通知就可能发在提交之前或回滚之后。\n守的规则：[GZ-S-035] 通知发布器只许被领域事件处理方引用。",
+    "怎么判": "按语法树取每个顶层类型，正文里出现 INotificationPublisher、却没有 IDomainEventProcessor< 的就报（正文含基类列表）。",
+    "为什么按目录排除而不进例外": "组合根、接口文件与 SignalR 实现是规则原文点名的许可位置，这是判据的定义。"
+  },
+  "在哪": [
+    {
+      "正则": "^src/.+\\.cs$"
+    }
+  ],
+  "排除": [
+    {
+      "正则": "/(bin|obj)/"
+    },
+    {
+      "正则": "(^|/)I\\w*NotificationPublisher\\.cs$"
+    },
+    {
+      "正则": "(^|/)Infrastructure/Notification/"
+    },
+    {
+      "正则": "(^|/)DependencyInjection/[^/]*Services?CollectionExtensions\\.cs$"
+    }
+  ],
+  "看哪种节点": "顶层类型",
+  "跳过生成代码": true,
+  "严重度": "error",
+  "不许有": [
+    {
+      "找": "正文",
+      "含正则": "^(?=[\\s\\S]*\\bINotificationPublisher\\b)(?![\\s\\S]*\\bIDomainEventProcessor\\s*<)"
+    }
+  ],
+  "文案": {
+    "有了": "{文件} 第 {行} 行的 {节点} 引用了 INotificationPublisher，却不是领域事件处理方（[GZ-S-035]：只在提交后经领域事件发布）。",
+    "缺了": "{文件} 第 {行} 行的 {节点}：INotificationPublisher 只许被 IDomainEventProcessor<> 的实现引用。",
+    "建议": "业务里在实体上记领域事件（BaseEntity.AddDomainEvent），写一个 IDomainEventProcessor<该事件> 去调发布器；工作单元在最外层提交成功后才分发。"
+  }
+}

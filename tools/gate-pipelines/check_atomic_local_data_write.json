@@ -1,0 +1,222 @@
+﻿{
+  "rule": "check_atomic_local_data_write",
+  "例外": [
+    {
+      "路径": "src/GateEngineCore/GateEventStore.cs",
+      "理由": "门禁引擎自己的运行记录存取，写的是工程里的 artifacts/gate-reports，不是用户本地数据；它在引擎库 GateEngineCore 里，规则开的补救 AtomicLocalDataFile 在上层 Infrastructure，引用不到（A0bx，用户 2026-10-05 定两层豁免）。"
+    },
+    {
+      "路径": "src/MyCoAI/Settings/DesktopSettingsStore.cs",
+      "理由": "已登记的原子写入者：自己先写同目录临时文件再 File.Move 覆盖，与 AtomicLocalDataFile 同一做法（原先硬写在判据的 excludePath 里，A0bx 挪到这里）。"
+    },
+    {
+      "路径": "src/Infrastructure/Auth/AccountVaultStore.cs",
+      "理由": "已登记的原子写入者：临时文件写完先读回校验，再 File.Replace 带备份替换（原先硬写在判据的 excludePath 里，A0bx 挪到这里）。"
+    },
+    {
+      "路径": "src/Infrastructure/Auth/AccountNativeJsonFileStore.cs",
+      "理由": "已登记的原子写入者：临时文件写完先校验是 JSON 对象，再 File.Replace 带备份替换（原先硬写在判据的 excludePath 里，A0bx 挪到这里）。"
+    },
+    {
+      "路径": "src/Infrastructure/ClaudeConfigFiles/ClaudeCodeUserSettingsStore.cs",
+      "理由": "已登记的原子写入者：写的是 Claude Code 自己的设置文件，异步写临时文件再 File.Move 覆盖（原先硬写在判据的 excludePath 里，A0bx 挪到这里）。"
+    }
+  ],
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "^src/([^/]+/)*[^/]*Store\\.cs$"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "截断写入",
+              "type": "expression",
+              "value": "^(?!\\s*(?://|\\*))(?!.*AtomicLocalDataFile\\.).*(?<![\\w])File\\.WriteAll(?:Text|Bytes|Lines)\\(",
+              "multiline": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "命中",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "scope",
+                  "of": "window",
+                  "forwardLines": 2
+                },
+                {
+                  "step": "assert",
+                  "predicate": "not",
+                  "clauses": [
+                    {
+                      "predicate": "contains",
+                      "values": [
+                        {
+                          "type": "expression",
+                          "value": "temporaryPath|TemporaryPath|tempPath"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "atomic-local-data-write",
+                  "severity": "error",
+                  "message": "用户本地数据的存储类直接用会截断目标的写入 API 整份覆盖文件。",
+                  "suggestion": "改用 Infrastructure.Storage.AtomicLocalDataFile.WriteAllText：先写同目录临时文件再 File.Move(overwrite: true)。裸写会先截断再写，中断点落在中间就留下半截文件，而读侧通常把损坏当成空数据，下一次保存就把空内容永久写回去。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}"
+              ]
+            },
+            {
+              "type": "excludePath",
+              "value": [
+                "^src/([^/]+/)*[^/]*Store\\.cs$"
+              ]
+            }
+          ]
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "截断写入",
+              "type": "expression",
+              "value": "^(?!\\s*(?://|\\*))(?!.*AtomicLocalDataFile\\.).*(?<![\\w])File\\.WriteAll(?:Text|Bytes|Lines)\\(",
+              "multiline": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "命中",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "scope",
+                  "of": "file"
+                },
+                {
+                  "step": "assert",
+                  "predicate": "contains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "LocalApplicationData"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "combinator": "if",
+                  "condition": [
+                    {
+                      "step": "scope",
+                      "of": "window",
+                      "forwardLines": 2
+                    },
+                    {
+                      "step": "assert",
+                      "predicate": "not",
+                      "clauses": [
+                        {
+                          "predicate": "contains",
+                          "values": [
+                            {
+                              "type": "expression",
+                              "value": "temporaryPath|TemporaryPath|tempPath"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "then": [
+                    {
+                      "step": "emit",
+                      "rule": "atomic-local-data-write",
+                      "severity": "error",
+                      "message": "用户本地数据的存储类直接用会截断目标的写入 API 整份覆盖文件。",
+                      "suggestion": "改用 Infrastructure.Storage.AtomicLocalDataFile.WriteAllText：先写同目录临时文件再 File.Move(overwrite: true)。裸写会先截断再写，中断点落在中间就留下半截文件，而读侧通常把损坏当成空数据，下一次保存就把空内容永久写回去。"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "说明": {
+    "护住什么": "守的规则：[GZ-T-044] 设置文件一律经原子写，不许截断写。人要知道、本门禁不判的部分见台账工程规则 GZ-T-044。",
+    "File 前面不许紧挨标识符字符": "AtomicFile.WriteAllBytes（引擎自己的原子写）里正好含着 File.WriteAllBytes，原先按文本认成了裸写；现在 File 前面紧挨字母数字下划线的不算，System.IO.File. 这种带点的照认（A0cl）。"
+  }
+}

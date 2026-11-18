@@ -1,0 +1,29 @@
+﻿{
+  "包名": "std-csharp-batch1",
+  "版本": "1.0.1",
+  "说明": "标准第一批·C#（C# 与 WPF 专属）：由中康 check_csharp_blocking_patterns 前两段拆出的两条。",
+  "判据": [
+    {
+      "rule": "check_csharp_no_inheritdoc_only",
+      "标题": "C# 实现处不许只写 inheritdoc，要写中文 summary",
+      "配置": "判据/check_csharp_no_inheritdoc_only.json",
+      "正反例": "正反例/check_csharp_no_inheritdoc_only.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    },
+    {
+      "rule": "check_csharp_no_not_implemented",
+      "标题": "C# 代码不许留未实现异常",
+      "配置": "判据/check_csharp_no_not_implemented.json",
+      "正反例": "正反例/check_csharp_no_not_implemented.json",
+      "查什么": "file-local",
+      "建议级别": "L1",
+      "关心后缀": [
+        ".cs"
+      ]
+    }
+  ]
+}

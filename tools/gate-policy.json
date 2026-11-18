@@ -46,7 +46,7 @@
           "cacheMode": "reuse"
         },
         "legacy.householdrelay.check_csharp_blocking_patterns": {
-          "enabled": true,
+          "enabled": false,
           "severity": "error",
           "failureAction": "warn",
           "parameters": {},
@@ -178,7 +178,7 @@
           "cacheMode": "reuse"
         },
         "legacy.householdrelay.check_csharp_blocking_patterns": {
-          "enabled": true,
+          "enabled": false,
           "severity": "error",
           "failureAction": "warn",
           "parameters": {},
@@ -248,6 +248,213 @@
           "sourceScope": "changed",
           "timeoutSeconds": 900,
           "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_foreign_key_names_end_with_entity": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_server_signalr_boundary": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_publisher_only_in_event_processors": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_entity_naming_contract": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_di_registration_entry": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_repository_no_state_transition": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_repository_no_network_or_mapping": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-csharp-batch1.check_csharp_no_inheritdoc_only": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-csharp-batch1.check_csharp_no_not_implemented": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-wpf-batch1.check_form_button_no_is_default": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-wpf-batch1.check_status_announcement_scenarios": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-wpf-batch1.check_speech_only_in_speech_department": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-wpf-batch1.check_window_hub_connection_boundary": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_atomic_local_data_write": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_chinese_reply_hook": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_naming_audit": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_edit_control_access_keys": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_enforced_rule_landing": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_gate_hook_allowlist": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_knowledge_index": {
+          "enabled": false,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_list_double_click_keyboard_entry": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_reviews_index": {
+          "enabled": false,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_winforms_multiline_textbox_max_length": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
         }
       },
       "budgetSeconds": 60.0,
@@ -310,7 +517,7 @@
           "cacheMode": "reuse"
         },
         "legacy.householdrelay.check_csharp_blocking_patterns": {
-          "enabled": true,
+          "enabled": false,
           "severity": "error",
           "failureAction": "block",
           "parameters": {},
@@ -442,7 +649,7 @@
           "cacheMode": "reuse"
         },
         "legacy.householdrelay.check_csharp_blocking_patterns": {
-          "enabled": true,
+          "enabled": false,
           "severity": "error",
           "failureAction": "block",
           "parameters": {},
@@ -505,6 +712,222 @@
           "cacheMode": "reuse"
         },
         "legacy.householdrelay.check_temporary_markers": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_foreign_key_names_end_with_entity": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_server_signalr_boundary": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_publisher_only_in_event_processors": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_entity_naming_contract": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_di_registration_entry": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_repository_no_state_transition": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-server-batch1.check_repository_no_network_or_mapping": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-csharp-batch1.check_csharp_no_inheritdoc_only": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-csharp-batch1.check_csharp_no_not_implemented": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-wpf-batch1.check_form_button_no_is_default": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-wpf-batch1.check_status_announcement_scenarios": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-wpf-batch1.check_speech_only_in_speech_department": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.std-wpf-batch1.check_window_hub_connection_boundary": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_atomic_local_data_write": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_chinese_reply_hook": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_csharp_naming_audit": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_edit_control_access_keys": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_enforced_rule_landing": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_gate_hook_allowlist": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_knowledge_index": {
+          "enabled": false,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_list_double_click_keyboard_entry": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_reviews_index": {
+          "enabled": false,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "legacy.householdrelay.check_winforms_multiline_textbox_max_length": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "task.compile": {
           "enabled": true,
           "severity": "error",
           "failureAction": "block",

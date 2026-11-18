@@ -1,0 +1,29 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Application/Services/Notification/GoodHandler.cs",
+      "内容": "namespace Server;\n\npublic sealed class GoodHandler : IDomainEventProcessor<OrderItemPaid>\n{\n    private readonly INotificationPublisher _publisher;\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Application/Services/Billing/BadService.cs",
+      "内容": "namespace Server;\n\npublic sealed class BadService\n{\n    private readonly INotificationPublisher _publisher;\n    public Task Pay() => _publisher.PublishAsync(null!);\n}\n",
+      "期望": [
+        {
+          "行": 3,
+          "规则": "notification-publisher-outside-event-processor"
+        }
+      ]
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Infrastructure/Notification/SignalRNotificationPublisher.cs",
+      "内容": "namespace Server;\n\npublic sealed class SignalRNotificationPublisher : INotificationPublisher\n{\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Application/Services/Billing/Unrelated.cs",
+      "内容": "namespace Server;\n\npublic sealed class Unrelated\n{\n    public int Count => 1;\n}\n",
+      "期望": []
+    }
+  ]
+}

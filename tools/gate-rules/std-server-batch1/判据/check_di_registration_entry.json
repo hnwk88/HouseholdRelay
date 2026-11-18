@@ -1,0 +1,601 @@
+﻿{
+  "rule": "check_di_registration_entry",
+  "守着": [
+    "GZ-S-046",
+    "GZ-W-127"
+  ],
+  "说明": {
+    "护住什么": "主程序只做组合根、业务服务在各层登记扩展方法里注册；每条生命周期注册旁有中文职责与生命周期原因。守的规则：[GZ-S-046] 注册收进统一的登记扩展方法；[GZ-W-130] 各层用登记扩展方法登记自己；[GZ-W-127] DI 注册上方写职责、生命周期、原因。",
+    "来源": "中康 zk-architecture 包同名判据；2026-11-18 改成通用：删去中康主程序只调 AddZkMedicalSystemWebApi、统一注册文件必须存在三段；允许位置从中康单一文件放宽为各层 DependencyInjection/*ServiceCollectionExtensions.cs（台账 GZ-W-130 定的是各层各自登记）。"
+  },
+  "pipeline": [
+    {
+      "step": "解法",
+      "解法": "按语法树看",
+      "rule": "check_di_registration_entry",
+      "诊断标识": "di-registration",
+      "在哪": [
+        {
+          "正则": "^src/(?:.*/)?Program\\.cs$"
+        }
+      ],
+      "看哪种节点": "调用",
+      "名字是": [
+        "AddScoped",
+        "AddTransient",
+        "AddSingleton",
+        "AddAutoMapper"
+      ],
+      "这份文件里有": [
+        {
+          "找": "名字",
+          "含正则": "^CreateBuilder$"
+        }
+      ],
+      "不许有": [
+        {
+          "找": "名字"
+        }
+      ],
+      "文案": {
+        "有了": "{文件} 第 {行} 行在 Program.cs 里直接调用 {节点}：主程序只做组合根，业务注册放进各层的登记扩展方法（GZ-W-130、GZ-S-046）。",
+        "建议": "主程序只调用各层的登记扩展方法（如 AddApplication、AddInfrastructure），业务服务在各层 DependencyInjection/*ServiceCollectionExtensions.cs 里注册；每条 AddScoped／AddSingleton／AddTransient 前面紧挨着写中文说明：业务职责，以及选这个生命周期的原因（GZ-S-046、GZ-W-130、GZ-W-127）。"
+      }
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "bin",
+                "obj"
+              ]
+            },
+            {
+              "type": "excludePath",
+              "value": [
+                "(^|/)DependencyInjection/[^/]*Services?CollectionExtensions\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "mask",
+          "mode": "csharp"
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "禁止写法",
+              "type": "expression",
+              "value": "\\bAdd(?:Scoped|Singleton|Transient)\\s*<\\s*(?:[\\w.]+\\.)?I(\\w+(?:Service|Coordinator))\\s*,\\s*(?:[\\w.]+\\.)?\\1\\s*>",
+              "multiline": false
+            }
+          ]
+        },
+        {
+          "step": "emit",
+          "rule": "di-registration",
+          "severity": "error",
+          "message": "业务服务 {1} 在登记扩展方法以外注册：业务 Service／Coordinator 只能在各层 DependencyInjection/*ServiceCollectionExtensions.cs 里注册（GZ-S-046、GZ-W-130）。",
+          "suggestion": "主程序只调用各层的登记扩展方法（如 AddApplication、AddInfrastructure），业务服务在各层 DependencyInjection/*ServiceCollectionExtensions.cs 里注册；每条 AddScoped／AddSingleton／AddTransient 前面紧挨着写中文说明：业务职责，以及选这个生命周期的原因（GZ-S-046、GZ-W-130、GZ-W-127）。"
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "(^|/)DependencyInjection/[^/]*Services?CollectionExtensions\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "两参注册",
+              "type": "expression",
+              "value": "(?<=((?:^[ \\t]*(?://[^\\n]*)?\\r?\\n)*)^[ \\t]*(?:\\w+[ \\t]*\\r?\\n[ \\t]*)?)(?:\\w+)?\\.AddScoped\\s*<(?=[^;(]*,)",
+              "multiline": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "注册",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "scope",
+                  "of": "capture",
+                  "capture": 1
+                },
+                {
+                  "step": "assert",
+                  "predicate": "not",
+                  "clauses": [
+                    {
+                      "predicate": "all",
+                      "clauses": [
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "维护"
+                            },
+                            {
+                              "type": "text",
+                              "value": "查询"
+                            },
+                            {
+                              "type": "text",
+                              "value": "处理"
+                            },
+                            {
+                              "type": "text",
+                              "value": "负责"
+                            },
+                            {
+                              "type": "text",
+                              "value": "协调"
+                            },
+                            {
+                              "type": "text",
+                              "value": "校验"
+                            },
+                            {
+                              "type": "text",
+                              "value": "提供"
+                            },
+                            {
+                              "type": "text",
+                              "value": "执行"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "Scoped",
+                              "ignoreCase": true
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "原因"
+                            },
+                            {
+                              "type": "text",
+                              "value": "保证"
+                            },
+                            {
+                              "type": "text",
+                              "value": "确保"
+                            },
+                            {
+                              "type": "text",
+                              "value": "共享"
+                            },
+                            {
+                              "type": "text",
+                              "value": "无状态"
+                            },
+                            {
+                              "type": "text",
+                              "value": "线程"
+                            },
+                            {
+                              "type": "text",
+                              "value": "生命周期"
+                            },
+                            {
+                              "type": "text",
+                              "value": "一次请求"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "di-comment",
+                  "severity": "error",
+                  "message": "这条 AddScoped 注册前面缺少合格的中文说明：紧挨着的注释要写清业务职责（维护／查询／处理／负责／协调／校验／提供／执行 之一）、写出 Scoped 并说明选它的原因（原因／保证／确保／共享／无状态／线程／生命周期／一次请求 之一）（GZ-W-127）。",
+                  "suggestion": "主程序只调用各层的登记扩展方法（如 AddApplication、AddInfrastructure），业务服务在各层 DependencyInjection/*ServiceCollectionExtensions.cs 里注册；每条 AddScoped／AddSingleton／AddTransient 前面紧挨着写中文说明：业务职责，以及选这个生命周期的原因（GZ-S-046、GZ-W-130、GZ-W-127）。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "(^|/)DependencyInjection/[^/]*Services?CollectionExtensions\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "两参注册",
+              "type": "expression",
+              "value": "(?<=((?:^[ \\t]*(?://[^\\n]*)?\\r?\\n)*)^[ \\t]*(?:\\w+[ \\t]*\\r?\\n[ \\t]*)?)(?:\\w+)?\\.AddSingleton\\s*<(?=[^;(]*,)",
+              "multiline": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "注册",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "scope",
+                  "of": "capture",
+                  "capture": 1
+                },
+                {
+                  "step": "assert",
+                  "predicate": "not",
+                  "clauses": [
+                    {
+                      "predicate": "all",
+                      "clauses": [
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "维护"
+                            },
+                            {
+                              "type": "text",
+                              "value": "查询"
+                            },
+                            {
+                              "type": "text",
+                              "value": "处理"
+                            },
+                            {
+                              "type": "text",
+                              "value": "负责"
+                            },
+                            {
+                              "type": "text",
+                              "value": "协调"
+                            },
+                            {
+                              "type": "text",
+                              "value": "校验"
+                            },
+                            {
+                              "type": "text",
+                              "value": "提供"
+                            },
+                            {
+                              "type": "text",
+                              "value": "执行"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "Singleton",
+                              "ignoreCase": true
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "原因"
+                            },
+                            {
+                              "type": "text",
+                              "value": "保证"
+                            },
+                            {
+                              "type": "text",
+                              "value": "确保"
+                            },
+                            {
+                              "type": "text",
+                              "value": "共享"
+                            },
+                            {
+                              "type": "text",
+                              "value": "无状态"
+                            },
+                            {
+                              "type": "text",
+                              "value": "线程"
+                            },
+                            {
+                              "type": "text",
+                              "value": "生命周期"
+                            },
+                            {
+                              "type": "text",
+                              "value": "一次请求"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "di-comment",
+                  "severity": "error",
+                  "message": "这条 AddSingleton 注册前面缺少合格的中文说明：紧挨着的注释要写清业务职责（维护／查询／处理／负责／协调／校验／提供／执行 之一）、写出 Singleton 并说明选它的原因（原因／保证／确保／共享／无状态／线程／生命周期／一次请求 之一）（GZ-W-127）。",
+                  "suggestion": "主程序只调用各层的登记扩展方法（如 AddApplication、AddInfrastructure），业务服务在各层 DependencyInjection/*ServiceCollectionExtensions.cs 里注册；每条 AddScoped／AddSingleton／AddTransient 前面紧挨着写中文说明：业务职责，以及选这个生命周期的原因（GZ-S-046、GZ-W-130、GZ-W-127）。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src"
+              ]
+            },
+            {
+              "type": "includePath",
+              "value": [
+                "(^|/)DependencyInjection/[^/]*Services?CollectionExtensions\\.cs$"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "find",
+          "patterns": [
+            {
+              "id": "两参注册",
+              "type": "expression",
+              "value": "(?<=((?:^[ \\t]*(?://[^\\n]*)?\\r?\\n)*)^[ \\t]*(?:\\w+[ \\t]*\\r?\\n[ \\t]*)?)(?:\\w+)?\\.AddTransient\\s*<(?=[^;(]*,)",
+              "multiline": true
+            }
+          ]
+        },
+        {
+          "combinator": "forEach",
+          "each": "注册",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "scope",
+                  "of": "capture",
+                  "capture": 1
+                },
+                {
+                  "step": "assert",
+                  "predicate": "not",
+                  "clauses": [
+                    {
+                      "predicate": "all",
+                      "clauses": [
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "维护"
+                            },
+                            {
+                              "type": "text",
+                              "value": "查询"
+                            },
+                            {
+                              "type": "text",
+                              "value": "处理"
+                            },
+                            {
+                              "type": "text",
+                              "value": "负责"
+                            },
+                            {
+                              "type": "text",
+                              "value": "协调"
+                            },
+                            {
+                              "type": "text",
+                              "value": "校验"
+                            },
+                            {
+                              "type": "text",
+                              "value": "提供"
+                            },
+                            {
+                              "type": "text",
+                              "value": "执行"
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "Transient",
+                              "ignoreCase": true
+                            }
+                          ]
+                        },
+                        {
+                          "predicate": "containsAny",
+                          "values": [
+                            {
+                              "type": "text",
+                              "value": "原因"
+                            },
+                            {
+                              "type": "text",
+                              "value": "保证"
+                            },
+                            {
+                              "type": "text",
+                              "value": "确保"
+                            },
+                            {
+                              "type": "text",
+                              "value": "共享"
+                            },
+                            {
+                              "type": "text",
+                              "value": "无状态"
+                            },
+                            {
+                              "type": "text",
+                              "value": "线程"
+                            },
+                            {
+                              "type": "text",
+                              "value": "生命周期"
+                            },
+                            {
+                              "type": "text",
+                              "value": "一次请求"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "di-comment",
+                  "severity": "error",
+                  "message": "这条 AddTransient 注册前面缺少合格的中文说明：紧挨着的注释要写清业务职责（维护／查询／处理／负责／协调／校验／提供／执行 之一）、写出 Transient 并说明选它的原因（原因／保证／确保／共享／无状态／线程／生命周期／一次请求 之一）（GZ-W-127）。",
+                  "suggestion": "主程序只调用各层的登记扩展方法（如 AddApplication、AddInfrastructure），业务服务在各层 DependencyInjection/*ServiceCollectionExtensions.cs 里注册；每条 AddScoped／AddSingleton／AddTransient 前面紧挨着写中文说明：业务职责，以及选这个生命周期的原因（GZ-S-046、GZ-W-130、GZ-W-127）。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "棘轮登记": {
+    "方向": "只许减",
+    "按": "路径",
+    "登记": [
+      {
+        "路径": "src/Application/DependencyInjection/ApplicationServiceCollectionExtensions.cs",
+        "数": 8,
+        "理由": "2026-11-19 装标准门禁时的存量（依赖注入登记缺中文职责与生命周期说明），整改计划第五批补，只许减少，补一处减一。"
+      },
+      {
+        "路径": "src/Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs",
+        "数": 33,
+        "理由": "2026-11-19 装标准门禁时的存量（依赖注入登记缺中文职责与生命周期说明），整改计划第五批补，只许减少，补一处减一。"
+      }
+    ]
+  }
+}

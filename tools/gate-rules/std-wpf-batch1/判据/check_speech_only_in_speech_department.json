@@ -1,0 +1,97 @@
+﻿{
+  "解法": "完整管线",
+  "rule": "check_speech_only_in_speech_department",
+  "守着": [
+    "GZ-W-087"
+  ],
+  "说明": {
+    "护住什么": "[GZ-W-087]：全程序只有朗读部门（Application/Dispatch/SpeechDepartment）调朗读接口，要不要念由分拣员决定；绝不打断、按优先级排队由朗读器里的朗读调度器做。不许别处直接 .Speak(、自己建朗读调度器，或在设置窗口以外调「试读」。\n守的规则：[GZ-W-087] 发声只在朗读部门与朗读器，试读只在朗读设置窗口。人要知道、本门禁不判的部分见台账工程规则 GZ-W-087。",
+    "从哪来": "消息通知丙批（2026-10-14）：照搬 MyCoAI 的 check_speech_only_in_speech_department，改成本工程路径；MyCoAI 的规则是「新消息一律打断」，本工程是「绝不打断」，门禁守的边界相同：唯一发声处。",
+    "怎么判": "去掉注释与字符串之后，桌面工程 C# 里出现 .Speak(、ScreenReaderSpeechScheduler（发声与调度器一段）或 .SpeakTest(（试读一段）就报。",
+    "两段为什么分开": "试读是唯一不经分拣的发声，只许在朗读设置窗口；分成两段后设置窗口的例外只放过试读那一段，它里面要是出现 .Speak( 照样报。",
+    "Helpers 为什么不扫": "Helpers 里的朗读调度器与争渡、NVDA 实现就是朗读接口本身，它们调读屏是本职；桌面工程以外没有发声处。",
+    "装时要填": "唯一发声处（朗读部门、朗读器）和唯一可以试读的设置窗口，每个工程不同；装这条门禁时用 rule exception-add 把那几份文件登记进「例外」。没登记就是全部发声点都报。"
+  },
+  "pipeline": [
+    {
+      "step": "解法",
+      "as": "发声与调度器",
+      "解法": "最简扫描",
+      "rule": "check_speech_only_in_speech_department",
+      "扫描": [
+        {
+          "扩展名": [
+            ".cs"
+          ],
+          "根": [
+            "src"
+          ],
+          "排除目录": [
+            "{scan.ignoredDirectories}"
+          ],
+          "遮罩": "csharp"
+        }
+      ],
+      "判据": [
+        {
+          "找": [
+            {
+              "id": "直接发声",
+              "type": "expression",
+              "value": "\\.Speak\\s*\\("
+            },
+            {
+              "id": "自建朗读调度器",
+              "type": "expression",
+              "value": "\\bScreenReaderSpeechScheduler\\b"
+            }
+          ],
+          "报": {
+            "rule": "speech-outside-speech-department",
+            "severity": "error",
+            "message": "这里直接调了朗读接口或自己建了朗读调度器（[GZ-W-087]）：全程序只许朗读部门发声。",
+            "suggestion": "投事实进本机总队列，由分拣员 NotificationSorter 读本机设置后转给朗读部门 SpeechDepartment；不要绕开分拣直接调朗读器，更不要另建一个调度器。"
+          }
+        }
+      ]
+    },
+    {
+      "step": "解法",
+      "as": "试读",
+      "解法": "最简扫描",
+      "rule": "check_speech_only_in_speech_department",
+      "扫描": [
+        {
+          "扩展名": [
+            ".cs"
+          ],
+          "根": [
+            "src"
+          ],
+          "排除目录": [
+            "{scan.ignoredDirectories}"
+          ],
+          "遮罩": "csharp"
+        }
+      ],
+      "判据": [
+        {
+          "找": [
+            {
+              "id": "试读",
+              "type": "expression",
+              "value": "\\.SpeakTest\\s*\\("
+            }
+          ],
+          "报": {
+            "rule": "speech-test-outside-settings-window",
+            "severity": "error",
+            "message": "这里调了朗读器的试读（[GZ-W-087]）：试读不经分拣，只许朗读设置窗口的「试读」按钮用。",
+            "suggestion": "业务要念的话投事实进本机总队列，由分拣员转朗读部门；试读只留在 SpeechSettingsWindow。"
+          }
+        }
+      ]
+    }
+  ],
+  "例外": []
+}

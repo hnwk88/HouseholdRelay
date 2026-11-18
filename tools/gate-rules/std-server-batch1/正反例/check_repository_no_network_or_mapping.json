@@ -1,0 +1,39 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/App.Api/Infrastructure/Persistence/Repositories/Repository.cs",
+      "内容": "namespace R;\n\npublic sealed class Repository<T>\n{\n    private readonly DbContext _context;\n    // 映射交给服务层\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/App.Api/Application/Services/Remote/RemoteQueryService.cs",
+      "内容": "namespace S;\n\npublic sealed class RemoteQueryService(HttpClient client, IMapper mapper) { }\n",
+      "期望": []
+    },
+    {
+      "路径": "tests/App.Api.Tests/Fakes/FakeRepository.cs",
+      "内容": "namespace T;\n\nclass FakeRepository(HttpClient client) { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/App.Api/Infrastructure/Persistence/Repositories/DevelopmentTrialCaptureRepository.cs",
+      "内容": "namespace R;\n\npublic sealed class DevelopmentTrialCaptureRepository\n{\n    private readonly IHttpClientFactory _factory;\n    private readonly IMapper _mapper;\n}\n",
+      "期望": [
+        {
+          "行": 5,
+          "规则": "repository-cross-layer-dependency",
+          "说了": "IHttpClientFactory"
+        },
+        {
+          "行": 6,
+          "说了": "IMapper"
+        }
+      ]
+    },
+    {
+      "路径": "Helpers/Repositories/RepositoryBase.cs",
+      "内容": "namespace Portable.Repositories;\n\n// 不许写 App.Api.Application 这种引用\npublic abstract class RepositoryBase\n{\n    private const string Hint = \"ZKMedicalSystemDesktop.Api\";\n}\n",
+      "期望": []
+    }
+  ]
+}

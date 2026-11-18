@@ -1,0 +1,61 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Application/Dispatch/SpeechDepartment.cs",
+      "内容": "namespace Desk;\n\npublic sealed class SpeechDepartment\n{\n    private readonly ISpeechOutput _output;\n    public bool SpeakUrgent(string text) => _output.Speak(text, SpeechQueuePriority.Urgent, null);\n}\n",
+      "期望": [
+        {
+          "行": 6,
+          "规则": "speech-outside-speech-department"
+        }
+      ]
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Infrastructure/Accessibility/ClinicSpeechAnnouncer.cs",
+      "内容": "namespace Desk;\n\npublic sealed class ClinicSpeechAnnouncer\n{\n    private readonly ScreenReaderSpeechScheduler _scheduler = new(() => null);\n    public bool SpeakTest(string text) => _scheduler.Enqueue(text, SpeechQueuePriority.Urgent, null);\n}\n",
+      "期望": [
+        {
+          "行": 5,
+          "规则": "speech-outside-speech-department"
+        }
+      ]
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/SpeechSettingsWindow.xaml.cs",
+      "内容": "namespace Desk;\n\npublic sealed class SpeechSettingsWindow\n{\n    private readonly ClinicSpeechAnnouncer _announcer;\n    public bool Test() => _announcer.SpeakTest(\"试读\");\n    public bool Sneak() => _announcer.Speak(\"绕过分拣\", SpeechQueuePriority.Urgent, null);\n}\n",
+      "期望": [
+        {
+          "行": 7,
+          "规则": "speech-outside-speech-department"
+        },
+        {
+          "行": 6,
+          "规则": "speech-test-outside-settings-window"
+        }
+      ]
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/MainWindow.Part09.cs",
+      "内容": "namespace Desk;\n\n// 注释里写 _speechAnnouncer.Speak( 与 ScreenReaderSpeechScheduler 不算。\npublic sealed partial class MainWindow\n{\n    public string Hint => \"不要直接 .Speak( 也不要 .SpeakTest(\";\n    private readonly SpeechDepartment _speechDepartment;\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemDesktop/Presentation/Views/BadWindow.xaml.cs",
+      "内容": "namespace Desk;\n\npublic sealed class BadWindow\n{\n    private readonly ClinicSpeechAnnouncer _announcer;\n    public void Done() => _announcer.Speak(\"已保存\", SpeechQueuePriority.Hint, null);\n    private readonly ScreenReaderSpeechScheduler _own = new(() => null);\n    public void Try() => _announcer.SpeakTest(\"试读\");\n}\n",
+      "期望": [
+        {
+          "行": 6,
+          "规则": "speech-outside-speech-department"
+        },
+        {
+          "行": 7,
+          "规则": "speech-outside-speech-department"
+        },
+        {
+          "行": 8,
+          "规则": "speech-test-outside-settings-window"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/App.Infrastructure/Repositories/EfReviewRepository.cs",
+      "内容": "namespace App.Infrastructure.Repositories;\npublic sealed class EfReviewRepository\n{\n    public async Task ApproveAsync(Entry entry)\n    {\n        entry.ReviewStatus = ReviewStatus.Approved;\n        await _db.SaveChangesAsync();\n    }\n}\n",
+      "期望": [
+        {
+          "行": 6,
+          "规则": "repository-state-transition"
+        }
+      ]
+    },
+    {
+      "路径": "src/App.Infrastructure/Repositories/EfEntryRepository.cs",
+      "内容": "namespace App.Infrastructure.Repositories;\npublic sealed class EfEntryRepository\n{\n    public Task UpdateAsync(Entry entry) { _db.Update(entry); return _db.SaveChangesAsync(); }\n    public bool IsDone(Entry e) => e.ReviewStatus == ReviewStatus.Done;\n    public object Project(Entry e) => new { Status = e.ReviewStatus };\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/App.Infrastructure/Repositories/EfTaskRepository.cs",
+      "内容": "namespace App.Infrastructure.Repositories;\npublic sealed class EfTaskRepository\n{\n    // 以前这里写过 task.RunStatus = Done，已挪到应用服务\n    private const string Note = \"task.RunStatus = x\";\n    public void Mark(BackgroundTask task) { this.task.RunStatus = RunStatus.Done; }\n}\n",
+      "期望": [
+        {
+          "行": 6,
+          "规则": "repository-state-transition"
+        }
+      ]
+    },
+    {
+      "路径": "src/App.Application/Services/ReviewService.cs",
+      "内容": "namespace App.Application.Services;\npublic sealed class ReviewService\n{\n    public void Approve(Entry entry) { entry.ReviewStatus = ReviewStatus.Approved; }\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/App.Infrastructure/Repositories/EfOrderRepository.cs",
+      "内容": "namespace App.Infrastructure.Repositories;\npublic sealed class EfOrderRepository\n{\n    public Task<List<Order>> FindApprovedAsync() => _db.Orders.Where(o => o.Status != OrderStatus.Draft).ToListAsync();\n}\n",
+      "期望": []
+    }
+  ]
+}

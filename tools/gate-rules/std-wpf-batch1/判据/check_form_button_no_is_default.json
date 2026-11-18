@@ -1,0 +1,44 @@
+﻿{
+  "解法": "最简扫描",
+  "rule": "check_form_button_no_is_default",
+  "扫描": [
+    {
+      "扩展名": [
+        ".xaml"
+      ],
+      "根": [
+        "src"
+      ],
+      "排除目录": [
+        "bin",
+        "obj"
+      ],
+      "遮罩": "none"
+    }
+  ],
+  "判据": [
+    {
+      "找": [
+        {
+          "id": "is-default-true",
+          "type": "text",
+          "value": "IsDefault=\"True\""
+        },
+        {
+          "id": "is-default-true-lower",
+          "type": "text",
+          "value": "IsDefault=\"true\""
+        }
+      ],
+      "报": {
+        "rule": "form-button-is-default",
+        "severity": "error",
+        "message": "按钮写了 IsDefault：WPF 会让它接住窗口里任何没截住的回车，用户在中途格回车就直接提交了（GZ-W-064）。",
+        "suggestion": "删掉 IsDefault。回车提交由表单宿主接管：中途格去下一格、最后一格才提交；有几个提交按钮时由表单宿主指定回车按哪一个（GZ-W-064）。"
+      }
+    }
+  ],
+  "守着": [
+    "GZ-W-064"
+  ]
+}

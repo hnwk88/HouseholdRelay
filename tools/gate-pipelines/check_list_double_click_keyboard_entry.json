@@ -1,0 +1,44 @@
+﻿{
+  "解法": "按 XAML 树看",
+  "rule": "check_list_double_click_keyboard_entry",
+  "诊断标识": "wpf-list-double-click-keyboard-entry",
+  "说明": {
+    "护住什么": "守的规则：能双击打开的列表必须有等价的回车入口（原 AGENTS.md@539101d9 第 229 行）。人要知道、本门禁不判的部分见台账工程规则 L230。 能双击打开的列表必须有等价的回车入口：双击是鼠标专属动作，只挂 MouseDoubleClick 的列表，键盘和读屏用户永远打不开那一项，而界面上毫无异样。",
+    "从哪来": "A0cf 阶段五：原先是内置 C# 判据 ListDoubleClickEntryVerdict（D-071 只许删）。改写成配置，用「按 XAML 树看」新加的取值「处理器正文」：同一个控件上挂的按键处理器（PreviewKeyDown，没有再看 KeyDown），在代码后置里的方法体要处理 Key.Enter／Key.Return，或交给 LayeredListNavigation.HandlePreviewKeyDownAsync。",
+    "诊断": "旧判据把「没挂按键处理器」「处理器没有方法定义」「处理器没处理回车」分三句报；配置是同一项，一句说清三种可能（一个列表只报一条）。"
+  },
+  "在哪": [
+    {
+      "正则": "^src/MyCoAI/.+\\.xaml$"
+    }
+  ],
+  "排除": [
+    {
+      "正则": "/(bin|obj)/"
+    }
+  ],
+  "看哪些元素": [
+    "ListView",
+    "ListBox",
+    "TreeView",
+    "DataGrid"
+  ],
+  "只看": [
+    {
+      "找": "属性",
+      "哪个": "MouseDoubleClick"
+    }
+  ],
+  "严重度": "error",
+  "必须有": [
+    {
+      "找": "处理器正文",
+      "哪个": "PreviewKeyDown|KeyDown",
+      "含正则": "\\bKey\\s*\\.\\s*(?:Enter|Return)\\b|\\bHandlePreviewKeyDownAsync\\b",
+      "缺了说": "{文件} 第 {行} 行的 {元素} 挂了双击，却缺少和双击等价的回车入口：没有挂 PreviewKeyDown，或按键处理器在代码后置里没有真实方法定义，或处理器没有处理回车。"
+    }
+  ],
+  "文案": {
+    "建议": "能双击打开的列表必须在同一个控件上挂 `PreviewKeyDown`，并在处理器里处理 `Key.Enter`，或交给 `LayeredListNavigation.HandlePreviewKeyDownAsync`；回车和双击应调用同一个打开动作。"
+  }
+}

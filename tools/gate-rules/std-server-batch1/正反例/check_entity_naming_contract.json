@@ -1,0 +1,59 @@
+﻿{
+  "样本": [
+    {
+      "路径": "tools/naming-conventions.json",
+      "内容": "{\n  \"aggregateVocabulary\": [\n    { \"technicalRoot\": \"OrderInfo\", \"userDisplayName\": \"订单\", \"sourceTable\": \"t_order\" },\n    { \"technicalRoot\": \"PrescriptionInfo\", \"userDisplayName\": \"处方\", \"sourceTable\": \"t_rx\" },\n    { \"technicalRoot\": \"OrderItem\", \"userDisplayName\": \"订单明细\", \"sourceTable\": \"t_order_item\" },\n    { \"technicalRoot\": \"GhostEntity\", \"userDisplayName\": \"幽灵\", \"sourceTable\": \"t_ghost\" },\n    { \"technicalRoot\": \"ClinicProfile\", \"userDisplayName\": \"诊所资料\", \"sourceTable\": \"t_clinic\" }\n  ]\n}\n",
+      "期望": [{ "规则": "entity-naming-vocabulary-without-entity", "说了": "ClinicProfile" }]
+    },
+    {
+      "路径": "src/WebAPI/Infrastructure/Persistence/Configurations/OrderInfoConfiguration.cs",
+      "内容": "namespace Persistence;\n\npublic sealed class OrderInfoConfiguration : IEntityTypeConfiguration<OrderInfo>\n{\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/WebAPI/Infrastructure/Persistence/Configurations/PrescriptionInfoConfiguration.cs",
+      "内容": "using Rx = Domain.Prescription.PrescriptionInfo;\n\nnamespace Persistence;\n\npublic sealed class PrescriptionInfoConfiguration : IEntityTypeConfiguration<Rx>\n{\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/WebAPI/Infrastructure/Persistence/Configurations/OrderItemConfiguration.cs",
+      "内容": "namespace Persistence;\n\n// 注释里的 class FooConfiguration : IEntityTypeConfiguration<Bar> 不算。\npublic sealed class OrderItemConfiguration : IEntityTypeConfiguration<OrderLine>\n{\n}\n",
+      "期望": [{ "行": 4, "规则": "entity-naming-configuration-filename", "说了": "OrderLine" }]
+    },
+    {
+      "路径": "src/WebAPI/Infrastructure/Persistence/Configurations/GhostEntityConfiguration.cs",
+      "内容": "namespace Persistence;\n\npublic sealed class GhostEntityConfiguration : IEntityTypeConfiguration<GhostEntity>\n{\n}\n",
+      "期望": [{ "行": 3, "规则": "entity-naming-domain-file-missing" }]
+    },
+    {
+      "路径": "src/WebAPI/Infrastructure/Persistence/Configurations/UnregisteredConfiguration.cs",
+      "内容": "namespace Persistence;\n\npublic sealed class UnregisteredConfiguration : IEntityTypeConfiguration<Unregistered>\n{\n}\n",
+      "期望": [{ "行": 3, "规则": "entity-naming-unregistered-entity" }]
+    },
+    {
+      "路径": "src/WebAPI/Infrastructure/Persistence/Migrations/OldThingConfiguration.cs",
+      "内容": "public sealed class OldThingConfiguration : IEntityTypeConfiguration<OldThing> { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Domain/Ordering/OrderInfo.cs",
+      "内容": "namespace Domain.Ordering;\n\npublic sealed class OrderInfo { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Domain/Ordering/OrderItem.cs",
+      "内容": "namespace Domain.Ordering;\n\npublic sealed class OrderItem { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Domain/Prescription/PrescriptionInfo.cs",
+      "内容": "namespace Domain.Prescription;\n\npublic sealed class PrescriptionInfo { }\n",
+      "期望": []
+    },
+    {
+      "路径": "src/ZKMedicalSystemWebAPI/Domain/Misc/Unregistered.cs",
+      "内容": "namespace Domain.Misc;\n\npublic sealed class Unregistered { }\n",
+      "期望": []
+    }
+  ]
+}

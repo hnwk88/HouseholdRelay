@@ -1,0 +1,78 @@
+﻿{
+  "rule": "check_csharp_no_inheritdoc_only",
+  "守着": [
+    "GZ-W-127"
+  ],
+  "说明": {
+    "护住什么": "公开实现不能只写 inheritdoc：实现里常有接口上没有的边界，要写中文 summary（GZ-W-127）。",
+    "来源": "中康 tools/gate-pipelines/check_csharp_blocking_patterns.json 第 0 段原样拆出；2026-11-18 把中康迁移目录例外改成选文件时跳过任意 Migrations 目录（EF 生成文件）。"
+  },
+  "pipeline": [
+    {
+      "combinator": "sequence",
+      "steps": [
+        {
+          "step": "selectFiles",
+          "where": [
+            {
+              "type": "extension",
+              "value": [
+                ".cs"
+              ]
+            },
+            {
+              "type": "root",
+              "value": [
+                "src",
+                "tests",
+                "tools"
+              ]
+            },
+            {
+              "type": "excludeFolder",
+              "value": [
+                "{scan.ignoredDirectories}",
+                "Migrations"
+              ]
+            }
+          ],
+          "至少几个": 1
+        },
+        {
+          "step": "split",
+          "by": "lines"
+        },
+        {
+          "combinator": "forEach",
+          "each": "行",
+          "body": [
+            {
+              "combinator": "if",
+              "condition": [
+                {
+                  "step": "assert",
+                  "predicate": "contains",
+                  "values": [
+                    {
+                      "type": "text",
+                      "value": "<inheritdoc"
+                    }
+                  ]
+                }
+              ],
+              "then": [
+                {
+                  "step": "emit",
+                  "rule": "inheritdoc-summary",
+                  "severity": "error",
+                  "message": "发现 `<inheritdoc />`，本项目要求实现处写中文 `<summary>`。",
+                  "suggestion": "把继承说明改成明确的中文 XML 文档注释，并补充参数和返回值含义。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
