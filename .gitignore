@@ -4,6 +4,8 @@
 .relay-instance
 # 旧版正式程序生成的真实旧库夹具要进仓库（tools/legacy-fixtures 生成，假密钥）
 !tests/Tests/Fixtures/LegacyDatabases/*/.relay-instance
+# 只读打开夹具库时 SQLite 会在旁边建 -wal/-shm，它们不属于夹具
+tests/Tests/Fixtures/LegacyDatabases/*/relay.db-*
 artifacts/
 
 # 编辑器与构建输出
