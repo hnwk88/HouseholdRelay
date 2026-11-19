@@ -69,10 +69,11 @@ static class ClaudeCodeIdentityTests
         foreach (var call in relayed)
         {
             foreach (var (name, value) in identity) Check(call.Headers.TryGetValue(name, out var sent) && sent == value, $"{name}: sent {sent}, real claude.exe sends {value}");
-            Check(call.Headers.Keys.All(name => identity.ContainsKey(name) || PerRequest.Contains(name)), "Only the unified identity may leave: " + string.Join(", ", call.Headers.Keys));
+            Check(call.Headers.Keys.All(name => identity.ContainsKey(name) || PerRequest.Contains(name) || ClaudeCodeIdentity.RequestHeaders.Contains(name)), "Only the unified identity may leave: " + string.Join(", ", call.Headers.Keys));
             Check(call.Headers["Authorization"] == "Bearer " + Token && call.Body.Contains(web.Settings.Read().Value.DeviceId, StringComparison.Ordinal));
         }
-        var shared = relayed[0].Headers.Keys.Where(name => name is not ("Content-Length" or "X-Claude-Code-Session-Id")).ToArray();
+        // 内容长度与按当次透传的头（会话编号、每请求新生成的请求编号等）本就每次不同，其余必须逐值相同。
+        var shared = relayed[0].Headers.Keys.Where(name => name != "Content-Length" && !ClaudeCodeIdentity.RequestHeaders.Contains(name)).ToArray();
         Check(shared.All(name => relayed[1].Headers.TryGetValue(name, out var other) && other == relayed[0].Headers[name]), "Two clients must look like one device");
         Check(relayed[0].Headers.Keys.Order(StringComparer.OrdinalIgnoreCase).SequenceEqual(relayed[1].Headers.Keys.Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase));
         Check(relayed[0].Headers["X-Claude-Code-Session-Id"] == "session-study" && relayed[1].Headers["X-Claude-Code-Session-Id"] == "session-bedroom", "Session ids follow the request body");
@@ -83,7 +84,7 @@ static class ClaudeCodeIdentityTests
             Check(third.StatusCode == HttpStatusCode.OK, await third.Content.ReadAsStringAsync());
         var sdk = mock.Calls.Last();
         foreach (var (name, value) in print) Check(sdk.Headers.TryGetValue(name, out var sent) && sent == value, $"sdk-cli {name}: sent {sent}, real claude.exe --print sends {value}");
-        Check(sdk.Headers.Keys.All(name => print.ContainsKey(name) || PerRequest.Contains(name)), "Only the sdk-cli identity may leave: " + string.Join(", ", sdk.Headers.Keys));
+        Check(sdk.Headers.Keys.All(name => print.ContainsKey(name) || PerRequest.Contains(name) || ClaudeCodeIdentity.RequestHeaders.Contains(name)), "Only the sdk-cli identity may leave: " + string.Join(", ", sdk.Headers.Keys));
         var business = mock.Calls.Skip(beforeBusiness).ToArray();
         var callerDevices = new[] { new string('a', 64), new string('b', 64), new string('c', 64) };
         Check(business.Length == 3 && business.All(call => !callerDevices.Any(device => call.Body.Contains(device, StringComparison.Ordinal))),
@@ -93,9 +94,9 @@ static class ClaudeCodeIdentityTests
         Console.WriteLine($"Relay identity comparison: simulated_clients=3; distinct_input_devices={callerDevices.Distinct(StringComparer.Ordinal).Count()}; observed_upstream_requests={business.Length}; original_device_occurrences=0.");
     }
 
-    /// <summary>从一次实抓里取出身份头：去掉跟着每次请求或连接走的头。</summary>
+    /// <summary>从一次实抓里取出身份头：去掉跟着每次请求或连接走的头，再去掉产品按当次透传的 <see cref="ClaudeCodeIdentity.RequestHeaders"/>（2.1.325 起两种模式都带提示编号与请求编号）。</summary>
     private static Dictionary<string, string> Identity(UpstreamCall call) =>
-        call.Headers.Where(header => !PerRequest.Contains(header.Key)).ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
+        call.Headers.Where(header => !PerRequest.Contains(header.Key) && !ClaudeCodeIdentity.RequestHeaders.Contains(header.Key)).ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 请求头分类（用户 2026-11-12 定的甲）：实抓只缓存稳定白名单；SDK 重试次数与子代理编号按客户端这一次的值发往官方，客户端不带就不带、不补造；
