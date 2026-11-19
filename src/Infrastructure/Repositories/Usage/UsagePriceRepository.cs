@@ -22,7 +22,7 @@ internal sealed class UsagePriceRepository(RelayDatabase database) : IUsagePrice
     /// <summary>那一家仍存在时写入或覆盖单价。</summary>
     public void Save(UsagePrice price) => database.Write((connection, transaction) =>
     {
-        if (Scalar(connection, transaction, "SELECT 1 FROM upstream_candidates WHERE id=$candidate", ("$candidate", price.CandidateId)) is null)
+        if (Scalar(connection, transaction, "SELECT 1 FROM upstream_candidates WHERE id=$candidate AND deleted_at IS NULL", ("$candidate", price.CandidateId)) is null)
             throw new InvalidOperationException("这个上游已不存在，请刷新后重新选择上游再填写单价。");
         return Execute(connection, transaction, """
             INSERT INTO usage_prices(id,candidate_id,model,json) VALUES($id,$candidate,$model,$json)

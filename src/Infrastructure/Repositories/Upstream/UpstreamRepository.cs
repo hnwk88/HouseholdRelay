@@ -9,7 +9,7 @@ using static Infrastructure.Persistence.RelayDatabase;
 
 namespace Infrastructure.Repositories.Upstream;
 
-/// <summary>upstream 与 upstream_candidates 表的读写；所有版本检查都在写事务内完成，名称只做显示，关联一律走主键。</summary>
+/// <summary>upstream 与 upstream_candidates 表的读写；所有版本检查都在写事务内完成，名称只做显示，关联一律走主键。已停用（deleted_at 有值）的已保存上游对本类所有方法都等于不存在。</summary>
 internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepository
 {
     /// <summary>检测超过这么多秒仍没结束视为已中断：可以重新检测，也可以删除。</summary>
@@ -40,7 +40,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
         using var command = Command(connection, null, """
             SELECT u.version,c.options_json,c.credential,c.report_json,c.id,c.name
             FROM upstream_candidates c JOIN upstream u ON u.id=1
-            WHERE c.state='passed' AND c.exported_at IS NULL AND c.id IS NOT u.candidate_id ORDER BY c.created_at,c.rowid
+            WHERE c.state='passed' AND c.exported_at IS NULL AND c.deleted_at IS NULL AND c.id IS NOT u.candidate_id ORDER BY c.created_at,c.rowid
             """);
         using var reader = command.ExecuteReader();
         var rows = new List<StoredUpstream>();
@@ -61,14 +61,14 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     public string? LatestCandidateId()
     {
         using var connection = database.Open();
-        return Scalar(connection, null, "SELECT id FROM upstream_candidates ORDER BY created_at DESC,rowid DESC LIMIT 1") as string;
+        return Scalar(connection, null, "SELECT id FROM upstream_candidates WHERE deleted_at IS NULL ORDER BY created_at DESC,rowid DESC LIMIT 1") as string;
     }
 
     /// <summary>按创建先后列出全部已保存上游的非秘密部分。</summary>
     public IReadOnlyList<StoredCandidate> ListCandidates()
     {
         using var connection = database.Open();
-        using var command = Command(connection, null, $"SELECT {CandidateColumns} FROM upstream_candidates ORDER BY created_at,rowid", ("$expired", Expired()));
+        using var command = Command(connection, null, $"SELECT {CandidateColumns} FROM upstream_candidates WHERE deleted_at IS NULL ORDER BY created_at,rowid", ("$expired", Expired()));
         using var reader = command.ExecuteReader();
         var rows = new List<StoredCandidate>();
         while (reader.Read()) rows.Add(Candidate(reader));
@@ -79,7 +79,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     public StoredCandidate? ReadCandidate(string id)
     {
         using var connection = database.Open();
-        using var command = Command(connection, null, $"SELECT {CandidateColumns} FROM upstream_candidates WHERE id=$id", ("$id", id), ("$expired", Expired()));
+        using var command = Command(connection, null, $"SELECT {CandidateColumns} FROM upstream_candidates WHERE id=$id AND deleted_at IS NULL", ("$id", id), ("$expired", Expired()));
         using var reader = command.ExecuteReader();
         return reader.Read() ? Candidate(reader) : null;
     }
@@ -88,7 +88,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     public byte[] ReadCandidateCredential(string id)
     {
         using var connection = database.Open();
-        return Scalar(connection, null, "SELECT credential FROM upstream_candidates WHERE id=$id", ("$id", id)) as byte[]
+        return Scalar(connection, null, "SELECT credential FROM upstream_candidates WHERE id=$id AND deleted_at IS NULL", ("$id", id)) as byte[]
             ?? throw new InvalidOperationException("这个上游不存在，请重新加载页面。");
     }
 
@@ -97,7 +97,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var id in ids)
-            if (Execute(connection, transaction, "UPDATE upstream_candidates SET exported_at=COALESCE(exported_at,$now) WHERE id=$id", ("$now", now), ("$id", id)) != 1)
+            if (Execute(connection, transaction, "UPDATE upstream_candidates SET exported_at=COALESCE(exported_at,$now) WHERE id=$id AND deleted_at IS NULL", ("$now", now), ("$id", id)) != 1)
                 throw new InvalidOperationException("要导出的上游有一家已经不在了，请重新加载页面后再导出。");
         return 0;
     });
@@ -117,27 +117,30 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     /// <summary>只改名称列。</summary>
     public void Rename(string id, string name) => database.Write((connection, transaction) =>
     {
-        if (Execute(connection, transaction, "UPDATE upstream_candidates SET name=$name WHERE id=$id", ("$name", name), ("$id", id)) != 1)
+        if (Execute(connection, transaction, "UPDATE upstream_candidates SET name=$name WHERE id=$id AND deleted_at IS NULL", ("$name", name), ("$id", id)) != 1)
             throw new InvalidOperationException("这个上游不存在，请重新加载页面。");
         return 0;
     });
 
-    /// <summary>在一个写事务里核对不是活动上游的来源、不在检测窗口内（与 <see cref="BeginCandidateTest"/> 同一口径），再删除这一行。</summary>
-    public void DeleteCandidate(string id) => database.Write((connection, transaction) =>
+    /// <summary>
+    /// 在一个写事务里按条件停用：未停用、不是活动上游的来源、不在检测窗口内（与 <see cref="BeginCandidateTest"/> 同一口径）才记下停用时刻并清掉加密凭据（留零长度占位）；
+    /// 写成了就在同一事务里数出仍引用它的用量、尝试和单价，条件不满足时什么都不写、返回 null。行本身保留，外键引用永远有效。
+    /// </summary>
+    public UpstreamReferences? Deactivate(string id) => database.Write((connection, transaction) =>
     {
-        if (Scalar(connection, transaction, "SELECT state FROM upstream_candidates WHERE id=$id", ("$id", id)) is null)
-            throw new InvalidOperationException("这个上游不存在，请重新加载页面。");
-        if (Scalar(connection, transaction, "SELECT candidate_id FROM upstream WHERE id=1") as string == id)
-            throw new InvalidOperationException("这个上游正在使用中，不能删除。请先切换到别的上游，再删除它。");
-        if (Execute(connection, transaction, "DELETE FROM upstream_candidates WHERE id=$id AND " + Idle, ("$id", id), ("$expired", Expired())) != 1)
-            throw new InvalidOperationException("这个上游正在检测，请等检测结束后再删除。");
-        return 0;
+        if (Execute(connection, transaction, $"""
+            UPDATE upstream_candidates SET deleted_at=$now,credential=X''
+            WHERE id=$id AND deleted_at IS NULL AND {Idle} AND id IS NOT (SELECT candidate_id FROM upstream WHERE id=1)
+            """, ("$id", id), ("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), ("$expired", Expired())) != 1)
+            return null;
+        long Count(string table) => Convert.ToInt64(Scalar(connection, transaction, $"SELECT COUNT(*) FROM {table} WHERE candidate_id=$id", ("$id", id)));
+        return new UpstreamReferences(Count("usage_requests"), Count("usage_attempts"), Count("usage_prices"));
     });
 
     /// <summary>写回配置与报告并置为未测试。</summary>
     public void SaveUntested(string id, string optionsJson, string? reportJson) => database.Write((connection, transaction) =>
     {
-        if (Execute(connection, transaction, "UPDATE upstream_candidates SET options_json=$json,report_json=$report,state='untested' WHERE id=$id",
+        if (Execute(connection, transaction, "UPDATE upstream_candidates SET options_json=$json,report_json=$report,state='untested' WHERE id=$id AND deleted_at IS NULL",
             ("$json", optionsJson), ("$report", reportJson), ("$id", id)) != 1)
             throw new InvalidOperationException("这个上游不存在，请重新加载页面。");
         return 0;
@@ -149,7 +152,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (Execute(connection, transaction, $"""
             UPDATE upstream_candidates SET state='testing',report_json=NULL,test_started_at=$now
-            WHERE id=$id AND {Idle}
+            WHERE id=$id AND deleted_at IS NULL AND {Idle}
             """, ("$id", id), ("$now", now), ("$expired", now - TestWindowSeconds)) != 1)
             throw new InvalidOperationException("这个上游正在检测，请稍后刷新页面查看结果。");
         return (byte[])Scalar(connection, transaction, "SELECT credential FROM upstream_candidates WHERE id=$id", ("$id", id))!;
@@ -157,13 +160,13 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
 
     /// <summary>保存检测结果与实际采用的配置。</summary>
     public void FinishCandidateTest(string id, string state, string reportJson, string optionsJson) => database.Write((connection, transaction) => Execute(connection, transaction,
-        "UPDATE upstream_candidates SET state=$state,report_json=$json,options_json=$options WHERE id=$id",
+        "UPDATE upstream_candidates SET state=$state,report_json=$json,options_json=$options WHERE id=$id AND deleted_at IS NULL",
         ("$state", state), ("$json", reportJson), ("$options", optionsJson), ("$id", id)));
 
     /// <summary>核对检测结果、没有导出搬走与活动版本后写为新的活动版本并记下来源主键；候选自身的检测状态不变，之后仍可切回。</summary>
     public void Activate(string id, long? expectedVersion) => database.Write((connection, transaction) =>
     {
-        using var command = Command(connection, transaction, "SELECT expected_version,options_json,credential,report_json,state,exported_at FROM upstream_candidates WHERE id=$id", ("$id", id));
+        using var command = Command(connection, transaction, "SELECT expected_version,options_json,credential,report_json,state,exported_at FROM upstream_candidates WHERE id=$id AND deleted_at IS NULL", ("$id", id));
         long version; string json, reportJson; byte[] credential;
         using (var reader = command.ExecuteReader())
         {

@@ -38,8 +38,12 @@ public interface IUpstreamRepository
     /// <summary>只改名称，不动配置、凭据、检测状态和任何按主键关联的记录；不存在时提示重新加载。</summary>
     void Rename(string id, string name);
 
-    /// <summary>删除一个已保存上游；它是活动上游的来源（当前使用中）或正在检测（两分钟内）时拒绝，不存在时提示重新加载。</summary>
-    void DeleteCandidate(string id);
+    /// <summary>
+    /// 停用（软删除）一个已保存上游：记下停用时刻、清掉加密凭据，此后它对本接口其余方法都等于不存在，只在用量历史里读得出名字。
+    /// 只在它此刻仍未停用、不是活动上游的来源、也不在检测窗口内时才写；同一事务里数出仍引用它的用量、尝试和单价条数返回。
+    /// 条件不满足（刚被切换过去、刚开始检测、已停用或不存在）时什么都不写，返回 null，由调用方读出原因。
+    /// </summary>
+    UpstreamReferences? Deactivate(string id);
 
     /// <summary>写回获取模型或改选模型后的配置与报告（报告可为空），并把状态置为未测试；不存在时提示重新加载。</summary>
     void SaveUntested(string id, string optionsJson, string? reportJson);

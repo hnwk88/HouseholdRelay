@@ -8,7 +8,7 @@ using HouseholdRelay.Relay;
 namespace HouseholdRelay.Commands;
 
 /// <summary>命令行 serve：加载证书、启动本机管理网页和对外 HTTPS 中转两个宿主，并在控制台给出引导信息。</summary>
-public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, ICertificateService certificates, IAdministratorService administrators)
+public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, ICertificateService certificates, IAdministratorService administrators, Application.Interfaces.Configuration.IRelayInstance instance)
 {
     /// <summary>管理端口须在 1024 至 65535 之间；在打开数据目录前检查。</summary>
     public static void CheckPort(int adminPort)
@@ -29,6 +29,8 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
         await admin.StartAsync();
         if (api is not null) { await api.StartAsync(); relay.HttpsActive = true; }
         Console.WriteLine($"本机管理：http://127.0.0.1:{adminPort}；按 Ctrl+C 停止。");
+        // 只在这次启动刚升级过时读；之前的升级记录留在管理首页。
+        if (instance.UpgradedOnOpen && instance.LastUpgrade is { } upgrade) Console.WriteLine(upgrade.Sentence());
         var bootstrap = administrators.BootstrapCode();
         if (bootstrap is not null) Console.WriteLine($"首次设置引导码（仅供本机输入）：{bootstrap}");
         Console.WriteLine(api is null ? "对外 HTTPS 未启用，请在本机网页创建或导入证书并重启。" : certificates.ReadInfo()?.Mode == "trusted"

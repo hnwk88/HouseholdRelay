@@ -239,7 +239,8 @@ async function relay(url, token, stream = false) {
     assert.equal(await page.getByRole('button', { name: '删除「浏览器账户（新令牌）」', exact: true }).count(), 0, '当前使用中的上游不能出删除按钮');
     await page.getByLabel('确认删除「顺丰中转」（删除后不能恢复）', { exact: true }).check();
     await page.getByRole('button', { name: '删除「顺丰中转」', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '已删除「顺丰中转」。' }).waitFor();
+    const deleted = page.getByRole('status').filter({ hasText: '已删除「顺丰中转」' }); await deleted.waitFor();
+    assert.equal((await deleted.textContent()).trim(), '已删除「顺丰中转」，没有用量或单价引用它，本机已清除它的密钥。');
     assert.equal(await savedCount(), before - 1); assert.equal(await page.getByRole('heading', { name: '顺丰中转', exact: true }).count(), 0);
     await readingOrder(page, '20-upstream-after-delete'); await screenshot(page, '20-upstream-after-delete');
     steps.push('上游回 503（模拟地区屏蔽）时读出：' + blockedText + ' 恢复后按「重新获取模型」读出：' + againText + ` 已保存数量仍为 ${before}；勾选确认后删除「顺丰中转」，已保存数量变为 ${before - 1}；当前使用中的上游没有删除按钮。`);

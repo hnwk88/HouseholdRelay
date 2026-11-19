@@ -1,0 +1,4 @@
+﻿来源提交：39c6785f2c3159375db87b1c62fb2a844bd1655f
+生成方式：tools\legacy-fixtures\New-LegacyFixture.ps1 -Commit 39c6785 -Name v3 -V3
+生成时间（UTC）：2026-11-19 04:12:10
+内容：那一版的程序经它自己的公开服务写入，密钥都是假值，凭据用生成那台电脑当时的 Windows 用户加密（升级不解密）。

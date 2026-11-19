@@ -36,14 +36,17 @@ public static class UsageLabels
 
     /// <summary>
     /// 把一次请求的上游尝试读成一句话，按读屏顺序写「哪家，状态码，错误类型，说明，耗时」，例如「顺丰中转，502，上游过载，Overloaded，15.2 秒」；
-    /// 多次尝试按次序以「第 N 次：」开头、以分号隔开；没有尝试时读「未发往上游」。上游已删除或不是从已保存上游切换来的，分别读「已删除的上游」「未命名上游」。
+    /// 多次尝试按次序以「第 N 次：」开头、以分号隔开；没有尝试时读「未发往上游」。上游后来被删除（停用）的读「名字（已删除）」；
+    /// 不是从已保存上游切换来的或那一家没有名字的读「未命名上游」；查不到名字的旧记录读「已删除的上游」。
     /// </summary>
     public static string Attempts(IReadOnlyList<UpstreamAttemptRow> attempts)
     {
         if (attempts.Count == 0) return "未发往上游";
         return string.Join("；", attempts.Select(attempt =>
         {
-            var parts = new List<string> { attempt.Name ?? (attempt.CandidateId is null ? "未命名上游" : "已删除的上游"), attempt.UpstreamStatus?.ToString() ?? "无响应" };
+            var name = attempt.Name is { Length: > 0 } named ? attempt.Deleted ? named + "（已删除）" : named
+                : attempt.Name is not null || attempt.CandidateId is null ? "未命名上游" : "已删除的上游";
+            var parts = new List<string> { name, attempt.UpstreamStatus?.ToString() ?? "无响应" };
             if (attempt.ErrorType is { } type) parts.Add(attempt.ConnectFailure is { } failure ? ErrorType(type) + "：" + ConnectFailure(failure) : ErrorType(type));
             if (attempt.ErrorMessage is { } message) parts.Add(message);
             parts.Add((attempt.DurationMs / 1000d).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " 秒");

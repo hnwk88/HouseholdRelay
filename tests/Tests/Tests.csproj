@@ -10,6 +10,10 @@
     <ProjectReference Include="../../src/HouseholdRelay/HouseholdRelay.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- 旧版正式程序生成的真实旧库（tools/legacy-fixtures），用例复制到各自的临时数据目录再升级，原件不动。 -->
+    <None Include="Fixtures/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <Using Include="Core.Configuration" />
     <Using Include="Core.Identity" />
     <Using Include="Core.Relay" />

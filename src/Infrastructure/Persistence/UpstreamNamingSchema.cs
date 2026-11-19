@@ -14,15 +14,15 @@ internal sealed class UpstreamNamingSchema(RelayDataOptions options) : IDatabase
 
     /// <summary>
     /// 已是 4 或更高时直接返回，不是 3 时拒绝。在一个事务里：候选表加 name 列并按地址主机名回填，活动表加 candidate_id 列；
-    /// 旧的 activated 状态改回 passed（激活不再改变候选状态，才能切回）；活动上游按「选项与报告原文一致的已激活候选」找回来源，
-    /// 找不到且已有凭据时为它补建一条候选；活动或任一候选带 proxyUrl 时全局代理设为手动并沿用（活动优先，再按最近候选），
-    /// 并从所有选项 JSON 删掉 proxyUrl；没有代理时不改设置，默认就是不使用代理。最后写入版本号 4。
+    /// 旧的 activated 状态改回 passed（激活不再改变候选状态，才能切回）；活动上游按「选项与报告原文一致的已激活候选」找回来源：恰好一条才认定，
+    /// 多条时来源留空、各候选主键另存进归档交管理员确认，一条都没有且已有凭据时为它补建一条候选；活动或任一候选带 proxyUrl 时全局代理设为手动并沿用（活动优先，再按最近候选），
+    /// 并从所有选项 JSON 删掉 proxyUrl，没被选中的原值另存进归档；没有代理时不改设置，默认就是不使用代理。最后写入版本号 4。
     /// </summary>
     public void Apply(RelayDatabase database)
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version is 4 or 5 or 6 or 7 or 8) return;
+        if (version >= 4) return;
         if (version != 3) throw new InvalidOperationException("数据库版本不支持。");
         using var transaction = connection.BeginTransaction();
         Execute(connection, transaction, """
@@ -42,17 +42,24 @@ internal sealed class UpstreamNamingSchema(RelayDataOptions options) : IDatabase
         using (var command = Command(connection, transaction, "SELECT id,options_json,state,report_json FROM upstream_candidates ORDER BY created_at DESC,rowid DESC"))
         using (var reader = command.ExecuteReader())
             while (reader.Read()) candidates.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.IsDBNull(3) ? "" : reader.GetString(3)));
-        string? source = null;
-        foreach (var (id, json, state, report) in candidates)
+        // 激活时选项与报告是原样复制过去的，原文完全一致的已激活候选就是活动上游的来源；恰好一条才认定，多条时不猜，主键另存交管理员确认。
+        var matches = candidates.Where(item => item.State == "activated" && item.Json == activeJson && item.Report == activeReport).Select(item => item.Id).ToArray();
+        var source = matches.Length == 1 ? matches[0] : null;
+        if (matches.Length > 1)
+            foreach (var id in matches)
+                MigrationArchive.Add(connection, transaction, database, 4, "upstream", "ambiguous-active-source", new JsonObject { ["candidate_id"] = id }.ToJsonString());
+        foreach (var (id, json, _, _) in candidates)
         {
             proxy ??= ProxyOf(json);
-            // 激活时选项与报告是原样复制过去的，原文完全一致的已激活候选就是活动上游的来源；多条时取最近的一条。
-            if (source is null && state == "activated" && json == activeJson && report == activeReport) source = id;
             Execute(connection, transaction, "UPDATE upstream_candidates SET name=$name,options_json=$json WHERE id=$id",
                 ("$name", HostOf(json)), ("$json", WithoutProxy(json)), ("$id", id));
         }
+        // 所有选项里的 proxyUrl 都要删掉；没被选作全局代理的（不合规则的、与选中的不同的）原值另存，不静默丢。
+        foreach (var (table, owner, json) in candidates.Select(item => ("upstream_candidates", item.Id, item.Json)).Prepend(("upstream", "1", activeJson)))
+            if (RawProxyOf(json) is { } raw && Normalized(raw) != proxy)
+                MigrationArchive.Add(connection, transaction, database, 4, table, "dropped-proxy", new JsonObject { ["owner"] = owner, ["proxyUrl"] = raw }.ToJsonString());
         Execute(connection, transaction, "UPDATE upstream_candidates SET state='passed' WHERE state='activated'");
-        if (source is null && activeCredential is not null)
+        if (source is null && matches.Length == 0 && activeCredential is not null)
         {
             // 迁移来的凭据或命令行直接写入的活动上游没有候选行：补建一条，列表里才能看到它、切走后才能切回。
             source = Guid.NewGuid().ToString("N");
@@ -78,12 +85,20 @@ internal sealed class UpstreamNamingSchema(RelayDataOptions options) : IDatabase
     }
 
     /// <summary>取出选项 JSON 里旧的 proxyUrl；为空或已不符合代理地址规则时视为没有，不让一条坏数据挡住启动。</summary>
-    private static string? ProxyOf(string json)
+    private static string? ProxyOf(string json) => RawProxyOf(json) is { } raw ? Normalized(raw) : null;
+
+    /// <summary>选项 JSON 里 proxyUrl 的原文；没有或为空白时为 null。</summary>
+    private static string? RawProxyOf(string json)
     {
         var value = Property(JsonNode.Parse(json)?.AsObject(), "proxyUrl")?.GetValue<string?>();
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        try { return UpstreamAddress.Proxy(value).AbsoluteUri.TrimEnd('/'); }
-        // 旧值早已不合规则时按没有代理处理；转发本来就会拒绝它。
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    /// <summary>按代理地址规则规范化；不合规则时为 null（旧值早已不合规则时按没有代理处理，转发本来就会拒绝它，原文由迁移另存）。</summary>
+    private static string? Normalized(string raw)
+    {
+        try { return UpstreamAddress.Proxy(raw).AbsoluteUri.TrimEnd('/'); }
+        // 不合规则只意味着「不能当全局代理」，原文另存后照常升级，不让一条坏数据挡住启动。
         catch (InvalidOperationException) { return null; }
     }
 
@@ -95,9 +110,9 @@ internal sealed class UpstreamNamingSchema(RelayDataOptions options) : IDatabase
         return node.ToJsonString(ConfigurationFiles.Json);
     }
 
-    /// <summary>按地址主机名回填供应商名称；地址无法解析时用「未命名上游」。</summary>
+    /// <summary>按地址主机名回填供应商名称；地址无法解析时留空，不写占位文字，由显示层读「未命名上游」，管理员改名即补上。</summary>
     private static string HostOf(string json) =>
-        Uri.TryCreate(Property(JsonNode.Parse(json)?.AsObject(), "baseUrl")?.GetValue<string>(), UriKind.Absolute, out var uri) ? uri.Host : "未命名上游";
+        Uri.TryCreate(Property(JsonNode.Parse(json)?.AsObject(), "baseUrl")?.GetValue<string>(), UriKind.Absolute, out var uri) ? uri.Host : "";
 
     /// <summary>按名称不区分大小写取 JSON 对象的属性。</summary>
     private static JsonNode? Property(JsonObject? node, string name) => node?.FirstOrDefault(item => item.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;

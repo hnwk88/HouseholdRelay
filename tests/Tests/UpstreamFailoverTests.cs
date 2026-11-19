@@ -230,18 +230,38 @@ static class UpstreamFailoverTests
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var token = process.Identities.Create("升级");
         var user = process.Identities.Clients.Authenticate(token.Token)!;
+        // 用量、尝试与单价对已保存上游有外键：活动那家和实际服务那家都先存成真实上游，用它们的主键。
+        var version = process.Upstreams.ReadOverview().Version;
+        var active = process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://active.example.com" }, "sk-active-0001", "在用上游");
+        var served = process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://served.example.com" }, "sk-served-0001", "服务上游");
         await process.Usage.Start("kept", user, "inference"); await process.Usage.Dispatch("kept", 1, null, "fixture-model");
-        await process.Usage.Finish("kept", new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(3, 4)) { Attempts = [new UpstreamAttempt(1, "served-upstream", 1, DateTimeOffset.UtcNow)] });
+        Check(await process.Usage.Finish("kept", new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(3, 4)) { Attempts = [new UpstreamAttempt(1, served, 1, DateTimeOffset.UtcNow)] }));
+        // 版本 9 的用量表 candidate_id 带外键，不能 DROP COLUMN：在不开外键检查的直连上按版本 3 原始建表语句把它重建回没有这一列的旧形状。
+        using (var raw = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = process.Database.Path, Pooling = false, ForeignKeys = false }.ToString()))
+        {
+            raw.Open();
+            RelayDatabase.Execute(raw, null, """
+                CREATE TABLE usage_requests_v5 (request_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), token_id TEXT NOT NULL REFERENCES tokens(id),
+                    upstream_version INTEGER, request_started_at INTEGER NOT NULL, ended_at INTEGER,
+                    kind TEXT NOT NULL CHECK(kind IN ('inference','estimate','models')), model TEXT, outcome TEXT NOT NULL DEFAULT 'started',
+                    dispatched INTEGER NOT NULL DEFAULT 0, status_code INTEGER, upstream_status INTEGER, duration_ms INTEGER,
+                    completeness TEXT NOT NULL DEFAULT 'partial', input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+                    price_json TEXT, amount TEXT, currency TEXT, money_source TEXT NOT NULL DEFAULT 'unknown', money_completeness TEXT NOT NULL DEFAULT 'unknown');
+                INSERT INTO usage_requests_v5 SELECT request_id,user_id,token_id,upstream_version,request_started_at,ended_at,kind,model,outcome,dispatched,status_code,
+                    upstream_status,duration_ms,completeness,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,price_json,amount,currency,money_source,money_completeness
+                    FROM usage_requests;
+                DROP TABLE usage_requests; ALTER TABLE usage_requests_v5 RENAME TO usage_requests;
+                """);
+        }
         process.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
-            UPDATE upstream SET candidate_id='active-upstream';
+            UPDATE upstream SET candidate_id=$active;
             ALTER TABLE upstream DROP COLUMN failover;
-            ALTER TABLE usage_requests DROP COLUMN candidate_id;
             DROP TABLE usage_prices;
             CREATE TABLE usage_prices(id TEXT PRIMARY KEY,upstream_version INTEGER NOT NULL,model TEXT NOT NULL,json TEXT NOT NULL,UNIQUE(upstream_version,model));
             INSERT INTO usage_prices VALUES('current',(SELECT version FROM upstream WHERE id=1),'fixture-model','{"Id":"current","UpstreamVersion":1,"Model":"fixture-model","Currency":"USD","InputPerMillion":1}');
             INSERT INTO usage_prices VALUES('older',-1,'fixture-model','{"Id":"older","UpstreamVersion":-1,"Model":"fixture-model","Currency":"USD","InputPerMillion":9}');
             PRAGMA user_version=5;
-            """));
+            """, ("$active", active)));
         var rejected = false;
         try { _ = new TestProcess(home.Path, migrationCheckpoint: () => throw new IOException("fixture-checkpoint")).Database; }
         catch (IOException error) when (error.Message == "fixture-checkpoint") { /* 检查点在改表之后、写版本号之前失败，整个升级应回滚；随后核对版本号、列和单价。 */ rejected = true; }
@@ -250,11 +270,12 @@ static class UpstreamFailoverTests
         Check(Count(process.Database, "PRAGMA user_version") == 5 && Count(process.Database, "SELECT COUNT(*) FROM pragma_table_info('upstream') WHERE name='failover'") == 0);
         Check(Count(process.Database, "SELECT COUNT(*) FROM usage_prices WHERE upstream_version IS NOT NULL") == 2, "Old prices stay untouched after rollback");
         var upgraded = new TestProcess(home.Path);
-        Check(Count(upgraded.Database, "PRAGMA user_version") == 8 &&Count(upgraded.Database, "SELECT failover FROM upstream WHERE id=1") == 1);
-        var prices = upgraded.Pricing.List("active-upstream");
-        Check(prices is [{ Id: "current", CandidateId: "active-upstream", InputPerMillion: 1 }] && Count(upgraded.Database, "SELECT COUNT(*) FROM usage_prices") == 1, "Current-version prices move to the active upstream");
+        Check(Count(upgraded.Database, "PRAGMA user_version") == RelayDatabase.CurrentVersion && Count(upgraded.Database, "SELECT failover FROM upstream WHERE id=1") == 1);
+        var prices = upgraded.Pricing.List(active);
+        Check(prices is [{ Id: "current", InputPerMillion: 1 }] && prices[0].CandidateId == active && Count(upgraded.Database, "SELECT COUNT(*) FROM usage_prices") == 1, "Current-version prices move to the active upstream");
+        Check(Count(upgraded.Database, "SELECT COUNT(*) FROM migration_archive WHERE reason='price-not-migrated' AND json_extract(row_json,'$.id')='older'") == 1, "The older-version price is archived, not dropped");
         using (var connection = upgraded.Database.Open())
-            Check((string?)RelayDatabase.Scalar(connection, null, "SELECT candidate_id FROM usage_requests WHERE request_id='kept'") == "served-upstream");
+            Check((string?)RelayDatabase.Scalar(connection, null, "SELECT candidate_id FROM usage_requests WHERE request_id='kept'") == served);
         Check(upgraded.Usage.Query(new()).Rows.Single().Tokens == new UsageTokens(3, 4));
     }
 

@@ -7,8 +7,10 @@ using Application.Interfaces.Upstream;
 namespace HouseholdRelay.Pages;
 
 /// <summary>管理首页：使用者数、上游与 HTTPS 状态概览。</summary>
-public sealed class IndexModel(IConfigurationService settings, IIdentityService identities, IUpstreamService upstreams, ICertificateService certificates, IUpstreamPool upstreamPool) : PageModel
+public sealed class IndexModel(IConfigurationService settings, IIdentityService identities, IUpstreamService upstreams, ICertificateService certificates, IUpstreamPool upstreamPool, IRelayInstance instance) : PageModel
 {
+    /// <summary>最近一次数据库升级的读句（版本、升级时刻、备份位置、迁移另存条数）；从没升级过时为空串，页面不显示这一格。</summary>
+    public string UpgradeText { get; private set; } = "";
     /// <summary>已登记的使用者（家庭成员）人数，含已停用的。</summary>
     public int UserCount { get; private set; }
     /// <summary>活动上游是否已保存凭据；只反映有无，不读取凭据内容。</summary>
@@ -38,6 +40,7 @@ public sealed class IndexModel(IConfigurationService settings, IIdentityService 
             : active.Report?.CanActivate == true ? "最小模型调用已验证" : "已有凭据 · 调用未检测";
         RoutingText = moved is not null ? UpstreamModel.MovedSentence(moved.Name, active.Failover)
             : active.Configured ? UpstreamModel.RoutingSentence(upstreamPool, active, saved) : "";
+        UpgradeText = instance.LastUpgrade is { } upgrade ? $"{upgrade.At.ToLocalTime():yyyy-MM-dd HH:mm}：{upgrade.Sentence()}" : "";
         var certificate = certificates.ReadInfo(); CertificateStatus = certificate is not null
             ? certificate.ValidUntil > DateTimeOffset.UtcNow ? certificate.Mode == "private" ? "私有 CA · 客户端安装一次信任" : "已导入可信证书" : "证书已过期"
             : "尚未配置 HTTPS";

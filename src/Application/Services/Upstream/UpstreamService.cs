@@ -25,7 +25,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     {
         var (row, options) = Active();
         var (credential, accountUuid, blocked, reason) = ReadCredential(options, row.ProtectedCredential, row.Exported, row.CandidateId);
-        return new(row.Version, options, credential, Report(row), row.CandidateId, row.Name, row.Failover, blocked, accountUuid, reason);
+        return new(row.Version, options, credential, Report(row), row.CandidateId, Named(row.Name), row.Failover, blocked, accountUuid, reason);
     }
 
     /// <summary>
@@ -42,7 +42,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
             // 一家的配置坏了只让它不参与切换，在用的那家和其余备用照常；它在上游页上照样读得出来，由管理员重新测试或删除。
             catch (Exception error) when (error is JsonException or InvalidOperationException) { continue; }
             var (credential, accountUuid, blocked, reason) = ReadCredential(options, row.ProtectedCredential, false, row.CandidateId);
-            snapshots.Add(new(row.Version, options, credential, report, row.CandidateId, row.Name, blockedByIdentity: blocked, accountUuid: accountUuid, blockedReason: reason));
+            snapshots.Add(new(row.Version, options, credential, report, row.CandidateId, Named(row.Name), blockedByIdentity: blocked, accountUuid: accountUuid, blockedReason: reason));
         }
         return snapshots;
     }
@@ -76,7 +76,7 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     {
         var (row, options) = Active();
         var configured = row.ProtectedCredential is not null && !row.Exported && (!options.OfficialLogin || row.CandidateId is { } account && officialAccounts.HasCredential(account));
-        return new(row.Version, options, configured, Report(row), row.CandidateId, row.Name, row.Failover);
+        return new(row.Version, options, configured, Report(row), row.CandidateId, Named(row.Name), row.Failover);
     }
 
     /// <summary>读取最近创建的上游（不含凭据）；一个都没有时返回 null。</summary>
@@ -132,14 +132,19 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     public void Rename(string id, string name) => repository.Rename(id, ValidName(name));
 
     /// <summary>
-    /// 删除一个已保存上游：当前使用中或正在检测时由仓储在写事务里拒绝；删掉的是官方登录上游时再删它的账户目录。
-    /// 用量与尝试记录只记这个主键、不设外键，删除不影响历史用量，名称读作已删除的上游。
+    /// 删除一个已保存上游，做法是停用：在这里判能不能删——当前使用中（活动上游的来源）或正在检测（<see cref="UpstreamCandidate.Deletable"/> 为假）时拒绝并读出下一步；
+    /// 能删就交仓储按同样条件原子地停用，条件在这期间变了（刚被切换过去、刚开始检测）仓储什么都不写，这里读「请重新加载」。
+    /// 停用后用量、尝试和单价照常按外键引用它，用量页读出它的名字；删掉的是官方登录上游时再删它的账户目录。返回引用条数。
     /// </summary>
-    public void Delete(string id)
+    public UpstreamReferences Delete(string id)
     {
         var candidate = ReadCandidate(id);
-        repository.DeleteCandidate(id);
+        if (!candidate.Deletable)
+            throw new InvalidOperationException(repository.ReadActive()?.CandidateId == id
+                ? "这个上游正在使用中，不能删除。请先切换到别的上游，再删除它。" : "这个上游正在检测，请等检测结束后再删除。");
+        var references = repository.Deactivate(id) ?? throw new InvalidOperationException("这个上游刚刚被切换或开始检测，没有删除。请重新加载页面再试。");
         if (candidate.Options.OfficialLogin) officialAccounts.Remove(id);
+        return references;
     }
 
     /// <summary>
@@ -326,8 +331,12 @@ public sealed class UpstreamService(IUpstreamRepository repository, ISecretProte
     private static UpstreamReport? Report(StoredUpstream row) => row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson);
 
     /// <summary>把库中的已保存上游行解析成可展示的对象。</summary>
-    private static UpstreamCandidate ToCandidate(StoredCandidate row) => new(row.Id, row.Name, row.ExpectedVersion, Parse<UpstreamOptions>(row.OptionsJson), row.State,
+    private static UpstreamCandidate ToCandidate(StoredCandidate row) => new(row.Id, Named(row.Name), row.ExpectedVersion, Parse<UpstreamOptions>(row.OptionsJson), row.State,
         row.ReportJson is null ? null : Parse<UpstreamReport>(row.ReportJson), row.Deletable, row.ExportedAt is { } at ? DateTimeOffset.FromUnixTimeMilliseconds(at) : null);
+
+    /// <summary>名称只做显示：库里为空串（旧版迁移时地址解析不出主机名，没写占位文字）时读「未命名上游」，管理员改名即补上；为 null（活动上游不是从已保存上游来的）时原样。</summary>
+    [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(name))]
+    private static string? Named(string? name) => name is "" ? "未命名上游" : name;
 
     /// <summary>按统一 JSON 选项序列化配置或报告。</summary>
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, ConfigurationFiles.Json);

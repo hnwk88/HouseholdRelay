@@ -18,7 +18,7 @@ internal sealed class LegacyImport(ISecretProtector protector, ICertificateFacto
     internal static RelayConfiguration? ReadInitialConfiguration(string state)
     {
         // 数据库及配套标记同时遗失也不能把残留私有账户或WAL当作全新站点。
-        if (new[] { "official-accounts", "owned-claude-processes", "keys", "legacy-backups" }.Any(name => System.IO.Directory.Exists(System.IO.Path.Combine(state, name))
+        if (new[] { "official-accounts", "owned-claude-processes", "keys", "legacy-backups", "upgrade-backups" }.Any(name => System.IO.Directory.Exists(System.IO.Path.Combine(state, name))
                 && System.IO.Directory.EnumerateFileSystemEntries(System.IO.Path.Combine(state, name)).Any())
             || new[] { "relay.db-wal", "relay.db-shm", "serving.lock" }.Any(name => File.Exists(System.IO.Path.Combine(state, name))))
             throw new InvalidOperationException("发现已有站点的残留资产，请恢复完整配套备份，不能重新创建身份。");

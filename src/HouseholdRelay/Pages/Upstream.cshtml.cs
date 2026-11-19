@@ -247,8 +247,10 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         {
             var name = upstreams.ReadCandidate(candidateId).Name;
             if (!deleteConfirmed) throw new InvalidOperationException($"要删除「{name}」，请先勾选删除按钮前面的确认框，再按删除。");
-            upstreams.Delete(candidateId);
-            Notice = $"已删除「{name}」。";
+            var references = upstreams.Delete(candidateId);
+            Notice = references is { Requests: 0, Attempts: 0, Prices: 0 } ? $"已删除「{name}」，没有用量或单价引用它，本机已清除它的密钥。"
+                : $"已删除「{name}」，本机已清除它的密钥。它有 {references.Requests} 条用量记录、{references.Attempts} 次上游尝试、{references.Prices} 条单价，"
+                    + "历史照常保留，用量页仍读出它的名字。";
         }
         // 未勾选确认、当前使用中、正在检测或上游不存在：读出原因，什么都不删。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }

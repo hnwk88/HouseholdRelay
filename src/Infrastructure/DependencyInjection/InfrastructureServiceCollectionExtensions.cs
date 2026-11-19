@@ -42,6 +42,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IDatabaseMigration, UpstreamFailoverSchema>();
         services.AddSingleton<IDatabaseMigration, UpstreamExportSchema>();
         services.AddSingleton<IDatabaseMigration, SiteIdentitySchema>();
+        // 负责把库从版本 8 升到 9（上游停用、三张用量相关表补外键、迁移另存）；选 Singleton 的原因：迁移无状态，只在打开数据库时按顺序执行一次。
+        services.AddSingleton<IDatabaseMigration, UpstreamReferenceSchema>();
         services.AddSingleton<IDeviceIdGenerator, RandomDeviceIdGenerator>();
         services.AddSingleton<RelayDatabase>();
         services.AddSingleton<IRelayInstance>(provider => provider.GetRequiredService<RelayDatabase>());

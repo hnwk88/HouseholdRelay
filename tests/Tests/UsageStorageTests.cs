@@ -107,27 +107,6 @@ static class UsageStorageTests
         Check(reopenedProcess.Identities.Clients.Authenticate(token.Token)?.Id == user.Id && reopenedProcess.Settings.Read().Version == 1);
     }
 
-    /// <summary>
-    /// 验证用量表结构升级在保住身份前回滚：预置冲突的 usage_requests 表时升级失败，版本号仍为 2 且未建出时间索引；
-    /// 去掉冲突后升级成功，成员令牌仍对应原成员，用量为空。
-    /// </summary>
-    public static Task MigrationRollback()
-    {
-        using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities; var user = identities.Create("迁移");
-        database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
-            DROP TABLE usage_attempts; DROP TABLE usage_requests; DROP TABLE usage_prices;
-            ALTER TABLE upstream_candidates DROP COLUMN name; ALTER TABLE upstream DROP COLUMN candidate_id; PRAGMA user_version=2;
-            CREATE TABLE usage_requests(unexpected TEXT);
-            """));
-        var rejected = false; try { _ = new TestProcess(home.Path).Database; } catch (SqliteException) { /* 冲突的表结构让升级中途失败，预期以 SQLite 异常整体回滚；随后核对版本号和索引未变。 */ rejected = true; }
-        Check(rejected);
-        using (var connection = database.Open())
-        { Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 2); Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM sqlite_master WHERE name='usage_time'")) == 0); }
-        database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TABLE usage_requests"));
-        var upgraded = new TestProcess(home.Path); Check(upgraded.Identities.Clients.Authenticate(user.Token)?.Id == user.UserId);
-        Check(upgraded.Usage.Query(new()).Total == 0);
-        return Task.CompletedTask;
-    }
 }
 
 /// <summary>固定 UTC 时钟同时驱动维护计时器，无需等待真实一小时或四十天。</summary>

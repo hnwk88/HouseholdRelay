@@ -150,11 +150,13 @@ static class UpstreamAttemptTests
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var token = process.Identities.Create("清理");
         var user = process.Identities.Clients.Authenticate(token.Token)!;
+        // 尝试记录对已保存上游有外键：先存一家真实上游，用它的主键记账。
+        var candidate = process.Upstreams.SaveCandidate(process.Upstreams.ReadOverview().Version, new UpstreamOptions { BaseUrl = "https://cleanup.example.com" }, "sk-cleanup-0001", "清理用上游");
         var now = new DateTimeOffset(2026, 11, 2, 6, 30, 0, TimeSpan.Zero); var clock = new UsageClock(now); var usage = new TestProcess(home.Path, clock).Usage;
         foreach (var (id, time) in new[] { ("expired", now.AddDays(-40).AddTicks(-1)), ("boundary", now.AddDays(-40)) })
         {
-            clock.Set(time); await usage.Start(id, user, "inference"); await usage.Dispatch(id, 1, "fixture-candidate", "fixture-model");
-            Check(await usage.Finish(id, new UsageEnd("failed", true, 503, 503, 1, "partial", new()) { Attempts = [new UpstreamAttempt(1, "fixture-candidate", 1, time)] }));
+            clock.Set(time); await usage.Start(id, user, "inference"); await usage.Dispatch(id, 1, candidate, "fixture-model");
+            Check(await usage.Finish(id, new UsageEnd("failed", true, 503, 503, 1, "partial", new()) { Attempts = [new UpstreamAttempt(1, candidate, 1, time)] }));
         }
         int Count(string sql) { using var connection = process.Database.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
         Check(Count("SELECT COUNT(*) FROM usage_attempts") == 2);
@@ -181,7 +183,7 @@ static class UpstreamAttemptTests
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_requests WHERE request_id='kept' AND input_tokens=3")) == 1);
         }
         var upgraded = new TestProcess(home.Path);
-        using (var connection = upgraded.Database.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 8);
+        using (var connection = upgraded.Database.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == RelayDatabase.CurrentVersion);
         Check(upgraded.Usage.Query(new()).Rows.Single().Tokens == new UsageTokens(3, 4));
     }
 

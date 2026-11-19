@@ -18,13 +18,14 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
             """, ("$id", requestId), ("$user", userId), ("$token", tokenId), ("$time", startedAtTicks), ("$kind", kind));
     }
 
-    /// <summary>标记已发送、记下首先要试的那一家并复制它的单价快照。</summary>
+    /// <summary>标记已发送、记下首先要试的那一家并复制它的单价快照与此刻的名称快照。</summary>
     public int MarkDispatched(string requestId, long version, string? candidateId, string? model)
     {
         using var connection = database.Open(1);
         return Execute(connection, null, """
             UPDATE usage_requests SET upstream_version=$version,candidate_id=$candidate,model=$model,dispatched=1,
-                price_json=(SELECT json FROM usage_prices WHERE candidate_id=$candidate AND model=$model)
+                price_json=(SELECT json FROM usage_prices WHERE candidate_id=$candidate AND model=$model),
+                upstream_name=(SELECT name FROM upstream_candidates WHERE id=$candidate)
             WHERE request_id=$id AND outcome='started'
             """, ("$id", requestId), ("$version", version), ("$candidate", candidateId), ("$model", model));
     }
@@ -55,7 +56,9 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
             UPDATE usage_requests SET ended_at=$time,outcome=$outcome,dispatched=$sent,status_code=$status,
                 upstream_status=$upstream,duration_ms=$duration,completeness=$completeness,
                 input_tokens=$input,output_tokens=$output,cache_read_tokens=$read,cache_write_tokens=$write,
-                amount=$amount,currency=$currency,money_source=$source,money_completeness=$moneyState,candidate_id=$candidate,price_json=$price
+                amount=$amount,currency=$currency,money_source=$source,money_completeness=$moneyState,price_json=$price,
+                upstream_name=CASE WHEN candidate_id IS $candidate THEN upstream_name ELSE (SELECT name FROM upstream_candidates WHERE id=$candidate) END,
+                candidate_id=$candidate
             WHERE request_id=$id AND outcome='started'
             """, ("$id", requestId), ("$candidate", candidate), ("$price", priceJson), ("$time", endedAtTicks), ("$outcome", result.Outcome), ("$sent", result.Dispatched),
             ("$status", result.Status), ("$upstream", result.UpstreamStatus), ("$duration", result.DurationMs),
@@ -66,8 +69,9 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
         foreach (var attempt in result.Attempts)
             Execute(connection, transaction, """
                 INSERT INTO usage_attempts(request_id,attempt,candidate_id,upstream_version,started_at,headers_ms,duration_ms,upstream_status,
-                    upstream_request_id,error_type,error_message,connect_failure,disposition)
-                VALUES($id,$attempt,$candidate,$version,$started,$headers,$duration,$status,$upstreamId,$type,$message,$connect,$disposition)
+                    upstream_request_id,error_type,error_message,connect_failure,disposition,upstream_name)
+                VALUES($id,$attempt,$candidate,$version,$started,$headers,$duration,$status,$upstreamId,$type,$message,$connect,$disposition,
+                    (SELECT name FROM upstream_candidates WHERE id=$candidate))
                 """, ("$id", requestId), ("$attempt", attempt.Number), ("$candidate", attempt.CandidateId), ("$version", attempt.Version),
                 ("$started", attempt.StartedAt.UtcTicks), ("$headers", attempt.HeadersMs), ("$duration", attempt.DurationMs), ("$status", attempt.UpstreamStatus),
                 ("$upstreamId", attempt.UpstreamRequestId), ("$type", attempt.ErrorType), ("$message", attempt.ErrorMessage), ("$connect", attempt.ConnectFailure),

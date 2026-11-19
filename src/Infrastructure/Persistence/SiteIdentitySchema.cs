@@ -13,7 +13,7 @@ internal sealed class SiteIdentitySchema(RelayDataOptions options) : IDatabaseMi
     {
         using var connection = database.Open();
         var version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
-        if (version == 8)
+        if (version >= 8)
         {
             if (Convert.ToInt32(Scalar(connection, null, "SELECT COUNT(*) FROM site_identity WHERE id=1")) != 1)
                 throw new InvalidOperationException("站点身份状态缺失，请恢复配套备份。");

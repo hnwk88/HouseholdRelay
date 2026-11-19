@@ -18,6 +18,14 @@ public sealed class RelayDatabase : IRelayInstance
     public string Path { get; }
     /// <summary>本实例的唯一编号（32 位十六进制 GUID），同时写在库外的 .relay-instance 标记和库内元数据中，每次打开连接都核对二者一致，防止误用别的实例的数据库或备份。</summary>
     public string InstanceId { get; private set; } = "";
+    /// <summary>本程序认识的最高库版本；更高的库（新版程序写过的）拒绝打开，加一版只改这里和新迁移类。</summary>
+    public const int CurrentVersion = 9;
+    /// <summary>最近一次架构升级的结果，存在 metadata 的 last_upgrade 里；从没升级过时为 null。</summary>
+    public DatabaseUpgrade? LastUpgrade { get; private set; }
+    /// <summary>这次打开时刚把已有数据的库升级过（做过升级前备份）。</summary>
+    public bool UpgradedOnOpen { get; private set; }
+    /// <summary>本次启动的升级编号：迁移写归档时带上它，升级结束按它汇总本次另存了几条。</summary>
+    internal string UpgradeId { get; } = Guid.NewGuid().ToString("N");
     private readonly string marker;
     private readonly string connectionString;
     private readonly ISecretProtector protector;
@@ -46,18 +54,28 @@ public sealed class RelayDatabase : IRelayInstance
             protector.ProtectDirectory(State);
             if (File.Exists(marker) != File.Exists(Path))
                 throw new InvalidOperationException("实例标记与数据库不完整。请恢复本实例备份，不能自动重新开放首次设置。");
-            if (!File.Exists(marker)) Create();
+            var created = !File.Exists(marker);
+            if (created) Create();
             InstanceId = File.ReadAllText(marker).Trim();
             if (!Guid.TryParseExact(InstanceId, "N", out _)) throw new InvalidOperationException("实例标记损坏，请恢复备份。");
+            int version;
             using (var connection = Open())
             {
-                if (Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")) is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8)
-                    || (string?)Scalar(connection, null, "PRAGMA quick_check") != "ok")
+                version = Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version"));
+                if (version is < 1 or > CurrentVersion || (string?)Scalar(connection, null, "PRAGMA quick_check") != "ok")
                     throw new InvalidOperationException("数据库版本不支持或完整性检查失败，请恢复备份。");
                 _ = ReadSettings(connection, null);
             }
-            // 顺序固定为：旧数据导入、上游架构升级、用量架构升级、上游命名与全局代理升级、上游尝试记录升级、自动切换与按上游计价升级、上游导出升级。
+            // 已有数据的库要升级时，第一个迁移之前先备份并校验；备份不成就不升级。刚建的空库没有数据可丢，不备份。
+            var backup = !created && version < CurrentVersion ? Backup(version) : null;
+            // 顺序固定为：旧数据导入、上游架构升级、用量架构升级、上游命名与全局代理升级、上游尝试记录升级、自动切换与按上游计价升级、上游导出升级、站点身份、上游停用与外键。
             foreach (var migration in migrations.OrderBy(item => item.Order)) migration.Apply(this);
+            using (var connection = Open())
+            {
+                if (backup is not null) { RecordUpgrade(connection, version, backup); UpgradedOnOpen = true; }
+                LastUpgrade = Scalar(connection, null, "SELECT value FROM metadata WHERE key='last_upgrade'") is string json
+                    ? JsonSerializer.Deserialize<DatabaseUpgrade>(json, ConfigurationFiles.Json) : null;
+            }
         }
         finally
         {
@@ -104,6 +122,62 @@ public sealed class RelayDatabase : IRelayInstance
         Execute(connection, transaction, "INSERT INTO bootstrap VALUES(1,$hash,$protected)",
             ("$hash", ConfigurationFiles.Hash(code)), ("$protected", protector.Protect(Encoding.UTF8.GetBytes(code))));
         transaction.Commit();
+    }
+
+    /// <summary>
+    /// 升级前备份：用 SQLite 在线备份把整库（含 WAL 里还没写回的页）复制到 .state\upgrade-backups\时间-v旧版本-编号\relay.db，改成单文件日志模式，
+    /// 再单独打开核对完整性、库版本和实例编号。任何一步失败都删掉半截备份并抛出 <see cref="InvalidOperationException"/>，调用方因此不会开始迁移。
+    /// 返回备份文件相对数据目录的路径（不含本机用户名），读给管理员听。
+    /// </summary>
+    private string Backup(int version)
+    {
+        var folder = System.IO.Path.Combine(State, "upgrade-backups", DateTime.UtcNow.ToString("yyyyMMddHHmmss") + "-v" + version + "-" + UpgradeId[..8]);
+        var file = System.IO.Path.Combine(folder, "relay.db");
+        try
+        {
+            protector.ProtectDirectory(folder);
+            var target = new SqliteConnectionStringBuilder { DataSource = file, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false }.ToString();
+            using (var source = Open())
+            using (var copy = new SqliteConnection(target))
+            {
+                copy.Open(); source.BackupDatabase(copy);
+                Execute(copy, null, "PRAGMA journal_mode=DELETE");
+            }
+            using (var check = new SqliteConnection(new SqliteConnectionStringBuilder(target) { Mode = SqliteOpenMode.ReadWrite }.ToString()))
+            {
+                check.Open();
+                if ((string?)Scalar(check, null, "PRAGMA quick_check") != "ok" || Convert.ToInt32(Scalar(check, null, "PRAGMA user_version")) != version
+                    || (string?)Scalar(check, null, "SELECT value FROM metadata WHERE key='instance_id'") != InstanceId)
+                    throw new InvalidOperationException("备份核对不一致。");
+            }
+            return System.IO.Path.GetRelativePath(Home, file);
+        }
+        // 磁盘满、没有权限、备份核对不一致：都不升级。原始异常可能带完整路径（含用户名），只读出结论。
+        catch (Exception error) when (error is SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            try { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
+            // 半截备份删不掉不影响结论：库没动，下次启动会另起一个时间戳目录重新备份。
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+            throw new InvalidOperationException($"数据库要从版本 {version} 升级到 {CurrentVersion}，但升级前备份没有做成，所以没有升级，原库没动。请检查数据目录所在磁盘的剩余空间和写入权限，再重新启动。");
+        }
+    }
+
+    /// <summary>升级结束：按本次升级编号汇总各版迁移另存的条数，连同版本、备份位置写进 metadata 的 last_upgrade，覆盖上一次的记录。</summary>
+    private void RecordUpgrade(SqliteConnection connection, int fromVersion, string backup)
+    {
+        var archived = new List<ArchivedRows>();
+        if (Scalar(connection, null, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_archive'") is not null)
+        {
+            using var command = Command(connection, null, """
+                SELECT schema_version,source_table,reason,COUNT(*) FROM migration_archive WHERE upgrade_id=$upgrade
+                GROUP BY schema_version,source_table,reason ORDER BY schema_version,source_table,reason
+                """, ("$upgrade", UpgradeId));
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) archived.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3)));
+        }
+        var upgrade = new DatabaseUpgrade(fromVersion, Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")), DateTimeOffset.UtcNow, backup, archived);
+        Execute(connection, null, "INSERT INTO metadata VALUES('last_upgrade',$json) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ("$json", JsonSerializer.Serialize(upgrade, ConfigurationFiles.Json)));
     }
 
     /// <summary>已有数据库只以读写模式打开；文件遗失时绝不悄悄建空库。</summary>

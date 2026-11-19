@@ -84,12 +84,12 @@ internal static class UsageQuery
             decimal.Parse(reader.GetString(4), CultureInfo.InvariantCulture), reader.GetInt64(5), reader.GetInt64(6))));
         return result;
     }
-    /// <summary>在同一事务内读出本页明细各行的上游尝试，按请求编号分组、按次序排列；名称按候选主键现查，候选已删除时为 null。本页用与明细相同的条件、排序和分页圈定。</summary>
+    /// <summary>在同一事务内读出本页明细各行的上游尝试，按请求编号分组、按次序排列；名称先取记账时的快照，旧记录没有快照时按候选主键现查（停用的上游照样查得到），并带出它此刻是否已停用。本页用与明细相同的条件、排序和分页圈定。</summary>
     private static Dictionary<string, IReadOnlyList<UpstreamAttemptRow>> Attempts(SqliteConnection connection, SqliteTransaction transaction, string where, (string Name, object? Value)[] args)
     {
         using var command = Command(connection, transaction, """
-            SELECT a.request_id,a.attempt,a.candidate_id,c.name,a.upstream_version,a.started_at,a.headers_ms,a.duration_ms,a.upstream_status,
-                a.upstream_request_id,a.error_type,a.error_message,a.connect_failure,a.disposition
+            SELECT a.request_id,a.attempt,a.candidate_id,COALESCE(a.upstream_name,c.name),a.upstream_version,a.started_at,a.headers_ms,a.duration_ms,a.upstream_status,
+                a.upstream_request_id,a.error_type,a.error_message,a.connect_failure,a.disposition,c.deleted_at IS NOT NULL
             FROM usage_attempts a LEFT JOIN upstream_candidates c ON c.id=a.candidate_id
             WHERE a.request_id IN (SELECT r.request_id FROM usage_requests r WHERE
             """ + where + " ORDER BY r.request_started_at DESC,r.request_id DESC LIMIT $limit OFFSET $offset) ORDER BY a.request_id,a.attempt", args);
@@ -99,7 +99,7 @@ internal static class UsageQuery
         {
             if (!result.TryGetValue(reader.GetString(0), out var list)) result[reader.GetString(0)] = list = [];
             list.Add(new(reader.GetInt32(1), Text(2), Text(3), reader.GetInt64(4), new DateTimeOffset(reader.GetInt64(5), TimeSpan.Zero), Number(reader, 6),
-                reader.GetInt64(7), (int?)Number(reader, 8), Text(9), Text(10), Text(11), Text(12), reader.GetString(13)));
+                reader.GetInt64(7), (int?)Number(reader, 8), Text(9), Text(10), Text(11), Text(12), reader.GetString(13)) { Deleted = reader.GetBoolean(14) });
         }
         return result.ToDictionary(item => item.Key, item => (IReadOnlyList<UpstreamAttemptRow>)item.Value);
     }
