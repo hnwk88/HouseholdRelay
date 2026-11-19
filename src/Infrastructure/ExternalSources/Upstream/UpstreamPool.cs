@@ -18,11 +18,11 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     private readonly int maxConnections = config.MaxConcurrent;
     private UpstreamConnection? current;
     /// <summary>备用上游的连接，按已保存上游主键；<see cref="order"/> 记最近一次读到的上游页顺序。</summary>
-    private readonly Dictionary<string, UpstreamConnection> standby = new(StringComparer.Ordinal);
-    private List<string> order = [];
+    private readonly Dictionary<long, UpstreamConnection> standby = [];
+    private List<long> order = [];
     /// <summary>每次读快照前领的序号，越大越新；<see cref="installed"/> 与 <see cref="standbyInstalled"/> 是当前在用与备用连接所用快照的序号。</summary>
     private long reads, installed, standbyInstalled;
-    private string? servedId;
+    private long? servedId;
     private DateTimeOffset? servedAt;
 
     /// <summary>
@@ -91,7 +91,7 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
             var stale = read < standbyInstalled;
             foreach (var snapshot in snapshots)
             {
-                var id = snapshot.CandidateId!;
+                var id = snapshot.CandidateId!.Value;
                 standby.TryGetValue(id, out var connection);
                 var keepBlocked = snapshot.BlockedByIdentity && connection is not null && connection.Snapshot.Version == snapshot.Version && connection.Snapshot.Options == snapshot.Options;
                 if (!stale && !keepBlocked && (connection is null || connection.Snapshot.Version != snapshot.Version || connection.Snapshot.Options != snapshot.Options
@@ -105,7 +105,7 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
                 }
             }
             if (stale) return leases;
-            standbyInstalled = read; order = snapshots.Select(snapshot => snapshot.CandidateId!).ToList();
+            standbyInstalled = read; order = snapshots.Select(snapshot => snapshot.CandidateId!.Value).ToList();
             foreach (var id in standby.Keys.Except(order).ToArray()) { standby[id].Dispose(); standby.Remove(id); }
             return leases;
         }

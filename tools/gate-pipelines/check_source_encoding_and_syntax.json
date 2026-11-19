@@ -145,6 +145,10 @@
       "只在": [
         "缺BOM"
       ]
+    },
+    {
+      "路径": "tests/Tests/Fixtures/",
+      "理由": "旧库夹具是旧版程序与 Claude Code 原样写出的数据文件（凭据、配置、明文假值），不是源码；补 BOM 会改变数据，Claude Code 写的 JSON 本来没有 BOM，加了就解析失败。"
     }
   ]
 }

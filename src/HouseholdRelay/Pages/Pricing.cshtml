@@ -39,6 +39,6 @@
 {
     <section class="card"><h2>@price.Model · @price.Currency</h2>
         <p>每百万 Token：输入 @(price.InputPerMillion?.ToString() ?? "未知") · 输出 @(price.OutputPerMillion?.ToString() ?? "未知") · 缓存读 @(price.CacheReadPerMillion?.ToString() ?? "未知") · 缓存写 @(price.CacheWritePerMillion?.ToString() ?? "未知")</p>
-        <a asp-page="/Pricing" asp-route-candidateId="@price.CandidateId" asp-route-modelName="@price.Model">调整此模型费率</a>
+        <a asp-page="/Pricing" asp-route-candidateId="@Model.Selected.Id" asp-route-modelName="@price.Model">调整此模型费率</a>
     </section>
 }

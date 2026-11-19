@@ -19,7 +19,7 @@ public sealed class RelayDatabase : IRelayInstance
     /// <summary>本实例的唯一编号（32 位十六进制 GUID），同时写在库外的 .relay-instance 标记和库内元数据中，每次打开连接都核对二者一致，防止误用别的实例的数据库或备份。</summary>
     public string InstanceId { get; private set; } = "";
     /// <summary>本程序认识的最高库版本；更高的库（新版程序写过的）拒绝打开，加一版只改这里和新迁移类。</summary>
-    public const int CurrentVersion = 9;
+    public const int CurrentVersion = 10;
     /// <summary>最近一次架构升级的结果，存在 metadata 的 last_upgrade 里；从没升级过时为 null。</summary>
     public DatabaseUpgrade? LastUpgrade { get; private set; }
     /// <summary>这次打开时刚把已有数据的库升级过（做过升级前备份）。</summary>
@@ -68,7 +68,7 @@ public sealed class RelayDatabase : IRelayInstance
             }
             // 已有数据的库要升级时，第一个迁移之前先备份并校验；备份不成就不升级。刚建的空库没有数据可丢，不备份。
             var backup = !created && version < CurrentVersion ? Backup(version) : null;
-            // 顺序固定为：旧数据导入、上游架构升级、用量架构升级、上游命名与全局代理升级、上游尝试记录升级、自动切换与按上游计价升级、上游导出升级、站点身份、上游停用与外键。
+            // 顺序固定为：旧数据导入、上游架构升级、用量架构升级、上游命名与全局代理升级、上游尝试记录升级、自动切换与按上游计价升级、上游导出升级、站点身份、上游停用与外键、整数主键。
             foreach (var migration in migrations.OrderBy(item => item.Order)) migration.Apply(this);
             using (var connection = Open())
             {

@@ -14,7 +14,8 @@ public sealed record ArchivedRows(int SchemaVersion, string Table, string Reason
         "orphan-reference" => $"{Table switch { "usage_requests" => "用量记录", "usage_attempts" => "上游尝试", _ => "活动上游" }}里指向已删除上游的引用 {Count} 条，原主键另存、引用清空，记录本身保留",
         "price-not-migrated" => $"旧活动版本的单价 {Count} 条，改按上游计价后查不到，整行另存",
         "dropped-proxy" => $"没被选作全局代理的旧代理地址 {Count} 个，原值另存",
-        "ambiguous-active-source" => $"活动上游有多家已保存上游对得上，没有自动认定，候选主键另存 {Count} 条，请在上游页切换一次确认",
+        "replaced-id" => $"{Table switch { "administrators" => "管理员", "users" => "使用者", "tokens" => "个人令牌", _ => "单价" }}的旧文本编号 {Count} 个，换成库生成的数字编号，旧编号连同新号另存，关系不变",
+        "ambiguous-active-source" =>$"活动上游有多家已保存上游对得上，没有自动认定，候选主键另存 {Count} 条，请在上游页切换一次确认",
         _ => $"{Table} 表 {Reason} {Count} 条"
     };
 }

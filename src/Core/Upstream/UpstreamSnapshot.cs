@@ -3,7 +3,7 @@
 namespace Core.Upstream;
 
 /// <summary>请求持有的不可变活动版本；用普通类而非记录类型，避免自动输出凭据。</summary>
-public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, string? candidateId = null, string? name = null, bool failover = false, bool blockedByIdentity = false, string? accountUuid = null, string? blockedReason = null)
+public sealed class UpstreamSnapshot(long version, UpstreamOptions options, string? credential, UpstreamReport? report = null, long? candidateId = null, string? name = null, bool failover = false, bool blockedByIdentity = false, string? accountUuid = null, string? blockedReason = null)
 {
     /// <summary>本次读取被站点维护或私有身份配置校验拒绝；不是凭据丢失，连接池须保留既有暂停和冷却。</summary>
     [JsonIgnore] public bool BlockedByIdentity { get; } = blockedByIdentity;
@@ -15,7 +15,7 @@ public sealed class UpstreamSnapshot(long version, UpstreamOptions options, stri
     [JsonIgnore] public string? AccountUuid { get; } = accountUuid;
 
     /// <summary>当前生效的已保存上游主键；尚未从任何已保存上游激活（新实例或独立中转）时为 null。</summary>
-    public string? CandidateId { get; } = candidateId;
+    public long? CandidateId { get; } = candidateId;
 
     /// <summary>当前生效上游的供应商名称，只做显示；改名立即反映在这里，不改变 <see cref="Version"/>。</summary>
     public string? Name { get; } = name;

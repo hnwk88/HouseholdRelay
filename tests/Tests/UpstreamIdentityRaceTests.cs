@@ -90,13 +90,13 @@ public static class UpstreamIdentityRaceTests
         Check(mock.Calls.Count == before + 1 && mock.Calls.Last().Headers.ContainsKey("x-api-key") && !mock.Calls.Last().Headers.ContainsKey("Authorization"),
             "The post-selection refusal must skip the other official account and send only to the independent API.");
         using var original = web.Relay.Upstreams.Acquire();
-        var path = Path.Combine(web.Home.Path, ".state", "official-accounts", official, ".claude.json");
+        var path = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(official).Uid, ".claude.json");
         var originalBytes = File.ReadAllBytes(path);
         File.WriteAllText(path, "{broken-identity-configuration");
         // 普通转发按身份代次缓存核对结果、不再每次打开私有配置；损坏在下一次受控准备（或续期启动前重读）时发现。
         // 这里走一次受控准备：它拒绝损坏文件、不改原字节，并让本代缓存失效，下一次读取据实阻断。
         var refused = false;
-        try { web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>().PrepareAccount(official); }
+        try { web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>().PrepareAccount(web.Upstreams.ReadCandidate(official).Uid); }
         // 损坏配置的固定拒绝是本步预期结果。
         catch (ClaudeConfigurationUnavailableException) { refused = true; }
         Check(refused && File.ReadAllText(path) == "{broken-identity-configuration", "Controlled preparation refuses the damaged file without rewriting it.");
@@ -123,7 +123,7 @@ public static class UpstreamIdentityRaceTests
     }
 
     /// <summary>导入并测试独立假官方账户；不改变当前活动上游。</summary>
-    private static async Task<string> AddOfficial(WebFixture web, UpstreamFixture mock, string name)
+    private static async Task<long> AddOfficial(WebFixture web, UpstreamFixture mock, string name)
     {
         var id = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), name, default);
         Check((await web.Upstreams.TestCandidate(id, true, default)).CanActivate);
@@ -131,7 +131,7 @@ public static class UpstreamIdentityRaceTests
     }
 
     /// <summary>创建并测试一个独立 API 候选，但不切换当前活动上游。</summary>
-    private static async Task<string> AddApi(WebFixture web, UpstreamFixture mock, string name)
+    private static async Task<long> AddApi(WebFixture web, UpstreamFixture mock, string name)
     {
         var id = web.Upstreams.SaveCandidate(web.Upstreams.ReadActive().Version, mock.Options(), "fixture-race-api", name);
         Check((await web.Upstreams.TestCandidate(id, true, default)).CanActivate);

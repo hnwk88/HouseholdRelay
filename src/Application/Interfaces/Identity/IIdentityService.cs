@@ -18,11 +18,11 @@ public interface IIdentityService
     IssuedToken Create(string displayName, string? legacyName = null);
 
     /// <summary>修改显示名，令牌不变。</summary>
-    void Rename(string userId, string displayName);
+    void Rename(long userId, string displayName);
 
     /// <summary>启用或停用使用者，鉴权立即生效。</summary>
-    void SetEnabled(string userId, bool enabled);
+    void SetEnabled(long userId, bool enabled);
 
     /// <summary>轮换个人令牌，旧令牌立即失效。</summary>
-    IssuedToken Rotate(string userId);
+    IssuedToken Rotate(long userId);
 }

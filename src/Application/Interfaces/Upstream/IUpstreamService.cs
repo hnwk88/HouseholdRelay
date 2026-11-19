@@ -13,28 +13,28 @@ public interface IUpstreamService : IActiveUpstreamSource
     IReadOnlyList<UpstreamCandidate> ListCandidates();
 
     /// <summary>按主键读取已保存上游；不存在时提示重新加载页面。</summary>
-    UpstreamCandidate ReadCandidate(string id);
+    UpstreamCandidate ReadCandidate(long id);
 
     /// <summary>校验并加密保存一个带名称的上游，返回主键；<paramref name="name"/> 为空时用地址主机名（命令行用），空白名称拒绝；活动版本已变化时拒绝。</summary>
-    string SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name = null);
+    long SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name = null);
 
     /// <summary>
     /// 登录官方账户并保存为一个账户模式的未测试上游，返回主键：<paramref name="options"/> 给出地址与私网开关，凭据由 <c>claude auth login</c> 写进这个上游自己的配置目录；
     /// <paramref name="name"/> 为空时用登录邮箱。登录失败或活动版本已变化时抛出 <see cref="InvalidOperationException"/> 读出原因。
     /// </summary>
-    Task<string> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation);
+    Task<long> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation);
 
     /// <summary>
     /// 导入别处 Claude Code 登录成功后生成的 <c>.credentials.json</c>（<paramref name="content"/>）并保存为一个账户模式的未测试上游，返回主键；此后与 <see cref="LoginOfficial"/> 得到的上游完全一样。
     /// <paramref name="name"/> 为空时用登录邮箱；文件不合格、未安装 Claude Code、名称不合规则或活动版本已变化时抛出 <see cref="InvalidOperationException"/> 读出原因，不新增上游、不留账户目录。
     /// </summary>
-    Task<string> ImportOfficial(long expectedVersion, UpstreamOptions options, byte[] content, string? name, CancellationToken cancellation);
+    Task<long> ImportOfficial(long expectedVersion, UpstreamOptions options, byte[] content, string? name, CancellationToken cancellation);
 
     /// <summary>
     /// 把 <paramref name="ids"/> 指定的上游按上游页顺序导出成用 <paramref name="password"/>（12–128 个字符，不保存）加密的文件；登录得到的官方账户随之搬走：
     /// 本实例此后不再用它转发、不再续期，账户目录留着等管理员删除。密码不合规则、一家都没勾或勾的已不在时抛出 <see cref="InvalidOperationException"/>，什么都不改。
     /// </summary>
-    UpstreamExport Export(IReadOnlyCollection<string> ids, string password);
+    UpstreamExport Export(IReadOnlyCollection<long> ids, string password);
 
     /// <summary>
     /// 用 <paramref name="password"/> 解开 <see cref="Export"/> 产生的文件，按文件里的顺序把每家加成未测试上游（与「API 供应商」保存、「导入登录文件」导入的完全一样），排在已有上游后面。
@@ -49,23 +49,23 @@ public interface IUpstreamService : IActiveUpstreamSource
     void SetFailover(bool enabled);
 
     /// <summary>修改供应商名称；只影响显示，切换和用量都按主键关联。</summary>
-    void Rename(string id, string name);
+    void Rename(long id, string name);
 
     /// <summary>
     /// 删除一个已保存上游：停用而不是抹掉——它从上游页、切换和导出里消失，密钥清掉（官方登录的连同账户目录），用量历史照常保留并读出它的名字。
     /// 当前使用中或正在检测时拒绝，读出原因与下一步；返回仍引用它的用量、尝试和单价条数，供页面读给管理员。
     /// </summary>
-    UpstreamReferences Delete(string id);
+    UpstreamReferences Delete(long id);
 
     /// <summary>获取模型目录（不花额度），自动探测的认证方式写回该上游；手动指定的认证方式不被覆盖。当前使用中的上游保留原测试结论，只更新模型目录。</summary>
-    Task<ModelCatalog> DiscoverModels(string id, CancellationToken cancellation);
+    Task<ModelCatalog> DiscoverModels(long id, CancellationToken cancellation);
 
     /// <summary>选定要测试的模型；与原值不同时清除旧的通过状态，需重新测试才能切换。</summary>
-    void ChooseModel(string id, string model);
+    void ChooseModel(long id, string model);
 
     /// <summary>经操作者确认后对上游做一次最小模型调用检测，保存安全的检测报告并写回自动探测出的认证方式与检测方式。</summary>
-    Task<UpstreamReport> TestCandidate(string id, bool confirmed, CancellationToken cancellation);
+    Task<UpstreamReport> TestCandidate(long id, bool confirmed, CancellationToken cancellation);
 
     /// <summary>把检测通过的上游原子切换为活动版本；<paramref name="expectedVersion"/> 是调用方看到的活动版本，为空时沿用该上游保存时基于的版本。</summary>
-    void Activate(string id, long? expectedVersion = null);
+    void Activate(long id, long? expectedVersion = null);
 }

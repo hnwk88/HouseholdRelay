@@ -12,15 +12,15 @@ public interface IIdentityRepository
     /// <summary>读取已提交的鉴权名单（只含当前有效令牌的哈希）。</summary>
     IReadOnlyList<ClientAccess> ReadAccess();
 
-    /// <summary>新建使用者与第一版令牌；超出 8 人或名称重复时拒绝。</summary>
-    IReadOnlyList<ClientAccess> Create(string userId, string name, string displayName, string tokenHash);
+    /// <summary>新建使用者与第一版令牌，返回库生成的使用者主键与鉴权名单；超出 8 人或名称重复时拒绝。</summary>
+    CreatedIdentity Create(string name, string displayName, string tokenHash);
 
     /// <summary>修改显示名；使用者不存在时拒绝。</summary>
-    IReadOnlyList<ClientAccess> Rename(string userId, string displayName);
+    IReadOnlyList<ClientAccess> Rename(long userId, string displayName);
 
     /// <summary>启用或停用使用者；使用者不存在时拒绝。</summary>
-    IReadOnlyList<ClientAccess> SetEnabled(string userId, bool enabled);
+    IReadOnlyList<ClientAccess> SetEnabled(long userId, bool enabled);
 
     /// <summary>撤销当前令牌并写入下一版令牌哈希，保留启用状态。</summary>
-    RotatedIdentity Rotate(string userId, string tokenHash);
+    RotatedIdentity Rotate(long userId, string tokenHash);
 }

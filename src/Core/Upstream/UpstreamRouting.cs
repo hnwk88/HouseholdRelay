@@ -3,16 +3,16 @@
 namespace Core.Upstream;
 
 /// <summary>此刻的走法：最近一次接住请求的那一家与时刻，以及暂避、冷却、暂停中的各家；由连接池给出，上游页与概览按 <see cref="Describe"/> 读成一句话。</summary>
-public sealed record UpstreamRouting(string? ServedId, DateTimeOffset? ServedAt, IReadOnlyList<UpstreamAvoidance> Held)
+public sealed record UpstreamRouting(long? ServedId, DateTimeOffset? ServedAt, IReadOnlyList<UpstreamAvoidance> Held)
 {
     /// <summary>
     /// 按读屏顺序读出「此刻实际走的是哪家；哪家暂避到几点、为什么」。开关关闭时只读在用的那一家；开着时在用的那家没被挡住就读它，
     /// 被挡住时读最近一次接住请求、且自己没被挡住的那一家，都没有时说下一个请求从备用上游开始。<paramref name="name"/> 按主键给出显示名称，时刻按本机时区读到秒。
     /// </summary>
-    public string Describe(bool failover, string? activeId, Func<string?, string> name)
+    public string Describe(bool failover, long? activeId, Func<long?, string> name)
     {
         if (!failover) return $"自动切换已关闭：只用在用的「{name(activeId)}」，它失败时把错误直接交给客户端。";
-        bool Blocked(string? id) => Held.Any(item => item.CandidateId == id);
+        bool Blocked(long? id) => Held.Any(item => item.CandidateId == id);
         var now = !Blocked(activeId) ? $"此刻走的是在用的「{name(activeId)}」。"
             : ServedId is { } served && served != activeId && !Blocked(served) ? $"此刻走的是「{name(served)}」，{ServedAt?.ToLocalTime():HH:mm:ss} 接住了请求。"
             : "在用的那家暂时用不了，下一个请求按上游页的顺序从备用上游开始。";

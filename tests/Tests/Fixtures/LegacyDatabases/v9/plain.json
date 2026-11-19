@@ -1,0 +1,14 @@
+{
+  "session": "hr_1e4sIEi1FObhiJ27CZ77WEO4vCGxfQmxzhdf7dyMGHY",
+  "exportPassword": "fixture-v9-export-password",
+  "tokens": {
+    "\u5939\u5177\u7532": "hr_x08k9v9ZtrZxRjKiPjjLRw1j9Xpk55Cd8hM1049fosU",
+    "\u5939\u5177\u4E59": "hr_bIJigqfiJRSHoBB4MheodJUfrAz7VuF8OlumkDmUuZg"
+  },
+  "upstreams": {
+    "kept": "76e71a7a95e2422d89e7b957f7c38c8c",
+    "standby": "60c84bd2d4c84e4da0eb35e87cb8efcd",
+    "removed": "fb8afd5d97a04e16a3034b537a09dec6",
+    "official": "d96f5efaa8ac455da830913acefd213f"
+  }
+}

@@ -1,4 +1,6 @@
-﻿using HouseholdRelay;
+﻿using System.Text;
+using Application.Interfaces.Security;
+using HouseholdRelay;
 using Microsoft.Data.Sqlite;
 using static Tests.TestSuite;
 
@@ -8,42 +10,48 @@ namespace Tests;
 static class UpstreamMigrationTests
 {
     /// <summary>
-    /// 验证上游表结构升级的回滚：把库退回到前一版结构并预置冲突的 upstream_candidates 表，启动时升级必须失败，
-    /// 且版本号、upstream 表列和上游凭据都保持原样；去掉冲突后升级成功，旧凭据迁为 OAuth 模式、无诊断报告，
-    /// 管理员初始化状态和成员编号不变，停用的旧令牌仍被拒；再次启动不改变上游版本。
+    /// 验证上游表结构升级（v1 → v2）的回滚：程序新建库并导入旧版文件后在第 2 版提交前停下，得到真实的版本 1 库；在上面写入管理员并预置冲突的 upstream_candidates 表，
+    /// 启动时升级必须失败，且版本号、upstream 表列和上游凭据都保持原样；去掉冲突后一路升到最新版，旧凭据迁为 OAuth 模式、无诊断报告，
+    /// 管理员初始化状态不变，成员按归档里的旧编号对得上新主键，停用的旧令牌仍被拒；再次启动不改变上游版本。
     /// </summary>
     public static Task UpgradeRollback()
     {
-        using var home = new TestHome(); home.WriteLegacy(); var process = new TestProcess(home.Path); var database = process.Database;
-        var administrators = process.Administrators; administrators.Initialize(administrators.BootstrapCode()!, WebFixture.Password);
-        var originalId = process.Identities.Clients.Authenticate("legacy-study-token")!.Id;
-        // 构造前一版的实际表结构；身份、哈希、实例标记和加密机密全部保留。
-        database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
-            DROP TABLE upstream_candidates;
-            DROP TABLE usage_attempts;
-            DROP TABLE usage_requests;
-            DROP TABLE usage_prices;
-            ALTER TABLE upstream DROP COLUMN options_json;
-            ALTER TABLE upstream DROP COLUMN report_json;
-            ALTER TABLE upstream DROP COLUMN candidate_id;
-            PRAGMA user_version=1;
-            CREATE TABLE upstream_candidates (unexpected TEXT);
-            """));
+        using var home = new TestHome(); home.WriteLegacy();
+        var calls = 0;
+        // 第 1 个检查点是旧文件导入，第 2 个是 v1 → v2：在第 2 个停下，导入已提交、库停在版本 1。
+        try { _ = new TestProcess(home.Path, migrationCheckpoint: () => { if (++calls == 2) throw new IOException("stop-at-v1"); }).Database; }
+        // 按设计在 v2 提交前停下，只接住这一个注入的异常；下面核对库版本正好是 1。
+        catch (IOException error) when (error.Message == "stop-at-v1") { }
+        var tools = new TestProcess(home.Path);
+        var path = DatabaseUpgradeTests.Database(home.Path); string originalId;
+        using (var connection = DatabaseUpgradeTests.Connect(path))
+        {
+            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 1);
+            originalId = (string)RelayDatabase.Scalar(connection, null, "SELECT id FROM users WHERE name='study'")!;
+            RelayDatabase.Execute(connection, null, "INSERT INTO administrators VALUES('fixture-administrator',$hash); DELETE FROM bootstrap; CREATE TABLE upstream_candidates (unexpected TEXT);",
+                ("$hash", tools.Get<IAdministratorPasswordHasher>().Hash(WebFixture.Password)));
+        }
         var rejected = false;
         try { _ = new TestProcess(home.Path).Database; } catch (SqliteException) { /* 冲突的表结构让升级中途失败，预期以 SQLite 异常整体回滚；随后核对旧结构和凭据未被改动。 */ rejected = true; }
         Check(rejected, "A conflicting schema must fail the upgrade");
-        using (var connection = database.Open())
+        using (var connection = DatabaseUpgradeTests.Connect(path))
         {
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 1);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM pragma_table_info('upstream') WHERE name='options_json'")) == 0);
-            Check(process.ActiveCredential() == "fixture-legacy-upstream-secret");
+            var credential = (byte[])RelayDatabase.Scalar(connection, null, "SELECT credential FROM upstream WHERE id=1")!;
+            Check(Encoding.UTF8.GetString(tools.Get<ISecretProtector>().Unprotect(credential)) == "fixture-legacy-upstream-secret");
+            RelayDatabase.Execute(connection, null, "DROP TABLE upstream_candidates");
         }
-        database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TABLE upstream_candidates"));
         var upgraded = new TestProcess(home.Path); var upstream = upgraded.Upstreams.ReadActive();
         // 纯迁移不准备官方目录或触发续期；直接检查已保存密文解密后仍是旧夹具凭据。
         Check(upstream.Options.Mode == "oauth" && upgraded.ActiveCredential() == "fixture-legacy-upstream-secret" && upstream.Report is null);
-        Check(upgraded.Administrators.IsInitialized);
-        Check(upgraded.Identities.Clients.Authenticate("legacy-study-token")!.Id == originalId);
+        Check(upgraded.Administrators.IsInitialized && upgraded.Administrators.Login(WebFixture.Password) is not null);
+        using (var connection = upgraded.Database.Open())
+        {
+            var mapped = Convert.ToInt64(RelayDatabase.Scalar(connection, null,
+                "SELECT json_extract(row_json,'$.new_id') FROM migration_archive WHERE source_table='users' AND reason='replaced-id' AND json_extract(row_json,'$.id')=$old", ("$old", originalId)));
+            Check(upgraded.Identities.Clients.Authenticate("legacy-study-token")!.UserId == mapped, "The imported member keeps its identity through the key change");
+        }
         Check(upgraded.Identities.Clients.Authenticate("legacy-office-token") is null);
         var repeated = new TestProcess(home.Path);
         Check(repeated.Upstreams.ReadActive().Version == upstream.Version);

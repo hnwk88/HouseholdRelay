@@ -173,6 +173,10 @@ static class ClaudeCodeIdentityTests
         // 开了开关（带 X-Client-Request-Id）照常通过。
         using (var on = await Send(web, person.Token, new string('a', 64), ("User-Agent", "claude-cli/2.1.323 (external, cli)"), ("X-Client-Request-Id", Guid.NewGuid().ToString())))
             Check(on.StatusCode == HttpStatusCode.OK, "A switched-on Claude Code request passes: " + await on.Content.ReadAsStringAsync());
+        // 这次的客户端比中转的假 Claude Code 新，升级器会在后台跑一次假升级，途中读代理设置要开库；等它结束再收尾，否则删数据目录会撞上它开着的库。
+        var updater = web.App.Services.GetRequiredService<IClaudeCodeUpdater>();
+        for (var deadline = DateTime.UtcNow.AddSeconds(30); updater.Describe(_ => "").Contains("正在后台升级", StringComparison.Ordinal); await Task.Delay(100))
+            Check(DateTime.UtcNow < deadline, "Timed out waiting for the background upgrade");
     }
 
     /// <summary>

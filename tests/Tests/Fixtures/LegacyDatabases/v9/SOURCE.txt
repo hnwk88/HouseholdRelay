@@ -1,0 +1,4 @@
+﻿来源提交：bb20b326b765fd9c54d34bb12492284067f097fc
+生成方式：tools\legacy-fixtures\New-LegacyFixture.ps1 -Commit bb20b32 -Name v9 -V9
+生成时间（UTC）：2026-11-19 09:18:27
+内容：那一版的程序经它自己的公开服务写入，密钥都是假值，凭据用生成那台电脑当时的 Windows 用户加密（升级不解密）。

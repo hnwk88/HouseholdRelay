@@ -11,7 +11,7 @@ namespace Core.Usage;
 /// 一次请求对上游的一次尝试：哪家（候选主键，名称只做显示）、第几次、到响应头与总耗时、上游状态码与请求编号、错误类型与脱敏截断后的说明、
 /// 连接失败分类和去向。转发时边走边记，结束时随用量结束记录在同一个短事务里落库；不含提示词、回答、上游凭据或个人令牌。
 /// </summary>
-public sealed class UpstreamAttempt(int number, string? candidateId, long version, DateTimeOffset startedAt)
+public sealed class UpstreamAttempt(int number, long? candidateId, long version, DateTimeOffset startedAt)
 {
     /// <summary>错误说明落库的最大字符数（含截断时补的省略号）。</summary>
     public const int MessageLimit = 300;
@@ -20,7 +20,7 @@ public sealed class UpstreamAttempt(int number, string? candidateId, long versio
     /// <summary>本请求里的第几次尝试，从 1 开始。</summary>
     public int Number { get; } = number;
     /// <summary>这次尝试所用已保存上游的主键；活动上游不是从已保存上游切换来的（新实例、独立中转）时为 null。</summary>
-    public string? CandidateId { get; } = candidateId;
+    public long? CandidateId { get; } = candidateId;
     /// <summary>这次尝试所用的活动上游版本。</summary>
     public long Version { get; } = version;
     /// <summary>开始尝试的 UTC 时刻，取自用量时钟。</summary>

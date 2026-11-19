@@ -35,7 +35,7 @@ public sealed class UsageService(IUsageRepository repository, TimeProvider timeP
         {
             acquired = await writes.WaitAsync(TimeSpan.FromSeconds(2));
             if (!acquired) throw new InvalidOperationException("Usage write queue is busy.");
-            repository.InsertStart(requestId, client.Id, client.TokenId, startedAt.UtcTicks, kind);
+            repository.InsertStart(requestId, client.UserId, client.TokenId, startedAt.UtcTicks, kind);
         }
         // 记不下开始记录就不能发出请求，否则会产生无法计量的上游调用；只把存储类故障转成 503，不暴露底层细节，其他异常照常上抛。
         catch (Exception error) when (StorageError(error))
@@ -48,7 +48,7 @@ public sealed class UsageService(IUsageRepository repository, TimeProvider timeP
     /// 即将发往上游时把开始记录标记为已发送、记下首先要试的那一家，并让仓储复制它当时的单价快照。开始记录不存在或已不在开始状态、写入排队超时或存储故障时，
     /// 计入失败并抛出 503 的 <see cref="RelayFailure"/>，请求不会发往上游。
     /// </summary>
-    public async Task Dispatch(string requestId, long version, string? candidateId, string? model)
+    public async Task Dispatch(string requestId, long version, long? candidateId, string? model)
     {
         var acquired = false;
         try

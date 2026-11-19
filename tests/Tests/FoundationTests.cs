@@ -40,7 +40,7 @@ static partial class FoundationTests
         try { settings.Save(snapshot.Version, snapshot.Value); } catch (InvalidOperationException) { /* 用已提交过的旧版本号保存必须被拒绝；捕获到即记为拒绝成功，未抛出则下一行断言判失败。 */ staleRejected = true; }
         Check(staleRejected, "A stale form must not overwrite a committed configuration");
         var restarted = new TestProcess(home.Path); var restored = restarted.Identities;
-        Check(restored.Clients.Authenticate(rotated.Token)?.Id == a.UserId);
+        Check(restored.Clients.Authenticate(rotated.Token)?.UserId == a.UserId);
         Check(restored.List().Single(user => user.Id == a.UserId).DisplayName == "甲的显示名");
         Check(restarted.Settings.Read().Value.ListenPort == 9001);
         Check(restarted.Administrators.IsSessionValid(session)); administrators.Logout(session);
@@ -133,11 +133,11 @@ static partial class FoundationTests
             "CREATE TRIGGER reject_token_insert BEFORE INSERT ON tokens BEGIN SELECT RAISE(ABORT,'fixture failure'); END"));
         var failed = false;
         try { identities.Rotate(issued.UserId); } catch (Microsoft.Data.Sqlite.SqliteException) { /* 触发器让写入中止，轮换必须以 SQLite 异常整体回滚，随后核对旧令牌未被吊销。 */ failed = true; }
-        Check(failed && identities.Clients.Authenticate(issued.Token)?.Id == issued.UserId);
+        Check(failed && identities.Clients.Authenticate(issued.Token)?.UserId == issued.UserId);
         Check(identities.List().Single().TokenVersion == 1, "Failed rotation must roll back old-token revocation");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TRIGGER reject_token_insert"));
         var replacement = identities.Rotate(issued.UserId);
-        Check(identities.Clients.Authenticate(issued.Token) is null && identities.Clients.Authenticate(replacement.Token)?.Id == issued.UserId);
+        Check(identities.Clients.Authenticate(issued.Token) is null && identities.Clients.Authenticate(replacement.Token)?.UserId == issued.UserId);
         return Task.CompletedTask;
     }
 
@@ -175,8 +175,8 @@ static partial class FoundationTests
         external.SetEnabled(b.UserId, false); upload.Continue.TrySetResult();
         using var rejected = await response; Check(rejected.StatusCode == HttpStatusCode.Unauthorized && fixture.Calls.Count == 3);
         // 改名后仍共享同一人的并发槽；不能通过新显示名绕过排队。
-        Check(identities.Clients.Authenticate(rotated.Token)?.Id == a.UserId);
+        Check(identities.Clients.Authenticate(rotated.Token)?.UserId == a.UserId);
         external.Rename(a.UserId, "重命名的甲");
-        Check(identities.Clients.Authenticate(rotated.Token)?.Id == a.UserId);
+        Check(identities.Clients.Authenticate(rotated.Token)?.UserId == a.UserId);
     }
 }

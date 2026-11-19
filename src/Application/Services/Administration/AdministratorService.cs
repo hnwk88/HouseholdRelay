@@ -24,15 +24,13 @@ public sealed class AdministratorService(IAdministratorRepository repository, IA
 
     /// <summary>
     /// 用引导码完成首次设置：密码须为 12–128 个字符，引导码超过 512 字符直接判为不正确；
-    /// 生成新的管理员主键并哈希密码后交给仓储，由仓储在事务内核对引导码哈希、写入管理员并删除引导码。不合法时抛出 <see cref="InvalidOperationException"/>。
+    /// 哈希密码后交给仓储，由仓储在事务内核对引导码哈希、写入管理员（主键由库生成）并删除引导码。不合法时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
     public void Initialize(string code, string password)
     {
         if (password.Length is < 12 or > 128) throw new InvalidOperationException("管理密码需要 12 至 128 个字符。");
         if (code.Length > 512) throw new InvalidOperationException("引导码不正确。");
-        var id = Guid.NewGuid().ToString("N");
-        var passwordHash = hasher.Hash(id, password);
-        repository.Initialize(id, passwordHash, ConfigurationFiles.Hash(code));
+        repository.Initialize(hasher.Hash(password), ConfigurationFiles.Hash(code));
     }
 
     /// <summary>校验管理密码，通过后签发 8 小时有效的会话令牌（库里只存其哈希）并返回明文令牌；密码长度不在 1–128、尚未设置或密码错误时返回 null。</summary>
@@ -40,7 +38,7 @@ public sealed class AdministratorService(IAdministratorRepository repository, IA
     {
         if (password.Length is < 1 or > 128) return null;
         if (repository.ReadAdministrator() is not { } administrator) return null;
-        if (!hasher.Verify(administrator.Id, administrator.PasswordHash, password)) return null;
+        if (!hasher.Verify(administrator.PasswordHash, password)) return null;
         var session = ConfigurationFiles.NewToken(); var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         repository.CreateSession(ConfigurationFiles.Hash(session), administrator.Id, now, now + 8 * 3600);
         return session;

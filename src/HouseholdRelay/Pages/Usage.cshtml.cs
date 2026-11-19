@@ -11,7 +11,7 @@ namespace HouseholdRelay.Pages;
 public sealed class UsageModel(IUsageService usage, IIdentityService identities) : PageModel
 {
     /// <summary>查询参数：只看某个使用者的用量，空表示全部使用者；管理员入口才允许按任意使用者筛选。</summary>
-    [BindProperty(SupportsGet = true)] public string? UserId { get; set; }
+    [BindProperty(SupportsGet = true)] public long? UserId { get; set; }
     /// <summary>查询参数：起始时间（含），空表示不限；不能晚于 <see cref="Until"/>。</summary>
     [BindProperty(SupportsGet = true)] public DateTimeOffset? From { get; set; }
     /// <summary>查询参数：截止时间，空表示不限。</summary>

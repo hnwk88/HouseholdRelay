@@ -100,7 +100,7 @@ public static class DeviceMetadataPathTests
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
         var candidate = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, options, FakeClaude.Credential("fixture-account-token", 60), "模拟官方", CancellationToken.None);
-        var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate, ".claude.json");
+        var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(candidate).Uid, ".claude.json");
         using (var imported = JsonDocument.Parse(File.ReadAllBytes(configuration))) Check(!imported.RootElement.TryGetProperty("oauthAccount", out _), "An imported login file has no oauthAccount, like a real one");
         await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
         var profile = mock.Calls.Single(call => call.Path == "/api/oauth/profile");
@@ -173,7 +173,7 @@ public static class DeviceMetadataPathTests
             var candidate = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, options, FakeClaude.Credential("fixture-compressed-" + encoding + (streaming ? "-sse" : "-json"), 60), "模拟官方", CancellationToken.None);
             var catalog = await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
             Check(catalog.Status == "passed" && catalog.Models.SequenceEqual(["fixture-model"]), label + " catalog decoded: " + catalog.Message);
-            var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate, ".claude.json");
+            var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(candidate).Uid, ".claude.json");
             using (var recorded = JsonDocument.Parse(File.ReadAllBytes(configuration)))
                 Check(recorded.RootElement.GetProperty("oauthAccount").GetProperty("accountUuid").GetString() == FakeClaude.AccountUuid, label + " profile decoded and recorded");
             var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);

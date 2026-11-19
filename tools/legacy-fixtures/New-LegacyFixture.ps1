@@ -3,18 +3,21 @@
   用旧版正式程序的源码生成真实旧库夹具（不删表删列、不改版本号伪造）。
 .DESCRIPTION
   1. 在临时目录为 -Commit 建一个独立 git 工作树（只读用，结束即删）；
-  2. 把同目录的 Program.cs 复制到临时驱动工程，工程文件引用那个工作树里的 src/HouseholdRelay，版本 3 加条件编译符号 FIXTURE_V3；
+  2. 把同目录的 Program.cs 复制到临时驱动工程，工程文件引用那个工作树里的 src/HouseholdRelay，版本 3 加条件编译符号 FIXTURE_V3、版本 9 加 FIXTURE_V9；
   3. 低优先级、单并行编译并运行驱动，只调旧版公开服务在空数据目录里写数据；
-  4. 把数据目录的 .relay-instance 和 .state\relay.db 复制到 tests\Tests\Fixtures\LegacyDatabases\<Name>\，并写 SOURCE.txt 记下来源提交与库版本。
+  4. 把数据目录的 .relay-instance 和 .state\relay.db 复制到 tests\Tests\Fixtures\LegacyDatabases\<Name>\，并写 SOURCE.txt 记下来源提交与库版本；
+     版本 9 另带官方账户目录 .state\official-accounts、明文假值 plain.json 和导出文件 upstreams.export。
   只能在 PowerShell 5.1 上用 .NET Framework 的 API；不连网。
 .EXAMPLE
   powershell -File tools\legacy-fixtures\New-LegacyFixture.ps1 -Commit 39c6785 -Name v3 -V3
   powershell -File tools\legacy-fixtures\New-LegacyFixture.ps1 -Commit 2dd823c -Name v8
+  powershell -File tools\legacy-fixtures\New-LegacyFixture.ps1 -Commit bb20b32 -Name v9 -V9
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Commit,
     [Parameter(Mandatory = $true)][string]$Name,
-    [switch]$V3
+    [switch]$V3,
+    [switch]$V9
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -39,7 +42,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "建工作树失败：$Commit" }
     $full = (& git -C $tree rev-parse HEAD).Trim()
     Copy-Item (Join-Path $PSScriptRoot 'Program.cs') $driver
-    $constants = if ($V3) { '<DefineConstants>$(DefineConstants);FIXTURE_V3</DefineConstants>' } else { '' }
+    $constants = if ($V3) { '<DefineConstants>$(DefineConstants);FIXTURE_V3</DefineConstants>' } elseif ($V9) { '<DefineConstants>$(DefineConstants);FIXTURE_V9</DefineConstants>' } else { '' }
     $project = @"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -65,7 +68,13 @@ try {
     Copy-Item (Join-Path $home2 '.relay-instance') $target
     Copy-Item (Join-Path $home2 '.state\relay.db') $target
     foreach ($side in '-wal', '-shm') { if (Test-Path (Join-Path $home2 ('.state\relay.db' + $side))) { throw "驱动结束后仍有 relay.db$side，库没有关干净。" } }
-    $source = "来源提交：$full`r`n生成方式：tools\legacy-fixtures\New-LegacyFixture.ps1 -Commit $Commit -Name $Name" + $(if ($V3) { ' -V3' } else { '' }) + "`r`n生成时间（UTC）：" + [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + "`r`n内容：那一版的程序经它自己的公开服务写入，密钥都是假值，凭据用生成那台电脑当时的 Windows 用户加密（升级不解密）。`r`n"
+    if ($V9) {
+        Copy-Item (Join-Path $home2 'plain.json') $target
+        Copy-Item (Join-Path $home2 'upstreams.export') $target
+        Copy-Item -Recurse (Join-Path $home2 '.state\official-accounts') (Join-Path $target 'official-accounts')
+    }
+    $switch = if ($V3) { ' -V3' } elseif ($V9) { ' -V9' } else { '' }
+    $source = "来源提交：$full`r`n生成方式：tools\legacy-fixtures\New-LegacyFixture.ps1 -Commit $Commit -Name $Name" + $switch + "`r`n生成时间（UTC）：" + [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + "`r`n内容：那一版的程序经它自己的公开服务写入，密钥都是假值，凭据用生成那台电脑当时的 Windows 用户加密（升级不解密）。`r`n"
     [IO.File]::WriteAllText((Join-Path $target 'SOURCE.txt'), $source, (New-Object Text.UTF8Encoding $true))
     Write-Output ("已生成夹具：" + $target)
     $done = $true

@@ -16,21 +16,22 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     private const long TestWindowSeconds = 120;
     /// <summary>不在检测窗口内（不是检测中，或检测已开始超过 <see cref="TestWindowSeconds"/>）；检测、删除与列表里的「能不能删」共用这一句，参数 <c>$expired</c> 由 <see cref="Expired"/> 给出。</summary>
     private const string Idle = "(state!='testing' OR test_started_at<$expired)";
-    private const string CandidateColumns = "id,name,expected_version,options_json,state,report_json,"
+    private const string CandidateColumns = "id,uid,name,expected_version,options_json,state,report_json,"
         + "(" + Idle + " AND id IS NOT (SELECT candidate_id FROM upstream WHERE id=1)) AS deletable,exported_at";
 
-    /// <summary>读取活动上游原始行，并按 candidate_id 取出它来自的已保存上游的当前名称与是否已导出搬走。</summary>
+    /// <summary>读取活动上游原始行，并按 candidate_id 取出它来自的已保存上游的对外编号、当前名称与是否已导出搬走。</summary>
     public StoredUpstream? ReadActive()
     {
         using var connection = database.Open();
         using var command = Command(connection, null, """
-            SELECT u.version,u.options_json,u.credential,u.report_json,u.candidate_id,c.name,u.failover,c.exported_at IS NOT NULL
+            SELECT u.version,u.options_json,u.credential,u.report_json,u.candidate_id,c.name,u.failover,c.exported_at IS NOT NULL,c.uid
             FROM upstream u LEFT JOIN upstream_candidates c ON c.id=u.candidate_id WHERE u.id=1
             """);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
         return new(reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : (byte[])reader[2], reader.IsDBNull(3) ? null : reader.GetString(3),
-            reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetBoolean(6), reader.GetBoolean(7));
+            reader.IsDBNull(4) ? null : reader.GetInt64(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetBoolean(6), reader.GetBoolean(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8));
     }
 
     /// <summary>按创建先后列出测试通过、没有导出搬走、且不是活动上游来源的已保存上游，版本记为此刻的活动版本；与上游页列表同一顺序。</summary>
@@ -38,14 +39,15 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     {
         using var connection = database.Open();
         using var command = Command(connection, null, """
-            SELECT u.version,c.options_json,c.credential,c.report_json,c.id,c.name
+            SELECT u.version,c.options_json,c.credential,c.report_json,c.id,c.name,c.uid
             FROM upstream_candidates c JOIN upstream u ON u.id=1
             WHERE c.state='passed' AND c.exported_at IS NULL AND c.deleted_at IS NULL AND c.id IS NOT u.candidate_id ORDER BY c.created_at,c.rowid
             """);
         using var reader = command.ExecuteReader();
         var rows = new List<StoredUpstream>();
         while (reader.Read())
-            rows.Add(new(reader.GetInt64(0), reader.GetString(1), (byte[])reader[2], reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.GetString(5)));
+            rows.Add(new(reader.GetInt64(0), reader.GetString(1), (byte[])reader[2], reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4), reader.GetString(5),
+                CandidateUid: reader.GetString(6)));
         return rows;
     }
 
@@ -58,10 +60,10 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     { using var connection = database.Open(); return Scalar(connection, null, "SELECT credential FROM upstream WHERE id=1") as byte[]; }
 
     /// <summary>最近创建的已保存上游主键。</summary>
-    public string? LatestCandidateId()
+    public long? LatestCandidateId()
     {
         using var connection = database.Open();
-        return Scalar(connection, null, "SELECT id FROM upstream_candidates WHERE deleted_at IS NULL ORDER BY created_at DESC,rowid DESC LIMIT 1") as string;
+        return Scalar(connection, null, "SELECT id FROM upstream_candidates WHERE deleted_at IS NULL ORDER BY created_at DESC,rowid DESC LIMIT 1") as long?;
     }
 
     /// <summary>按创建先后列出全部已保存上游的非秘密部分。</summary>
@@ -76,7 +78,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     }
 
     /// <summary>按主键读取已保存上游的非秘密部分。</summary>
-    public StoredCandidate? ReadCandidate(string id)
+    public StoredCandidate? ReadCandidate(long id)
     {
         using var connection = database.Open();
         using var command = Command(connection, null, $"SELECT {CandidateColumns} FROM upstream_candidates WHERE id=$id AND deleted_at IS NULL", ("$id", id), ("$expired", Expired()));
@@ -85,7 +87,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     }
 
     /// <summary>按主键读取已保存上游的加密凭据。</summary>
-    public byte[] ReadCandidateCredential(string id)
+    public byte[] ReadCandidateCredential(long id)
     {
         using var connection = database.Open();
         return Scalar(connection, null, "SELECT credential FROM upstream_candidates WHERE id=$id AND deleted_at IS NULL", ("$id", id)) as byte[]
@@ -93,7 +95,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     }
 
     /// <summary>在一个写事务里给这些已保存上游记下导出搬走的时刻；已记过的保留最早那次，有一个不存在就整批不记。</summary>
-    public void MarkExported(IReadOnlyCollection<string> ids) => database.Write((connection, transaction) =>
+    public void MarkExported(IReadOnlyCollection<long> ids) => database.Write((connection, transaction) =>
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var id in ids)
@@ -102,20 +104,20 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
         return 0;
     });
 
-    /// <summary>活动版本匹配时写入带名称的未测试上游。</summary>
-    public void InsertCandidate(string id, long expectedVersion, string name, string optionsJson, byte[] protectedCredential) => database.Write((connection, transaction) =>
+    /// <summary>活动版本匹配时写入带名称与对外编号的未测试上游，返回库生成的主键。</summary>
+    public long InsertCandidate(string uid, long expectedVersion, string name, string optionsJson, byte[] protectedCredential) => database.Write((connection, transaction) =>
     {
         if (Convert.ToInt64(Scalar(connection, transaction, "SELECT version FROM upstream WHERE id=1")) != expectedVersion)
             throw new InvalidOperationException("活动配置已改变，请重新加载后再保存。");
-        return Execute(connection, transaction, """
-            INSERT INTO upstream_candidates(id,expected_version,options_json,credential,state,report_json,created_at,test_started_at,name)
-            VALUES($id,$version,$json,$secret,'untested',NULL,$now,NULL,$name)
-            """, ("$id", id), ("$version", expectedVersion), ("$json", optionsJson), ("$secret", protectedCredential),
-            ("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), ("$name", name));
+        return (long)Scalar(connection, transaction, """
+            INSERT INTO upstream_candidates(uid,expected_version,options_json,credential,state,report_json,created_at,test_started_at,name)
+            VALUES($uid,$version,$json,$secret,'untested',NULL,$now,NULL,$name) RETURNING id
+            """, ("$uid", uid), ("$version", expectedVersion), ("$json", optionsJson), ("$secret", protectedCredential),
+            ("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), ("$name", name))!;
     });
 
     /// <summary>只改名称列。</summary>
-    public void Rename(string id, string name) => database.Write((connection, transaction) =>
+    public void Rename(long id, string name) => database.Write((connection, transaction) =>
     {
         if (Execute(connection, transaction, "UPDATE upstream_candidates SET name=$name WHERE id=$id AND deleted_at IS NULL", ("$name", name), ("$id", id)) != 1)
             throw new InvalidOperationException("这个上游不存在，请重新加载页面。");
@@ -126,7 +128,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     /// 在一个写事务里按条件停用：未停用、不是活动上游的来源、不在检测窗口内（与 <see cref="BeginCandidateTest"/> 同一口径）才记下停用时刻并清掉加密凭据（留零长度占位）；
     /// 写成了就在同一事务里数出仍引用它的用量、尝试和单价，条件不满足时什么都不写、返回 null。行本身保留，外键引用永远有效。
     /// </summary>
-    public UpstreamReferences? Deactivate(string id) => database.Write((connection, transaction) =>
+    public UpstreamReferences? Deactivate(long id) => database.Write((connection, transaction) =>
     {
         if (Execute(connection, transaction, $"""
             UPDATE upstream_candidates SET deleted_at=$now,credential=X''
@@ -138,7 +140,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     });
 
     /// <summary>写回配置与报告并置为未测试。</summary>
-    public void SaveUntested(string id, string optionsJson, string? reportJson) => database.Write((connection, transaction) =>
+    public void SaveUntested(long id, string optionsJson, string? reportJson) => database.Write((connection, transaction) =>
     {
         if (Execute(connection, transaction, "UPDATE upstream_candidates SET options_json=$json,report_json=$report,state='untested' WHERE id=$id AND deleted_at IS NULL",
             ("$json", optionsJson), ("$report", reportJson), ("$id", id)) != 1)
@@ -147,7 +149,7 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     });
 
     /// <summary>标记候选检测中并取出加密凭据；两分钟内的并发检测被拒绝。</summary>
-    public byte[] BeginCandidateTest(string id) => database.Write((connection, transaction) =>
+    public byte[] BeginCandidateTest(long id) => database.Write((connection, transaction) =>
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (Execute(connection, transaction, $"""
@@ -159,12 +161,12 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     });
 
     /// <summary>保存检测结果与实际采用的配置。</summary>
-    public void FinishCandidateTest(string id, string state, string reportJson, string optionsJson) => database.Write((connection, transaction) => Execute(connection, transaction,
+    public void FinishCandidateTest(long id, string state, string reportJson, string optionsJson) => database.Write((connection, transaction) => Execute(connection, transaction,
         "UPDATE upstream_candidates SET state=$state,report_json=$json,options_json=$options WHERE id=$id AND deleted_at IS NULL",
         ("$state", state), ("$json", reportJson), ("$options", optionsJson), ("$id", id)));
 
     /// <summary>核对检测结果、没有导出搬走与活动版本后写为新的活动版本并记下来源主键；候选自身的检测状态不变，之后仍可切回。</summary>
-    public void Activate(string id, long? expectedVersion) => database.Write((connection, transaction) =>
+    public void Activate(long id, long? expectedVersion) => database.Write((connection, transaction) =>
     {
         using var command = Command(connection, transaction, "SELECT expected_version,options_json,credential,report_json,state,exported_at FROM upstream_candidates WHERE id=$id AND deleted_at IS NULL", ("$id", id));
         long version; string json, reportJson; byte[] credential;
@@ -187,8 +189,8 @@ internal sealed class UpstreamRepository(RelayDatabase database) : IUpstreamRepo
     });
 
     /// <summary>按 <see cref="CandidateColumns"/> 的列顺序读出一行已保存上游。</summary>
-    private static StoredCandidate Candidate(SqliteDataReader reader) => new(reader.GetString(0), reader.GetString(1), reader.GetInt64(2), reader.GetString(3),
-        reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetBoolean(6), reader.IsDBNull(7) ? null : reader.GetInt64(7));
+    private static StoredCandidate Candidate(SqliteDataReader reader) => new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3), reader.GetString(4),
+        reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6), reader.GetBoolean(7), reader.IsDBNull(8) ? null : reader.GetInt64(8));
 
     /// <summary>检测窗口的起点：此刻减去 <see cref="TestWindowSeconds"/>（Unix 秒，与 <c>test_started_at</c> 同单位）。</summary>
     private static long Expired() => DateTimeOffset.UtcNow.ToUnixTimeSeconds() - TestWindowSeconds;

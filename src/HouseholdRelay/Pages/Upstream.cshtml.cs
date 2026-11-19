@@ -55,7 +55,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public string ExportFileName { get; private set; } = "";
 
     /// <summary>打开上游页（需已登录）：<paramref name="candidateId"/> 指定时把它作为正在设置的上游，否则取最近一个还没测通过的；只读。</summary>
-    public void OnGet(string? candidateId) => Load(candidateId);
+    public void OnGet(long? candidateId) => Load(candidateId);
 
     /// <summary>API 供应商：加密保存名称、地址、密钥后立刻获取模型（不花额度）；密钥只在这一次提交里出现，处理后清空。</summary>
     public Task<IActionResult> OnPostDiscoverApiAsync() => Discover(Api, Api.ToApiOptions());
@@ -70,12 +70,12 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public async Task<IActionResult> OnPostLoginAccountAsync()
     {
         ModelState.Clear();
-        string? working = null;
+        long? working = null;
         try
         {
-            working = await upstreams.LoginOfficial(Version, Login.ToLoginOptions(), Login.Name, HttpContext.RequestAborted);
-            var catalog = await upstreams.DiscoverModels(working, HttpContext.RequestAborted);
-            Notice = $"官方账户登录成功，已保存为「{upstreams.ReadCandidate(working).Name}」。{catalog.Message}";
+            var id = await upstreams.LoginOfficial(Version, Login.ToLoginOptions(), Login.Name, HttpContext.RequestAborted); working = id;
+            var catalog = await upstreams.DiscoverModels(id, HttpContext.RequestAborted);
+            Notice = $"官方账户登录成功，已保存为「{upstreams.ReadCandidate(id).Name}」。{catalog.Message}";
             Login = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
         }
         // 未安装、登录取消或超时、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
@@ -90,7 +90,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public async Task<IActionResult> OnPostImportAccountAsync()
     {
         ModelState.Clear();
-        string? working = null; byte[]? content = null;
+        long? working = null; byte[]? content = null;
         try
         {
             if (ImportFile is null || ImportFile.Length == 0) throw new InvalidOperationException("请先选择要导入的登录文件（.credentials.json），再按「导入登录文件」。");
@@ -99,9 +99,9 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
             await using (var input = ImportFile.OpenReadStream())
                 if (await input.ReadAtLeastAsync(content, content.Length, false, HttpContext.RequestAborted) < content.Length)
                     throw new InvalidOperationException("登录文件没有读完整，请重新选择后再按「导入登录文件」。");
-            working = await upstreams.ImportOfficial(Version, Import.ToLoginOptions(), content, Import.Name, HttpContext.RequestAborted);
-            var catalog = await upstreams.DiscoverModels(working, HttpContext.RequestAborted);
-            Notice = $"登录文件已导入，已保存为「{upstreams.ReadCandidate(working).Name}」。{catalog.Message}";
+            var id = await upstreams.ImportOfficial(Version, Import.ToLoginOptions(), content, Import.Name, HttpContext.RequestAborted); working = id;
+            var catalog = await upstreams.DiscoverModels(id, HttpContext.RequestAborted);
+            Notice = $"登录文件已导入，已保存为「{upstreams.ReadCandidate(id).Name}」。{catalog.Message}";
             Import = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
         }
         // 文件不合格、未安装 Claude Code、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
@@ -115,7 +115,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     /// 测试（需已登录且通过防 CSRF 校验）：按钮文字已写明会消耗少量上游额度，按下即视为同意；先按需改选模型，再对已保存的上游做一次最小调用。
     /// 浏览器断开时经 RequestAborted 取消对上游的调用；测试不会切换当前上游。
     /// </summary>
-    public async Task<IActionResult> OnPostTestAsync(string candidateId, string? model)
+    public async Task<IActionResult> OnPostTestAsync(long candidateId, string? model)
     {
         ModelState.Clear();
         try
@@ -129,7 +129,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     }
 
     /// <summary>切换（需已登录且通过防 CSRF 校验）：把测试通过的上游原子切换为活动版本，核对的是本页打开时看到的版本；在途请求继续用旧版本，个人令牌和中转地址不变。</summary>
-    public IActionResult OnPostActivate(string candidateId)
+    public IActionResult OnPostActivate(long candidateId)
     {
         ModelState.Clear();
         try
@@ -163,7 +163,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     /// 导出（需已登录且通过防 CSRF 校验）：两次输入的导出密码一致后，把勾选的上游加密成一个文件，页面读出结果并自动下载；密码不保存、不回显。
     /// 勾选的官方账户随之搬走，此后本机不再用它转发、不再续期。密码不合规则、没勾或上游已不在时作为表单错误读出，什么都不改。
     /// </summary>
-    public IActionResult OnPostExport(string[]? exportIds, string? exportPassword, string? exportPasswordAgain)
+    public IActionResult OnPostExport(long[]? exportIds, string? exportPassword, string? exportPasswordAgain)
     {
         ModelState.Clear();
         try
@@ -213,7 +213,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     }
 
     /// <summary>改名（需已登录且通过防 CSRF 校验）：只改显示名称，切换和用量都按主键关联，不受影响。</summary>
-    public IActionResult OnPostRename(string candidateId, string? newName)
+    public IActionResult OnPostRename(long candidateId, string? newName)
     {
         ModelState.Clear();
         try { upstreams.Rename(candidateId, newName ?? ""); Notice = $"已改名为「{upstreams.ReadCandidate(candidateId).Name}」。"; }
@@ -226,7 +226,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     /// 重新获取模型（需已登录且通过防 CSRF 校验）：对已保存的上游用库里加密的密钥（官方登录的用账户目录里的令牌）再读一次模型目录，不花额度、不新增上游；
     /// 完成后把它作为正在设置的上游。浏览器断开时经 RequestAborted 取消。
     /// </summary>
-    public async Task<IActionResult> OnPostRediscoverAsync(string candidateId)
+    public async Task<IActionResult> OnPostRediscoverAsync(long candidateId)
     {
         ModelState.Clear();
         try
@@ -240,7 +240,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     }
 
     /// <summary>删除（需已登录且通过防 CSRF 校验）：须勾选确认；当前使用中或正在检测的上游由服务拒绝。</summary>
-    public IActionResult OnPostDelete(string candidateId, bool deleteConfirmed)
+    public IActionResult OnPostDelete(long candidateId, bool deleteConfirmed)
     {
         ModelState.Clear();
         try
@@ -260,12 +260,12 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     /// <summary>两张表单共用的保存加获取模型：成功后清空表单并把它作为正在设置的上游；任一步拒绝都读出原因。密钥无论成败都清空。</summary>
     private async Task<IActionResult> Discover(UpstreamInput input, UpstreamOptions options)
     {
-        string? working = null;
+        long? working = null;
         try
         {
-            working = upstreams.SaveCandidate(Version, options, input.Credential ?? "", input.Name ?? "");
-            var catalog = await upstreams.DiscoverModels(working, HttpContext.RequestAborted);
-            Notice = $"已保存「{upstreams.ReadCandidate(working).Name}」。{catalog.Message}";
+            var id = upstreams.SaveCandidate(Version, options, input.Credential ?? "", input.Name ?? ""); working = id;
+            var catalog = await upstreams.DiscoverModels(id, HttpContext.RequestAborted);
+            Notice = $"已保存「{upstreams.ReadCandidate(id).Name}」。{catalog.Message}";
             ModelState.Clear(); Api = new(); Account = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
         }
         // 名称、地址、密钥不合规则或活动版本已变化：只作为表单错误读出；已保存但获取模型被拒的情况由目录读句说明，不走这里。
@@ -282,7 +282,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     }
 
     /// <summary>重新读取活动上游、已保存列表、正在设置的上游和上游池运行状态，并把版本号更新为最新。</summary>
-    private void Load(string? workingId)
+    private void Load(long? workingId)
     {
         Active = upstreams.ReadOverview(); Saved = upstreams.ListCandidates(); Version = Active.Version; ModelState.Remove(nameof(Version));
         // 其他按钮的提交不带官方账户表单字段，绑定会给出空地址；补回官方地址，避免读屏读到一个空的必填框。

@@ -5,11 +5,11 @@ using static Infrastructure.Persistence.RelayDatabase;
 
 namespace Infrastructure.Repositories.Usage;
 
-/// <summary>usage_requests 表的读写；写入使用 1 秒忙等待的独立短连接，查询使用 2 秒。</summary>
+/// <summary>usage_requests 与 usage_attempts 表的读写；用量按请求编号（request_id，转发前生成的 GUID）定位，主键由库生成，尝试记录按主键挂在用量下。写入使用 1 秒忙等待的独立短连接，查询使用 2 秒。</summary>
 internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
 {
     /// <summary>写入请求开始记录。</summary>
-    public void InsertStart(string requestId, string userId, string? tokenId, long startedAtTicks, string kind)
+    public void InsertStart(string requestId, long? userId, long? tokenId, long startedAtTicks, string kind)
     {
         using var connection = database.Open(1);
         Execute(connection, null, """
@@ -19,7 +19,7 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
     }
 
     /// <summary>标记已发送、记下首先要试的那一家并复制它的单价快照与此刻的名称快照。</summary>
-    public int MarkDispatched(string requestId, long version, string? candidateId, string? model)
+    public int MarkDispatched(string requestId, long version, long? candidateId, string? model)
     {
         using var connection = database.Open(1);
         return Execute(connection, null, """
@@ -35,14 +35,14 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
     {
         using var connection = database.Open(1);
         using var transaction = connection.BeginTransaction();
-        string kind; string? priceJson, candidate, model;
-        using (var command = Command(connection, transaction, "SELECT outcome,kind,price_json,candidate_id,model FROM usage_requests WHERE request_id=$id", ("$id", requestId)))
+        long row; string kind; string? priceJson, model; long? candidate;
+        using (var command = Command(connection, transaction, "SELECT id,outcome,kind,price_json,candidate_id,model FROM usage_requests WHERE request_id=$id", ("$id", requestId)))
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read()) throw new InvalidOperationException("Usage start record unavailable.");
-            if (reader.GetString(0) != "started") return;
-            kind = reader.GetString(1); priceJson = reader.IsDBNull(2) ? null : reader.GetString(2);
-            candidate = reader.IsDBNull(3) ? null : reader.GetString(3); model = reader.IsDBNull(4) ? null : reader.GetString(4);
+            if (reader.GetString(1) != "started") return;
+            row = reader.GetInt64(0); kind = reader.GetString(2); priceJson = reader.IsDBNull(3) ? null : reader.GetString(3);
+            candidate = reader.IsDBNull(4) ? null : reader.GetInt64(4); model = reader.IsDBNull(5) ? null : reader.GetString(5);
         }
         // 自动切换换了一家时，用量归实际服务的那一家，单价也按那一家此刻的快照计；没换时沿用发送时复制的快照。
         if (result.Attempts.Count > 0 && result.Attempts[^1].CandidateId is var served && served != candidate)
@@ -68,11 +68,11 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
         // 尝试记录与结束结果同一事务提交：要么都在，要么都不在，重试保存时不会留下重复的尝试。
         foreach (var attempt in result.Attempts)
             Execute(connection, transaction, """
-                INSERT INTO usage_attempts(request_id,attempt,candidate_id,upstream_version,started_at,headers_ms,duration_ms,upstream_status,
+                INSERT INTO usage_attempts(usage_request_id,attempt,candidate_id,upstream_version,started_at,headers_ms,duration_ms,upstream_status,
                     upstream_request_id,error_type,error_message,connect_failure,disposition,upstream_name)
-                VALUES($id,$attempt,$candidate,$version,$started,$headers,$duration,$status,$upstreamId,$type,$message,$connect,$disposition,
+                VALUES($row,$attempt,$candidate,$version,$started,$headers,$duration,$status,$upstreamId,$type,$message,$connect,$disposition,
                     (SELECT name FROM upstream_candidates WHERE id=$candidate))
-                """, ("$id", requestId), ("$attempt", attempt.Number), ("$candidate", attempt.CandidateId), ("$version", attempt.Version),
+                """, ("$row", row), ("$attempt", attempt.Number), ("$candidate", attempt.CandidateId), ("$version", attempt.Version),
                 ("$started", attempt.StartedAt.UtcTicks), ("$headers", attempt.HeadersMs), ("$duration", attempt.DurationMs), ("$status", attempt.UpstreamStatus),
                 ("$upstreamId", attempt.UpstreamRequestId), ("$type", attempt.ErrorType), ("$message", attempt.ErrorMessage), ("$connect", attempt.ConnectFailure),
                 ("$disposition", attempt.Disposition));
@@ -94,8 +94,8 @@ internal sealed class UsageRepository(RelayDatabase database) : IUsageRepository
     {
         using var connection = database.Open(1);
         return Execute(connection, null, """
-            DELETE FROM usage_requests WHERE request_id IN
-            (SELECT request_id FROM usage_requests WHERE request_started_at < $cutoff ORDER BY request_started_at LIMIT 500)
+            DELETE FROM usage_requests WHERE id IN
+            (SELECT id FROM usage_requests WHERE request_started_at < $cutoff ORDER BY request_started_at LIMIT 500)
             """, ("$cutoff", cutoffTicks));
     }
 

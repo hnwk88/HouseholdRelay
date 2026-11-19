@@ -11,7 +11,7 @@ namespace HouseholdRelay.Pages;
 public sealed class PricingModel(IUsagePricingService pricing, IUpstreamService upstreams) : PageModel
 {
     /// <summary>正在维护单价的已保存上游主键；可经查询参数选择，缺省时取当前在用的那一家。保存时那一家已被删除则由费率仓储拒绝。</summary>
-    [BindProperty(SupportsGet = true)] public string? CandidateId { get; set; }
+    [BindProperty(SupportsGet = true)] public long? CandidateId { get; set; }
     /// <summary>要维护单价的模型名；可经查询参数预选，缺省时取所选上游配置的模型。</summary>
     [BindProperty(SupportsGet = true)] public string? ModelName { get; set; }
     /// <summary>单价的币种代码，默认 USD。</summary>
@@ -31,7 +31,7 @@ public sealed class PricingModel(IUsagePricingService pricing, IUpstreamService 
     /// <summary>所选上游；一个已保存上游都没有、或所选的已被删除时为 null。</summary>
     public UpstreamCandidate? Selected { get; private set; }
     /// <summary>当前在用那一家的主键，选项里据此标出「在用」。</summary>
-    public string? ActiveId { get; private set; }
+    public long? ActiveId { get; private set; }
     /// <summary>保存成功后的提示，说明新费率只影响之后的请求。</summary>
     public string? Notice { get; private set; }
 
@@ -50,7 +50,7 @@ public sealed class PricingModel(IUsagePricingService pricing, IUpstreamService 
     {
         if (ModelState.IsValid)
         {
-            try { pricing.Save(CandidateId ?? "", ModelName ?? "", Currency ?? "", InputPrice, OutputPrice, CacheReadPrice, CacheWritePrice); Notice = "费率已保存，只影响之后发送的请求。历史金额保持不变。"; }
+            try { pricing.Save(CandidateId ?? 0, ModelName ?? "", Currency ?? "", InputPrice, OutputPrice, CacheReadPrice, CacheWritePrice); Notice = "费率已保存，只影响之后发送的请求。历史金额保持不变。"; }
             // 模型名、币种或单价不合法、所选上游已被删除时都抛 InvalidOperationException，作为表单错误提示管理员刷新或改正，不写入任何单价。
             catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         }

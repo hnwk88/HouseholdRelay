@@ -6,8 +6,8 @@ namespace Application.Interfaces.Usage;
 public interface IUsagePriceRepository
 {
     /// <summary>列出某个已保存上游下的全部单价，按模型排序。</summary>
-    IReadOnlyList<UsagePrice> List(string candidateId);
+    IReadOnlyList<UsagePrice> List(long candidateId);
 
     /// <summary>单价所属的已保存上游仍存在时写入或覆盖该模型单价，否则提示刷新。</summary>
-    void Save(UsagePrice price);
+    void Save(long candidateId, UsagePrice price);
 }

@@ -54,14 +54,17 @@ public sealed class ManagementCommands(IConfigurationService settings, IIdentity
         if (action == "add") issued = identities.Create(displayName ?? name ?? throw new InvalidOperationException("请提供 --display-name 或 --name。"), name);
         else
         {
-            id ??= identities.List().SingleOrDefault(user => user.Name == name)?.Id;
-            if (id is null) throw new InvalidOperationException("请用 --id 指定使用者主键，或用 --name 查找旧客户端。");
+            // 主键是 clients list 第一列的数字；命令行收到的是文本，这里只做解析，不按文本关联。
+            long? userId = id is null ? null : long.TryParse(id, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed
+                : throw new InvalidOperationException("--id 应是 clients list 第一列的数字主键。");
+            userId ??= identities.List().SingleOrDefault(user => user.Name == name)?.Id;
+            if (userId is not { } user) throw new InvalidOperationException("请用 --id 指定使用者主键，或用 --name 查找旧客户端。");
             switch (action)
             {
-                case "rotate": issued = identities.Rotate(id); break;
-                case "enable": identities.SetEnabled(id, true); break;
-                case "disable": identities.SetEnabled(id, false); break;
-                case "rename": identities.Rename(id, displayName ?? throw new InvalidOperationException("请提供 --display-name。")); break;
+                case "rotate": issued = identities.Rotate(user); break;
+                case "enable": identities.SetEnabled(user, true); break;
+                case "disable": identities.SetEnabled(user, false); break;
+                case "rename": identities.Rename(user, displayName ?? throw new InvalidOperationException("请提供 --display-name。")); break;
                 default: throw new InvalidOperationException("clients 支持 list / add / rotate / enable / disable / rename。");
             }
         }

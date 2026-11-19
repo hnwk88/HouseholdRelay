@@ -51,7 +51,7 @@ static class UpstreamTransferTests
         Check(saved.Select(item => item.Name).SequenceEqual(["原有", "甲", "乙", "官方"]), string.Join(",", saved.Select(item => item.Name)));
         Check(saved.Skip(1).All(item => item.State == "untested" && item.Report is null && item.ExportedAt is null), "Imported upstreams start untested");
         var official = saved.Single(item => item.Name == "官方");
-        Check(official.Options is { OfficialLogin: true, Mode: "oauth" } && File.ReadAllBytes(Path.Combine(target.Home.Path, ".state", "official-accounts", official.Id, OfficialCredential.FileName)).SequenceEqual(login),
+        Check(official.Options is { OfficialLogin: true, Mode: "oauth" } && File.ReadAllBytes(Path.Combine(target.Home.Path, ".state", "official-accounts", official.Uid, OfficialCredential.FileName)).SequenceEqual(login),
             "The login file must arrive byte for byte");
         var imported = saved.Single(item => item.Name == "甲"); mockA.Calls.Clear();
         Check((await target.Upstreams.TestCandidate(imported.Id, true, CancellationToken.None)).CanActivate && mockA.Calls.Last().Headers["x-api-key"] == KeyA, "The imported key is the original key");
@@ -108,7 +108,7 @@ static class UpstreamTransferTests
         {
             (new[] { id }, Password, Password + "x", "两次输入的导出密码不一样，请重新输入两遍"),
             (new[] { id }, "short-pass", "short-pass", "导出密码需要 12 至 128 个字符。"),
-            (Array.Empty<string>(), Password, Password, "请至少勾选一家要导出的上游")
+            (Array.Empty<long>(), Password, Password, "请至少勾选一家要导出的上游")
         })
         {
             var html = WebUtility.HtmlDecode(await Post(web, ids, password, again, await web.Csrf("/Upstream")));
@@ -136,7 +136,7 @@ static class UpstreamTransferTests
         var standby = service.SaveCandidate(service.ReadActive().Version, mockB.Options(), KeyB, "乙");
         Check((await service.TestCandidate(standby, true, CancellationToken.None)).CanActivate, "Standby passes");
         service.Activate(official); service.SetFailover(false);
-        var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", official);
+        var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", service.ReadCandidate(official).Uid);
         FakeClaude.Write(directory, OfficialToken, 2);
         var token = web.Identities.Create("搬走").Token;
         await web.Login();
@@ -170,22 +170,20 @@ static class UpstreamTransferTests
             "A moved account is never refreshed and its directory stays until deleted");
     }
 
-    /// <summary>v6 → v7：检查点在加列之后、写版本号之前失败时整个升级回滚（版本仍是 6、列不在），重开后升到 7 且已有上游都读作没导出过。</summary>
+    /// <summary>v6 → v7（起点是程序从真实 v3 旧库自己升到的版本 6）：检查点在加列之后、写版本号之前失败时整个升级回滚（版本仍是 6、列不在），重开后一路升到最新版且已有三家上游都读作没导出过。</summary>
     public static Task SchemaUpgrade()
     {
-        using var home = new TestHome(); var process = new TestProcess(home.Path);
-        process.Upstreams.SaveCandidate(process.Upstreams.ReadActive().Version, new UpstreamOptions { BaseUrl = "https://example.com" }, KeyA, "旧上游");
-        process.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "ALTER TABLE upstream_candidates DROP COLUMN exported_at; PRAGMA user_version=6;"));
+        using var home = DatabaseUpgradeTests.LegacyAt("v3", 6);
         var rejected = false;
         try { _ = new TestProcess(home.Path, migrationCheckpoint: () => throw new IOException("fixture-checkpoint")).Database; }
         catch (IOException error) when (error.Message == "fixture-checkpoint") { /* 检查点在加列之后、写版本号之前失败，整个升级应回滚；随后核对版本号与列。 */ rejected = true; }
         Check(rejected, "Checkpoint failure must abort the upgrade");
-        int Count(RelayDatabase database, string sql) { using var connection = database.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
+        int Count(string sql) { using var connection = DatabaseUpgradeTests.Connect(DatabaseUpgradeTests.Database(home.Path)); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
         const string Column = "SELECT COUNT(*) FROM pragma_table_info('upstream_candidates') WHERE name='exported_at'";
-        Check(Count(process.Database, "PRAGMA user_version") == 6 && Count(process.Database, Column) == 0, "Rollback keeps version 6 without the column");
-        var upgraded = new TestProcess(home.Path);
-        Check(Count(upgraded.Database, "PRAGMA user_version") == RelayDatabase.CurrentVersion && Count(upgraded.Database, Column) == 1);
-        Check(upgraded.Upstreams.ListCandidates() is [{ Name: "旧上游", ExportedAt: null }], "Existing upstreams read as never exported");
+        Check(Count("PRAGMA user_version") == 6 && Count(Column) == 0, "Rollback keeps version 6 without the column");
+        var upgraded = new TestProcess(home.Path); _ = upgraded.Database;
+        Check(Count("PRAGMA user_version") == RelayDatabase.CurrentVersion && Count(Column) == 1);
+        Check(upgraded.Upstreams.ListCandidates() is { Count: 3 } saved && saved.All(item => item.ExportedAt is null), "Existing upstreams read as never exported");
         return Task.CompletedTask;
     }
 
@@ -200,7 +198,7 @@ static class UpstreamTransferTests
     private static UpstreamOptions Official(UpstreamFixture mock) => new() { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model" };
 
     /// <summary>经网页导出 <paramref name="ids"/>，要求成功，取出页面（已解码）与自动下载链接里的加密文件。</summary>
-    private static async Task<(string Html, byte[] File)> Export(WebFixture web, IEnumerable<string> ids, string password)
+    private static async Task<(string Html, byte[] File)> Export(WebFixture web, IEnumerable<long> ids, string password)
     {
         var html = WebUtility.HtmlDecode(await Post(web, ids, password, password, await web.Csrf("/Upstream")));
         var link = Regex.Match(html, "href=\"data:application/octet-stream;base64,([^\"]+)\" download=\"(household-relay-upstreams-[0-9-]+\\.hrupstreams)\" data-auto-download");
@@ -209,7 +207,7 @@ static class UpstreamTransferTests
     }
 
     /// <summary>提交导出表单（勾选可重复），返回页面原文。</summary>
-    private static async Task<string> Post(WebFixture web, IEnumerable<string> ids, string password, string again, string csrf)
+    private static async Task<string> Post(WebFixture web, IEnumerable<long> ids, string password, string again, string csrf)
     {
         using var request = ExportRequest(web, ids, password, again, csrf);
         using var response = await web.Http.SendAsync(request);
@@ -218,9 +216,9 @@ static class UpstreamTransferTests
     }
 
     /// <summary>组装导出表单请求：每个勾选一条 exportIds，带本站 Origin；<paramref name="csrf"/> 为空时不带防伪令牌。</summary>
-    private static HttpRequestMessage ExportRequest(WebFixture web, IEnumerable<string> ids, string password, string again, string? csrf)
+    private static HttpRequestMessage ExportRequest(WebFixture web, IEnumerable<long> ids, string password, string again, string? csrf)
     {
-        var values = ids.Select(id => KeyValuePair.Create("exportIds", id)).Append(KeyValuePair.Create("exportPassword", password)).Append(KeyValuePair.Create("exportPasswordAgain", again));
+        var values = ids.Select(id => KeyValuePair.Create("exportIds", id.ToString(CultureInfo.InvariantCulture))).Append(KeyValuePair.Create("exportPassword", password)).Append(KeyValuePair.Create("exportPasswordAgain", again));
         if (csrf is not null) values = values.Append(KeyValuePair.Create("__RequestVerificationToken", csrf));
         var request = new HttpRequestMessage(HttpMethod.Post, web.Url + "/Upstream?handler=Export") { Content = new FormUrlEncodedContent(values) };
         request.Headers.TryAddWithoutValidation("Origin", web.Url);

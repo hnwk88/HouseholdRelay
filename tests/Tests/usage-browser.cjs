@@ -150,7 +150,7 @@ async function createUser(page, name) {
     const oldToken = a.token; a.token = (await page.locator('#issued-token').textContent()).trim();
     assert.equal((await fetch(url + '/my-usage/data', { headers: { Authorization: 'Bearer ' + oldToken } })).status, 401);
     assert.equal((await fetch(url + '/my-usage/data?user_id=' + b.id, { headers: { Authorization: 'Bearer ' + a.token } })).status, 400);
-    assert.ok((await personal(a.token)).rows.every(row => row.userId === a.id && row.displayName === '统计甲改名'));
+    assert.ok((await personal(a.token)).rows.every(row => String(row.userId) === a.id &&row.displayName === '统计甲改名'));
     await page.locator(`[data-user-id="${b.id}"]`).getByRole('button', { name: '停用', exact: true }).click();
     assert.equal((await fetch(url + '/my-usage/data', { headers: { Authorization: 'Bearer ' + b.token } })).status, 401);
     await mine.getByLabel('个人令牌', { exact: true }).fill(a.token); await mine.getByLabel('时间统计', { exact: true }).selectOption('hour');

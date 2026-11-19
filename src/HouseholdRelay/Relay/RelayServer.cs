@@ -59,7 +59,7 @@ public sealed class RelayServer : IDisposable
     /// 取发往官方账户的统一身份：按客户端自报的入口取同一种模式的那一份，请求头与正文的入口一致；没有登记身份来源时按「没取到」抛出，请求不发。
     /// 取到后把客户端版本与这份身份的版本交给升级器，客户端更新时中转在后台升级，这次请求照常用当前身份发。
     /// </summary>
-    private async Task<ClaudeCodeIdentity> Identity(ClaudeCodeClient client, string clientId, CancellationToken cancellation)
+    private async Task<ClaudeCodeIdentity> Identity(ClaudeCodeClient client, long? clientId, CancellationToken cancellation)
     {
         var identity = await (identities?.Current(client.IdentityEntrypoint, cancellation) ?? throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.Missing));
         updater?.Observe(client.Version, identity.Version, clientId);
@@ -197,7 +197,7 @@ public sealed class RelayServer : IDisposable
                             if (operation is not null) heldOfficialOperations.Add(operation);
                             attemptSite = siteIdentity?.Current;
                             // 官方账户只带中转所在电脑 Claude Code 的统一身份；取不到就不组装、不发出，下面按可切换的失败处理。
-                            var identity = upstream.Snapshot.Options.OfficialAccount ? await Identity(caller ??= ClaudeCodeClient.Read(body, context.Request.Headers.UserAgent), client.Id, timeout.Token) : null;
+                            var identity = upstream.Snapshot.Options.OfficialAccount ? await Identity(caller ??= ClaudeCodeClient.Read(body, context.Request.Headers.UserAgent), client.UserId, timeout.Token) : null;
                             request = upstream.Request(path, context.Request.QueryString.ToString(), Body(upstream), method, config.UpstreamUserAgent, context.Request.Headers, identity, attemptSite?.DeviceId ?? config.DeviceId);
                             if (upstream.Snapshot.Options.OfficialAccount)
                             {

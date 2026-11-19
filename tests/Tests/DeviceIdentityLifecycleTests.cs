@@ -121,7 +121,7 @@ static class DeviceIdentityLifecycleTests
         })));
         Check(competition.Count(item => item is not null) == 1 && generator.Count == beforeRace + 1);
         repository.Complete(competition.Single(item => item is not null)!.OperationId);
-        Check(TokenRows(services.GetRequiredService<RelayDatabase>()) == beforeTokens && issued.All(item => identities.Clients.Authenticate(item.Token)?.Id == item.UserId));
+        Check(TokenRows(services.GetRequiredService<RelayDatabase>()) == beforeTokens && issued.All(item => identities.Clients.Authenticate(item.Token)?.UserId == item.UserId));
     }
 
     /// <summary>事务提交前故障保持旧编号；提交后的 pending 与 ready 转换可经重启继续同一目标。</summary>
@@ -143,14 +143,24 @@ static class DeviceIdentityLifecycleTests
         Check(resumed.Read() == pending.Current && resumed.Begin(operation, 1).Current == pending.Current && generator.Count == generated);
         resumed.Complete(operation); using var ready = Services(home.Path, generator);
         Check(ready.GetRequiredService<ISiteIdentityRepository>().Read() == pending.Current with { Pending = false } && generator.Count == generated);
-        database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction,
-            "DROP TABLE site_identity; DROP TABLE site_identity_operations; PRAGMA user_version=7;"));
-        using var migrationFailure = Services(home.Path, generator, () => throw new IOException("fixture migration interruption"));
-        failed = false;
-        try { _ = migrationFailure.GetRequiredService<RelayDatabase>(); }
-        // 仅用于迁移回滚的受控异常；重试必须保留已经写入 settings 的原编号。
-        catch (IOException) { failed = true; }
-        using (var connection = database.Open()) Check(failed && Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 7);
+        // 站点身份升级（v7 → v8）中断：起点是程序从真实 v3 旧库自己升到的版本 7，还没有站点身份表；不再把新库删表改版本号。
+        using (var legacy = DatabaseUpgradeTests.LegacyAt("v3", 7))
+        {
+            string legacyDevice;
+            using (var connection = DatabaseUpgradeTests.Connect(DatabaseUpgradeTests.Database(legacy.Path)))
+                legacyDevice = (string)RelayDatabase.Scalar(connection, null, "SELECT json_extract(json,'$.deviceId') FROM settings WHERE id=1")!;
+            using (var migrationFailure = Services(legacy.Path, generator, () => throw new IOException("fixture migration interruption")))
+            {
+                failed = false;
+                try { _ = migrationFailure.GetRequiredService<RelayDatabase>(); }
+                // 仅用于迁移回滚的受控异常；重试必须保留已经写入 settings 的原编号。
+                catch (IOException) { failed = true; }
+            }
+            using (var connection = DatabaseUpgradeTests.Connect(DatabaseUpgradeTests.Database(legacy.Path)))
+                Check(failed && Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 7);
+            using var legacyRetry = Services(legacy.Path, generator);
+            Check(legacyRetry.GetRequiredService<ISiteIdentityRepository>().Read().DeviceId == legacyDevice && generator.Count == generated, "The retried migration keeps the settings device id");
+        }
         using var migrationRetry = Services(home.Path, generator);
         Check(migrationRetry.GetRequiredService<ISiteIdentityRepository>().Read().DeviceId == pending.Current.DeviceId && generator.Count == generated);
         var recoveredRepository = migrationRetry.GetRequiredService<ISiteIdentityRepository>();

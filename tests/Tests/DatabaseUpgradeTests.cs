@@ -40,7 +40,7 @@ static class DatabaseUpgradeTests
         Check(upgrade.FromVersion == 8 && upgrade.ToVersion == RelayDatabase.CurrentVersion && process.Get<IRelayInstance>().UpgradedOnOpen);
         var backup = Path.Combine(home.Path, upgrade.Backup);
         Check(upgrade.Backup.StartsWith(".state", StringComparison.Ordinal) && File.Exists(backup) && Version(backup) == 8 && Snapshot(backup).Rows.SequenceEqual(before.Rows), "Backup must be the complete version 8 database");
-        Check(!upgrade.Sentence().Contains(Environment.UserName, StringComparison.OrdinalIgnoreCase) && upgrade.Sentence().Contains("从版本 8 升到 9") && upgrade.Sentence().Contains("指向已删除上游的单价 2 条"), upgrade.Sentence());
+        Check(!upgrade.Sentence().Contains(Environment.UserName, StringComparison.OrdinalIgnoreCase) && upgrade.Sentence().Contains($"从版本 8 升到 {RelayDatabase.CurrentVersion}") && upgrade.Sentence().Contains("指向已删除上游的单价 2 条"), upgrade.Sentence());
         // 再开一次不再升级、不再备份。
         var again = new TestProcess(home.Path);
         Check(!again.Get<IRelayInstance>().UpgradedOnOpen && Directory.GetDirectories(Path.Combine(home.Path, ".state", "upgrade-backups")).Length == 1);
@@ -164,7 +164,7 @@ static class DatabaseUpgradeTests
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT length(credential) FROM upstream_candidates WHERE id=$id", ("$id", gone))) == 0);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_prices WHERE candidate_id=$id", ("$id", gone))) == 1);
             var blocked = false;
-            try { RelayDatabase.Execute(connection, null, "INSERT INTO usage_prices(id,candidate_id,model,json) VALUES('x','no-such-upstream','m','{}')"); }
+            try { RelayDatabase.Execute(connection, null, "INSERT INTO usage_prices(candidate_id,model,json) VALUES(999999,'m','{}')"); }
             // 外键约束失败是 SQLite 错误 19（约束）；用来证明指向不存在上游的单价写不进去。
             catch (SqliteException error) when (error.SqliteErrorCode == 19) { blocked = true; }
             Check(blocked, "Foreign key must reject a price for a missing upstream");
@@ -195,7 +195,7 @@ static class DatabaseUpgradeTests
         await usage.Start("web-served", user, "inference"); await usage.Dispatch("web-served", version, gone, "fixture-model");
         var attempt = new UpstreamAttempt(1, gone, version, DateTimeOffset.UtcNow); attempt.Headers(200, null, text => text);
         Check(await usage.Finish("web-served", new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(1, 2)) { Attempts = [attempt] }));
-        var form = new Dictionary<string, string> { ["candidateId"] = gone, ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var form = new Dictionary<string, string> { ["candidateId"] = gone.ToString(CultureInfo.InvariantCulture), ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         string notice;
         using (var response = await web.Post("/Upstream?handler=Delete", form)) notice = System.Net.WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
         Check(notice.Contains("已删除「顺丰中转」，本机已清除它的密钥。它有 1 条用量记录、1 次上游尝试、1 条单价，历史照常保留，用量页仍读出它的名字。"), "Delete notice must read the reference counts");
@@ -207,21 +207,54 @@ static class DatabaseUpgradeTests
     /// <summary>升级前的库与升级后的库各量一遍的数：库版本、各表行数、用量与尝试按上游主键分组的条数（空串代表没有上游）。</summary>
     private sealed record Counts(int Version, Dictionary<string, long> Rows, Dictionary<string, Dictionary<string, long>> ByUpstream);
 
-    /// <summary>把旧库夹具复制进一个新的临时数据目录：实例标记放数据目录，库放 .state。</summary>
-    private static TestHome Legacy(string name)
+    /// <summary>把旧库夹具复制进一个新的临时数据目录：实例标记放数据目录，库放 .state；版本 9 夹具另带官方账户目录，一并放进 .state。</summary>
+    internal static TestHome Legacy(string name)
+    {
+        var home = new TestHome(); CopyLegacy(name, home.Path);
+        return home;
+    }
+
+    /// <summary>把旧库夹具 <paramref name="name"/> 放进已有的空数据目录 <paramref name="home"/>（网页夹具建站前也用它）：实例标记放数据目录，库与官方账户目录放 .state。</summary>
+    internal static void CopyLegacy(string name, string home)
     {
         var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", "LegacyDatabases", name);
-        var home = new TestHome(); Directory.CreateDirectory(Path.Combine(home.Path, ".state"));
-        File.Copy(Path.Combine(source, ".relay-instance"), Path.Combine(home.Path, ".relay-instance"));
-        File.Copy(Path.Combine(source, "relay.db"), Database(home.Path));
+        Directory.CreateDirectory(Path.Combine(home, ".state"));
+        File.Copy(Path.Combine(source, ".relay-instance"), Path.Combine(home, ".relay-instance"));
+        File.Copy(Path.Combine(source, "relay.db"), Database(home));
+        var accounts = Path.Combine(source, "official-accounts");
+        if (Directory.Exists(accounts))
+            foreach (var file in Directory.GetFiles(accounts, "*", SearchOption.AllDirectories))
+            {
+                var target = Path.Combine(home, ".state", "official-accounts", Path.GetRelativePath(accounts, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file, target);
+            }
+    }
+
+    /// <summary>
+    /// 复制旧库夹具后让程序自己把它升到正好 <paramref name="version"/>：从夹具版本往上，第 4 版起每版迁移在提交前各调一次检查点，
+    /// 这里在第 <paramref name="version"/>+1 版的检查点抛错，那一版回滚、之前各版已各自提交。得到的是程序一路迁移出来的真实旧形状，
+    /// 用例再在上面只写数据行、不改结构，用来代替「新库删列、改回版本号」的伪造旧库。
+    /// </summary>
+    internal static TestHome LegacyAt(string name, int version)
+    {
+        var home = Legacy(name); var from = Version(Database(home.Path));
+        if (from < 3 || version < from || version >= RelayDatabase.CurrentVersion) throw new ArgumentOutOfRangeException(nameof(version));
+        if (version > from)
+        {
+            var calls = 0; var stop = version - from + 1; var marker = "stop-at-v" + version;
+            try { _ = new TestProcess(home.Path, migrationCheckpoint: () => { if (++calls == stop) throw new IOException(marker); }).Database; }
+            // 按设计在下一版提交前停下；接住它，下面核对库版本正好是要的那一版。
+            catch (IOException error) when (error.Message == marker) { }
+        }
+        Check(Version(Database(home.Path)) == version, $"Fixture {name} must stop at version {version}");
         return home;
     }
 
     /// <summary>数据目录下库文件的路径。</summary>
-    private static string Database(string home) => Path.Combine(home, ".state", "relay.db");
+    internal static string Database(string home) => Path.Combine(home, ".state", "relay.db");
 
     /// <summary>不经程序、直接以读写方式打开库文件（不建池，用完即放）。</summary>
-    private static SqliteConnection Connect(string path)
+    internal static SqliteConnection Connect(string path)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString());
         connection.Open(); return connection;
@@ -243,7 +276,11 @@ static class DatabaseUpgradeTests
         {
             var group = groups[table] = [];
             if (!tables.Contains(table) || Convert.ToInt32(RelayDatabase.Scalar(connection, null, $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='candidate_id'")) == 0) continue;
-            using var command = RelayDatabase.Command(connection, null, $"SELECT coalesce(candidate_id,''),COUNT(*) FROM {table} GROUP BY 1");
+            // 版本 10 起引用是整数主键：经外键连回上游的对外编号（就是旧的文本主键）再分组，升级前后才比得上。
+            var keyed = Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) >= 10;
+            using var command = RelayDatabase.Command(connection, null, keyed
+                ? $"SELECT coalesce(c.uid,''),COUNT(*) FROM {table} t LEFT JOIN upstream_candidates c ON c.id=t.candidate_id GROUP BY 1"
+                : $"SELECT coalesce(candidate_id,''),COUNT(*) FROM {table} GROUP BY 1");
             using var reader = command.ExecuteReader(); while (reader.Read()) group[reader.GetString(0)] = reader.GetInt64(1);
         }
         return new(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")), rows, groups);

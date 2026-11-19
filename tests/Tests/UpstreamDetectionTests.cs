@@ -97,13 +97,13 @@ static class UpstreamDetectionTests
         await Switch(web, a, "甲家"); using (var call = await UpstreamFixture.RelayRequest(web, person.Token)) Check(call.IsSuccessStatusCode);
         var stale = service.ReadActive().Version;
         await Switch(web, b, "乙家"); Check(second.Calls.Count(call => call.Path.Contains("/messages")) == 1);
-        var expired = new Dictionary<string, string> { ["candidateId"] = a, ["Version"] = stale.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var expired = new Dictionary<string, string> { ["candidateId"] = a.ToString(CultureInfo.InvariantCulture), ["Version"] = stale.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var refused = await web.Post("/Upstream?handler=Activate", expired))
             Check(WebUtility.HtmlDecode(await refused.Content.ReadAsStringAsync()).Contains("活动上游已被另一页面或命令更换") && service.ReadActive().CandidateId == b);
         await Switch(web, a, "甲家");
         using (var call = await UpstreamFixture.RelayRequest(web, person.Token, "after-switch-back")) Check(call.IsSuccessStatusCode && first.Calls.Last().Body.Contains("after-switch-back"));
         var active = service.ReadActive(); var history = web.App.Services.GetRequiredService<IUsageService>().Query(new()).Rows.Select(row => (row.RequestId, row.UpstreamVersion)).ToArray();
-        var rename = new Dictionary<string, string> { ["candidateId"] = a, ["newName"] = "公司甲家", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var rename = new Dictionary<string, string> { ["candidateId"] = a.ToString(CultureInfo.InvariantCulture), ["newName"] = "公司甲家", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var renamed = await web.Post("/Upstream?handler=Rename", rename)) Check(WebUtility.HtmlDecode(await renamed.Content.ReadAsStringAsync()).Contains("已改名为「公司甲家」"));
         var after = service.ReadActive();
         Check(after.Version == active.Version && after.CandidateId == a && after.Name == "公司甲家");
@@ -147,7 +147,7 @@ static class UpstreamDetectionTests
         count++;
 
         mock.Handler = null;
-        var again = new Dictionary<string, string> { ["candidateId"] = failed, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var again = new Dictionary<string, string> { ["candidateId"] = failed.ToString(CultureInfo.InvariantCulture), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var rediscovered = await web.Post("/Upstream?handler=Rediscover", again))
         {
             var html = WebUtility.HtmlDecode(await rediscovered.Content.ReadAsStringAsync());
@@ -160,7 +160,7 @@ static class UpstreamDetectionTests
         Check(listing.Contains("删除「顺丰中转」") && listing.Contains("重新获取「在用的」的模型（不花额度）") && !listing.Contains("删除「在用的」"), "Only idle upstreams offer deletion");
         foreach (var (id, confirmed, expected) in new[] { (active, "true", "正在使用中，不能删除"), (failed, "false", "请先勾选删除按钮前面的确认框") })
         {
-            var form = new Dictionary<string, string> { ["candidateId"] = id, ["deleteConfirmed"] = confirmed, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+            var form = new Dictionary<string, string> { ["candidateId"] = id.ToString(CultureInfo.InvariantCulture), ["deleteConfirmed"] = confirmed, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
             using var response = await web.Post("/Upstream?handler=Delete", form);
             Check(WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync()).Contains(expected) && service.ListCandidates().Count == count, expected);
         }
@@ -168,7 +168,7 @@ static class UpstreamDetectionTests
         try { service.Delete(manual); Check(false, "A candidate under test must not be deleted"); }
         // 预期的拒绝：检测中的上游不能删除。
         catch (InvalidOperationException error) { Check(error.Message.Contains("正在检测"), error.Message); }
-        var delete = new Dictionary<string, string> { ["candidateId"] = failed, ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var delete = new Dictionary<string, string> { ["candidateId"] = failed.ToString(CultureInfo.InvariantCulture), ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var deleted = await web.Post("/Upstream?handler=Delete", delete))
             Check(WebUtility.HtmlDecode(await deleted.Content.ReadAsStringAsync()).Contains("已删除「顺丰中转」") && service.ListCandidates().Count == count - 1);
         Check(service.ReadActive().CandidateId == active && service.ListCandidates().All(item => item.Id != failed));
@@ -194,7 +194,7 @@ static class UpstreamDetectionTests
         Check(service.ReadCandidate(stuck) is { State: "testing", Deletable: true } && !service.ReadCandidate(active).Deletable);
         using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
         Check(listing.Contains("删除「卡住的」") && !listing.Contains("删除「在用的」"), "An interrupted test must offer the delete button the service accepts");
-        var delete = new Dictionary<string, string> { ["candidateId"] = stuck, ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var delete = new Dictionary<string, string> { ["candidateId"] = stuck.ToString(CultureInfo.InvariantCulture), ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var deleted = await web.Post("/Upstream?handler=Delete", delete))
             Check(WebUtility.HtmlDecode(await deleted.Content.ReadAsStringAsync()).Contains("已删除「卡住的」") && service.ListCandidates().All(item => item.Id != stuck));
     }
@@ -211,7 +211,7 @@ static class UpstreamDetectionTests
         var before = service.ReadCandidate(active);
         mock.Handler = context => context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal)
             ? context.Response.WriteAsJsonAsync(new { data = new[] { new { id = "fixture-model" }, new { id = "fixture-model-new" } } }) : UpstreamFixture.Success(context);
-        var again = new Dictionary<string, string> { ["candidateId"] = active, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var again = new Dictionary<string, string> { ["candidateId"] = active.ToString(CultureInfo.InvariantCulture), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var page = await web.Post("/Upstream?handler=Rediscover", again))
         {
             var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
@@ -249,7 +249,7 @@ static class UpstreamDetectionTests
         var html = await discovered.Content.ReadAsStringAsync();
         Check(discovered.IsSuccessStatusCode && WebUtility.HtmlDecode(html).Contains("密钥被上游拒绝") && !html.Contains(secret));
         var candidate = web.Upstreams.LatestCandidate()!;
-        var test = new Dictionary<string, string> { ["candidateId"] = candidate.Id, ["model"] = "fixture-model", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var test = new Dictionary<string, string> { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["model"] = "fixture-model", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using var tested = await web.Post("/Upstream?handler=Test", test);
         Check(!(await tested.Content.ReadAsStringAsync()).Contains(secret));
         using var listed = await web.Http.GetAsync(web.Url + "/Upstream");
@@ -280,7 +280,7 @@ static class UpstreamDetectionTests
     }
 
     /// <summary>保存一个指向模拟上游的具名上游（自动探测），获取模型、选模型、测试通过后返回主键。</summary>
-    private static async Task<string> Passed(IUpstreamService service, UpstreamFixture mock, string name)
+    private static async Task<long> Passed(IUpstreamService service, UpstreamFixture mock, string name)
     {
         var id = service.SaveCandidate(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "fixture-" + mock.Url.Length + "-secret", name);
         await service.DiscoverModels(id, CancellationToken.None); service.ChooseModel(id, "fixture-model");
@@ -289,9 +289,9 @@ static class UpstreamDetectionTests
     }
 
     /// <summary>经网页的「切换到」按钮切换，带上页面看到的活动版本，并核对读句与活动上游。</summary>
-    private static async Task Switch(WebFixture web, string id, string name)
+    private static async Task Switch(WebFixture web, long id, string name)
     {
-        var values = new Dictionary<string, string> { ["candidateId"] = id, ["Version"] = web.Upstreams.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var values = new Dictionary<string, string> { ["candidateId"] = id.ToString(CultureInfo.InvariantCulture), ["Version"] = web.Upstreams.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using var response = await web.Post("/Upstream?handler=Activate", values);
         Check(WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync()).Contains($"已切换到「{name}」") && web.Upstreams.ReadActive().CandidateId == id);
     }

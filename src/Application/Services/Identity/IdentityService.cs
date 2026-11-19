@@ -1,4 +1,5 @@
-﻿using Application.Interfaces.Identity;
+﻿using System.Security.Cryptography;
+using Application.Interfaces.Identity;
 using Core.Configuration;
 using Core.Identity;
 
@@ -16,30 +17,34 @@ public sealed class IdentityService(IIdentityRepository repository, ClientRegist
 
     /// <summary>
     /// 新建使用者并签发第一版个人令牌：显示名去首尾空白后须为 1–64 个字符且不含控制字符；
-    /// 未指定 <paramref name="legacyName"/> 时自动生成 <c>u_</c> 加主键前 24 位的内部名称，旧客户端迁移时可沿用原名称但同样须合法。
-    /// 返回结果中的明文令牌只出现这一次，库里只存其哈希。
+    /// 未指定 <paramref name="legacyName"/> 时自动生成 <c>u_</c> 加 24 位随机小写十六进制的内部名称（与主键无关），旧客户端迁移时可沿用原名称但同样须合法。
+    /// 返回结果中的明文令牌只出现这一次，库里只存其哈希；使用者主键由库生成。
     /// </summary>
     public IssuedToken Create(string displayName, string? legacyName = null)
     {
         displayName = ValidateDisplayName(displayName);
-        var id = Guid.NewGuid().ToString("N"); var name = legacyName ?? "u_" + id[..24];
+        var name = legacyName ?? "u_" + RandomNumberGenerator.GetHexString(24, lowercase: true);
         if (!RelayConfiguration.IsClientName(name)) throw new InvalidOperationException("客户端名称只能是小写字母、数字、短横线或下划线，最多 32 字符。");
         var token = ConfigurationFiles.NewToken();
-        return Change(() => (new IssuedToken(id, displayName, token), repository.Create(id, name, displayName, ConfigurationFiles.Hash(token))));
+        return Change(() =>
+        {
+            var created = repository.Create(name, displayName, ConfigurationFiles.Hash(token));
+            return (new IssuedToken(created.UserId, displayName, token), created.Access);
+        });
     }
 
     /// <summary>修改显示名（同样做长度与控制字符校验），令牌不变；使用者不存在时由仓储拒绝。</summary>
-    public void Rename(string userId, string displayName)
+    public void Rename(long userId, string displayName)
     {
         displayName = ValidateDisplayName(displayName);
         Change(() => (0, repository.Rename(userId, displayName)));
     }
 
     /// <summary>启用或停用使用者；提交后立即发布新名单，本进程的鉴权马上生效。</summary>
-    public void SetEnabled(string userId, bool enabled) => Change(() => (0, repository.SetEnabled(userId, enabled)));
+    public void SetEnabled(long userId, bool enabled) => Change(() => (0, repository.SetEnabled(userId, enabled)));
 
     /// <summary>轮换个人令牌：生成新令牌并写入其哈希，旧令牌随之失效；返回的明文新令牌只出现这一次。</summary>
-    public IssuedToken Rotate(string userId)
+    public IssuedToken Rotate(long userId)
     {
         var token = ConfigurationFiles.NewToken();
         return Change(() =>

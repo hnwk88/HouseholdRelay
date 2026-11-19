@@ -23,7 +23,7 @@ static class SiteIdentityFlowTests
         var service = web.App.Services.GetRequiredService<ISiteIdentityService>(); var before = service.Current;
         var people = Enumerable.Range(0, 4).Select(index => web.Identities.Create("独立地点" + index)).ToArray();
         var identities = IdentityRows(web.Database);
-        var credentialPath = Path.Combine(web.Home.Path, ".state", "official-accounts", officialId, OfficialCredential.FileName);
+        var credentialPath = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(officialId).Uid, OfficialCredential.FileName);
         var credentials = File.ReadAllBytes(credentialPath);
         official.Handler = context => Json(context, new { input_tokens = 10, output_tokens = 11, cache_read_input_tokens = 2, cache_creation_input_tokens = 3 });
         for (var index = 0; index < people.Length; index++)
@@ -84,7 +84,7 @@ static class SiteIdentityFlowTests
             var report = await Personal(web, person.Token);
             Check(report.Rows.All(row => row.UserId == person.UserId) && report.Rows.Count(row => row.Outcome == "succeeded") >= 2);
             Check(report.Rows.Where(row => row.Outcome == "succeeded" && row.Tokens.Input == 10).All(row => row.Tokens.Output == 11));
-            Check(web.Identities.Clients.Authenticate(person.Token)?.Id == person.UserId);
+            Check(web.Identities.Clients.Authenticate(person.Token)?.UserId == person.UserId);
         }
     }
 
@@ -96,7 +96,7 @@ static class SiteIdentityFlowTests
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var officialId = await Official(web, official); await api.Activate(web.Upstreams);
         var person = web.Identities.Create("状态与备用检查"); var service = web.App.Services.GetRequiredService<ISiteIdentityService>();
-        var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", officialId);
+        var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(officialId).Uid);
         FakeClaude.Write(directory, "fixture-expired-for-maintenance", -1);
         var before = File.ReadAllBytes(Path.Combine(directory, OfficialCredential.FileName));
         var log = File.ReadAllText(Path.Combine(directory, "fake-calls.log")); var calls = official.Calls.Count;
@@ -151,9 +151,9 @@ static class SiteIdentityFlowTests
         web.Upstreams.Activate(officialId, web.Upstreams.ReadOverview().Version); web.Upstreams.SetFailover(false);
         var preparation = web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>();
         var person = web.Identities.Create("占用核对");
-        var path = Path.Combine(web.Home.Path, ".state", "official-accounts", officialId, ".claude.json");
+        var path = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(officialId).Uid, ".claude.json");
         // 受控准备让本代核对失效，下一次官方请求一定要打开文件。
-        preparation.PrepareAccount(officialId);
+        preparation.PrepareAccount(web.Upstreams.ReadCandidate(officialId).Uid);
         var calls = official.Calls.Count; string blocked;
         using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
@@ -226,7 +226,7 @@ static class SiteIdentityFlowTests
     }
 
     /// <summary>仅假凭据与回环地址，导入、测试并激活一个真实流程中的官方账户候选。</summary>
-    private static async Task<string> Official(WebFixture web, UpstreamFixture mock)
+    private static async Task<long> Official(WebFixture web, UpstreamFixture mock)
     {
         var id = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version,
             new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model" },

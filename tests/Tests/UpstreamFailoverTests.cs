@@ -223,60 +223,47 @@ static class UpstreamFailoverTests
     }
 
     /// <summary>
-    /// 架构升级 v5 → v6：失败整体回滚（版本号仍为 5、没有开关列、旧单价原样）；去掉故障后升级成功：开关默认开，属于当前活动版本的旧单价改挂在用那一家，
-    /// 已有用量按尝试记录回填实际服务的那一家，一条不少。
+    /// 架构升级 v5 → v6（起点是程序从真实 v3 旧库自己升到的版本 5，只在旧表上写数据行）：失败整体回滚（版本号仍为 5、没有开关列、旧单价原样）；
+    /// 去掉故障后一路升到最新版：开关默认开，属于当前活动版本的旧单价改挂在用那一家，更早版本的单价另存，已有用量按尝试记录回填实际服务的那一家，一条不少。
     /// </summary>
-    public static async Task SchemaUpgrade()
+    public static Task SchemaUpgrade()
     {
-        using var home = new TestHome(); var process = new TestProcess(home.Path); var token = process.Identities.Create("升级");
-        var user = process.Identities.Clients.Authenticate(token.Token)!;
-        // 用量、尝试与单价对已保存上游有外键：活动那家和实际服务那家都先存成真实上游，用它们的主键。
-        var version = process.Upstreams.ReadOverview().Version;
-        var active = process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://active.example.com" }, "sk-active-0001", "在用上游");
-        var served = process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://served.example.com" }, "sk-served-0001", "服务上游");
-        await process.Usage.Start("kept", user, "inference"); await process.Usage.Dispatch("kept", 1, null, "fixture-model");
-        Check(await process.Usage.Finish("kept", new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(3, 4)) { Attempts = [new UpstreamAttempt(1, served, 1, DateTimeOffset.UtcNow)] }));
-        // 版本 9 的用量表 candidate_id 带外键，不能 DROP COLUMN：在不开外键检查的直连上按版本 3 原始建表语句把它重建回没有这一列的旧形状。
-        using (var raw = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = process.Database.Path, Pooling = false, ForeignKeys = false }.ToString()))
+        using var home = DatabaseUpgradeTests.LegacyAt("v3", 5);
+        string active, served;
+        using (var connection = DatabaseUpgradeTests.Connect(DatabaseUpgradeTests.Database(home.Path)))
         {
-            raw.Open();
-            RelayDatabase.Execute(raw, null, """
-                CREATE TABLE usage_requests_v5 (request_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), token_id TEXT NOT NULL REFERENCES tokens(id),
-                    upstream_version INTEGER, request_started_at INTEGER NOT NULL, ended_at INTEGER,
-                    kind TEXT NOT NULL CHECK(kind IN ('inference','estimate','models')), model TEXT, outcome TEXT NOT NULL DEFAULT 'started',
-                    dispatched INTEGER NOT NULL DEFAULT 0, status_code INTEGER, upstream_status INTEGER, duration_ms INTEGER,
-                    completeness TEXT NOT NULL DEFAULT 'partial', input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
-                    price_json TEXT, amount TEXT, currency TEXT, money_source TEXT NOT NULL DEFAULT 'unknown', money_completeness TEXT NOT NULL DEFAULT 'unknown');
-                INSERT INTO usage_requests_v5 SELECT request_id,user_id,token_id,upstream_version,request_started_at,ended_at,kind,model,outcome,dispatched,status_code,
-                    upstream_status,duration_ms,completeness,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,price_json,amount,currency,money_source,money_completeness
-                    FROM usage_requests;
-                DROP TABLE usage_requests; ALTER TABLE usage_requests_v5 RENAME TO usage_requests;
-                """);
+            var ids = new List<string>();
+            using (var command = RelayDatabase.Command(connection, null, "SELECT id FROM upstream_candidates ORDER BY created_at,rowid"))
+            using (var reader = command.ExecuteReader()) while (reader.Read()) ids.Add(reader.GetString(0));
+            (active, served) = (ids[0], ids[1]);
+            // 活动上游记下来源；夹具第一条用量补一次「由第二家服务」的尝试；两条单价里 claude-other 改成更早的活动版本。
+            RelayDatabase.Execute(connection, null, """
+                UPDATE upstream SET candidate_id=$active WHERE id=1;
+                INSERT INTO usage_attempts(request_id,attempt,candidate_id,upstream_version,started_at,duration_ms,disposition) VALUES('fixture-v3-0',1,$served,1,0,1,'client');
+                UPDATE usage_prices SET upstream_version=-1 WHERE model='claude-other';
+                """, ("$active", active), ("$served", served));
         }
-        process.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
-            UPDATE upstream SET candidate_id=$active;
-            ALTER TABLE upstream DROP COLUMN failover;
-            DROP TABLE usage_prices;
-            CREATE TABLE usage_prices(id TEXT PRIMARY KEY,upstream_version INTEGER NOT NULL,model TEXT NOT NULL,json TEXT NOT NULL,UNIQUE(upstream_version,model));
-            INSERT INTO usage_prices VALUES('current',(SELECT version FROM upstream WHERE id=1),'fixture-model','{"Id":"current","UpstreamVersion":1,"Model":"fixture-model","Currency":"USD","InputPerMillion":1}');
-            INSERT INTO usage_prices VALUES('older',-1,'fixture-model','{"Id":"older","UpstreamVersion":-1,"Model":"fixture-model","Currency":"USD","InputPerMillion":9}');
-            PRAGMA user_version=5;
-            """, ("$active", active)));
         var rejected = false;
         try { _ = new TestProcess(home.Path, migrationCheckpoint: () => throw new IOException("fixture-checkpoint")).Database; }
         catch (IOException error) when (error.Message == "fixture-checkpoint") { /* 检查点在改表之后、写版本号之前失败，整个升级应回滚；随后核对版本号、列和单价。 */ rejected = true; }
         Check(rejected, "Checkpoint failure must abort the upgrade");
-        int Count(RelayDatabase database, string sql) { using var connection = database.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
-        Check(Count(process.Database, "PRAGMA user_version") == 5 && Count(process.Database, "SELECT COUNT(*) FROM pragma_table_info('upstream') WHERE name='failover'") == 0);
-        Check(Count(process.Database, "SELECT COUNT(*) FROM usage_prices WHERE upstream_version IS NOT NULL") == 2, "Old prices stay untouched after rollback");
-        var upgraded = new TestProcess(home.Path);
-        Check(Count(upgraded.Database, "PRAGMA user_version") == RelayDatabase.CurrentVersion && Count(upgraded.Database, "SELECT failover FROM upstream WHERE id=1") == 1);
-        var prices = upgraded.Pricing.List(active);
-        Check(prices is [{ Id: "current", InputPerMillion: 1 }] && prices[0].CandidateId == active && Count(upgraded.Database, "SELECT COUNT(*) FROM usage_prices") == 1, "Current-version prices move to the active upstream");
-        Check(Count(upgraded.Database, "SELECT COUNT(*) FROM migration_archive WHERE reason='price-not-migrated' AND json_extract(row_json,'$.id')='older'") == 1, "The older-version price is archived, not dropped");
+        int Count(string sql) { using var connection = DatabaseUpgradeTests.Connect(DatabaseUpgradeTests.Database(home.Path)); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
+        Check(Count("PRAGMA user_version") == 5 && Count("SELECT COUNT(*) FROM pragma_table_info('upstream') WHERE name='failover'") == 0);
+        Check(Count("SELECT COUNT(*) FROM usage_prices WHERE upstream_version IS NOT NULL") == 2, "Old prices stay untouched after rollback");
+        var upgraded = new TestProcess(home.Path); _ = upgraded.Database;
+        Check(Count("PRAGMA user_version") == RelayDatabase.CurrentVersion && Count("SELECT failover FROM upstream WHERE id=1") == 1);
+        var saved = upgraded.Upstreams.ListCandidates();
+        var activeId = saved.Single(item => item.Uid == active).Id; var servedId = saved.Single(item => item.Uid == served).Id;
+        var prices = upgraded.Pricing.List(activeId);
+        Check(prices is [{ Model: "claude-fixture", InputPerMillion: 3 }] && Count("SELECT COUNT(*) FROM usage_prices") == 1, "Current-version prices move to the active upstream");
+        Check(Count("SELECT COUNT(*) FROM migration_archive WHERE reason='price-not-migrated' AND json_extract(row_json,'$.model')='claude-other'") == 1, "The older-version price is archived, not dropped");
+        // 不经用量查询的 40 天窗口直接数：夹具的用量时间是生成那天，过了窗口查询就读不到了。
+        Check(Count("SELECT COUNT(*) FROM usage_requests") == 6 && Count("SELECT COUNT(*) FROM usage_requests WHERE request_id='fixture-v3-0' AND input_tokens=100 AND output_tokens=20") == 1);
         using (var connection = upgraded.Database.Open())
-            Check((string?)RelayDatabase.Scalar(connection, null, "SELECT candidate_id FROM usage_requests WHERE request_id='kept'") == served);
-        Check(upgraded.Usage.Query(new()).Rows.Single().Tokens == new UsageTokens(3, 4));
+            Check((long?)RelayDatabase.Scalar(connection, null, "SELECT a.candidate_id FROM usage_attempts a JOIN usage_requests r ON r.id=a.usage_request_id WHERE r.request_id='fixture-v3-0'") == servedId);
+        using (var connection = upgraded.Database.Open())
+            Check((long?)RelayDatabase.Scalar(connection, null, "SELECT candidate_id FROM usage_requests WHERE request_id='fixture-v3-0'") == servedId, "Usage is backfilled to the upstream that served it");
+        return Task.CompletedTask;
     }
 
     /// <summary>甲某个状态码对应的 Anthropic 错误类型，与 <see cref="Fail"/> 写出的一致。</summary>
@@ -319,9 +306,9 @@ static class UpstreamFailoverTests
         /// <summary>使用者的个人令牌。</summary>
         public required string Token { get; init; }
         /// <summary>甲的已保存上游主键。</summary>
-        public required string IdA { get; init; }
+        public required long IdA { get; init; }
         /// <summary>乙的已保存上游主键。</summary>
-        public required string IdB { get; init; }
+        public required long IdB { get; init; }
 
         /// <summary>搭好场景：甲、乙各自保存并测试通过，激活甲，清空两家计数。</summary>
         public static async Task<Scene> Create()
@@ -336,7 +323,7 @@ static class UpstreamFailoverTests
         }
 
         /// <summary>模拟「测过之后变坏」：保存一个指向 <paramref name="options"/> 的候选，抄甲的通过报告后切换过去，返回它的主键；甲、乙都成了备用。</summary>
-        public string ForceActive(UpstreamOptions options, string name)
+        public long ForceActive(UpstreamOptions options, string name)
         {
             var id = Web.Upstreams.SaveCandidate(Web.Upstreams.ReadActive().Version, options, SecretA, name);
             Web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
@@ -346,10 +333,10 @@ static class UpstreamFailoverTests
         }
 
         /// <summary>用量记录里实际服务那一家的主键。</summary>
-        public string? Served(string requestId)
+        public long? Served(string requestId)
         {
             using var connection = Web.Database.Open();
-            return RelayDatabase.Scalar(connection, null, "SELECT candidate_id FROM usage_requests WHERE request_id=$id", ("$id", requestId)) as string;
+            return RelayDatabase.Scalar(connection, null, "SELECT candidate_id FROM usage_requests WHERE request_id=$id", ("$id", requestId)) as long?;
         }
 
         /// <summary>取出中转请求的事件行（带 requestId 与 route 的那种），按写入顺序。</summary>
@@ -360,7 +347,7 @@ static class UpstreamFailoverTests
         public async ValueTask DisposeAsync() { await Web.DisposeAsync(); await A.DisposeAsync(); await B.DisposeAsync(); }
 
         /// <summary>以给定名称和凭据保存指向模拟上游的候选并测试通过，返回主键。</summary>
-        private static async Task<string> Passed(WebFixture web, UpstreamFixture upstream, string credential, string name)
+        private static async Task<long> Passed(WebFixture web, UpstreamFixture upstream, string credential, string name)
         {
             var id = web.Upstreams.SaveCandidate(web.Upstreams.ReadActive().Version, upstream.Options(), credential, name);
             var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None); Check(report.CanActivate, report.Message); return id;

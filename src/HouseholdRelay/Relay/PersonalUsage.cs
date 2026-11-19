@@ -29,7 +29,8 @@ internal static class PersonalUsage
             return true;
         }
         var client = clients.Authenticate(RelayServer.GetToken(context.Request)) ?? throw new RelayFailure(401, "Invalid or disabled relay token.");
-        if (store is null) throw new RelayFailure(503, "Usage storage unavailable.");
+        // 只按库里的使用者主键圈定；没有主键的鉴权项（旧内存夹具）不能查，免得筛选条件为空读成全家的用量。
+        if (store is null || client.UserId is not { } self) throw new RelayFailure(503, "Usage storage unavailable.");
         var query = context.Request.Query;
         if (query.Keys.Any(key => key is not ("from" or "until" or "kind" or "model" or "outcome" or "page" or "granularity" or "timezone"))
             || query.Any(item => item.Value.Count != 1)) throw new RelayFailure(400, "Invalid usage query; identity comes only from the relay token.");
@@ -42,7 +43,7 @@ internal static class PersonalUsage
         }
         var page = 1;
         if (query.ContainsKey("page") && !int.TryParse(query["page"], out page)) throw new RelayFailure(400, "Invalid query page.");
-        var filter = new UsageFilter(client.Id, Date("from"), Date("until"), query["kind"], query["model"], query["outcome"], page,
+        var filter = new UsageFilter(self, Date("from"), Date("until"), query["kind"], query["model"], query["outcome"], page,
             query.ContainsKey("granularity") ? query["granularity"].ToString() : "day", query.ContainsKey("timezone") ? query["timezone"].ToString() : "UTC");
         try { filter.Validate(); }
         // 筛选校验的中文提示是写给管理页的，这里统一转成 400 和固定英文消息，不向外部客户端透露校验细节。

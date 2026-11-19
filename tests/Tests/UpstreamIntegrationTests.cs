@@ -194,11 +194,11 @@ static class UpstreamIntegrationTests
             Check(saved.IsSuccessStatusCode && html.Contains("已保存「页面测试」。已获取 1 个模型，认证用 x-api-key") && html.Contains("<option value=\"fixture-model\"") && !html.Contains("fixture-page-secret"), html);
             var candidate = fixture.Upstreams.LatestCandidate()!;
             Check(candidate.Name == "页面测试" && candidate.Options.Authentication == "x-api-key" && !candidate.Options.AuthenticationManual && candidate.State == "untested");
-            values = new() { ["candidateId"] = candidate.Id, ["model"] = "fixture-model", ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
+            values = new() { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["model"] = "fixture-model", ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
             using var tested = await fixture.Post("/Upstream?handler=Test", values); html = WebUtility.HtmlDecode(await tested.Content.ReadAsStringAsync());
             Check(tested.IsSuccessStatusCode && html.Contains("认证用 x-api-key，按标准 Messages 方式通过，模型 fixture-model。") && !html.Contains("fixture-page-secret"));
             Check(html.Contains("测试（会消耗少量上游额度）") && !html.Contains("type=\"checkbox\" name=\"confirmed\""));
-            values = new() { ["candidateId"] = candidate.Id, ["Version"] = fixture.Upstreams.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
+            values = new() { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["Version"] = fixture.Upstreams.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
             using var activated = await fixture.Post("/Upstream?handler=Activate", values); html = WebUtility.HtmlDecode(await activated.Content.ReadAsStringAsync());
             Check(activated.IsSuccessStatusCode && html.Contains("已切换到「页面测试」"));
             var active = fixture.Upstreams.ReadActive();

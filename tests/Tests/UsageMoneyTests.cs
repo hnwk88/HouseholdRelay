@@ -69,11 +69,10 @@ static class UsageMoneyTests
         using var home = new TestHome(); var db = new TestProcess(home.Path); var ids = db.Identities; var user = ids.Create("时区"); var client = ids.Clients.Authenticate(user.Token)!;
         var now = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero); var clock = new UsageClock(now); var clocked = new TestProcess(home.Path, clock); var store = clocked.Usage; var prices = clocked.Pricing;
         // 单价按已保存上游主键挂；这里只计价不转发，直接放一行测试通过的上游给单价挂上。
-        db.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
-            INSERT INTO upstream_candidates(id,expected_version,options_json,credential,state,report_json,created_at,test_started_at,name)
-            VALUES('priced-upstream',1,'{}',x'00','passed',NULL,0,NULL,'计价上游')
-            """));
-        const string priced = "priced-upstream";
+        var priced = db.Database.Write((connection, transaction) => (long)RelayDatabase.Scalar(connection, transaction, """
+            INSERT INTO upstream_candidates(uid,expected_version,options_json,credential,state,report_json,created_at,test_started_at,name)
+            VALUES('priced-upstream',1,'{}',x'00','passed',NULL,0,NULL,'计价上游') RETURNING id
+            """)!);
         prices.Save(priced, "priced", "USD", 1, 2, 0, 0);
         var dates = new[] { new DateTimeOffset(2026, 11, 1, 5, 30, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 1, 6, 30, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 2, 5, 5, 0, TimeSpan.Zero) };
         for (var index = 0; index < dates.Length; index++)
@@ -116,11 +115,11 @@ static class UsageMoneyTests
         using (var personal = new HttpRequestMessage(HttpMethod.Get, web.Url + "/Pricing"))
         { personal.Headers.Authorization = new("Bearer", user.Token); using var result = await web.Http.SendAsync(personal); Check(result.StatusCode == HttpStatusCode.Redirect); }
         await web.Login();
-        var data = new Dictionary<string, string> { ["CandidateId"] = first, ["ModelName"] = "fixture-model", ["Currency"] = "USD", ["InputPrice"] = "1.2", ["OutputPrice"] = "3.4", ["CacheReadPrice"] = "0", ["CacheWritePrice"] = "0" };
+        var data = new Dictionary<string, string> { ["CandidateId"] = first.ToString(CultureInfo.InvariantCulture), ["ModelName"] = "fixture-model", ["Currency"] = "USD", ["InputPrice"] = "1.2", ["OutputPrice"] = "3.4", ["CacheReadPrice"] = "0", ["CacheWritePrice"] = "0" };
         using (var rejected = await web.Post("/Pricing", data)) Check(rejected.StatusCode == HttpStatusCode.BadRequest);
         data["__RequestVerificationToken"] = await web.Csrf("/Pricing");
         using (var saved = await web.Post("/Pricing", data)) Check(saved.IsSuccessStatusCode);
-        var price = web.Pricing.List(first).Single(); Check(price.InputPerMillion == 1.2m && price.OutputPerMillion == 3.4m && price.CandidateId == first);
+        var price = web.Pricing.List(first).Single(); Check(price.InputPerMillion == 1.2m && price.OutputPerMillion == 3.4m && price.Model == "fixture-model");
         var second = await upstream.Activate(web.Upstreams); web.Upstreams.Delete(first);
         data["InputPrice"] = "999";
         using (var stale = await web.Post("/Pricing", data))

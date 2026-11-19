@@ -26,7 +26,8 @@ internal static class UsageQuery
         var where = " r.request_started_at >= $from AND r.request_started_at <= $now";
         var parameters = new List<(string Name, object? Value)> { ("$from", from.UtcTicks), ("$now", now.UtcTicks) };
         if (filter.Until is { } until) { where += " AND r.request_started_at < $until"; parameters.Add(("$until", until.UtcTicks)); }
-        foreach (var (column, value) in new[] { ("user_id", filter.UserId), ("kind", filter.Kind), ("model", filter.Model), ("outcome", filter.Outcome) })
+        if (filter.UserId is { } user) { where += " AND r.user_id=$user_id"; parameters.Add(("$user_id", user)); }
+        foreach (var (column, value) in new[] { ("kind", filter.Kind), ("model", filter.Model), ("outcome", filter.Outcome) })
         {
             if (string.IsNullOrEmpty(value)) continue;
             where += " AND r." + column + "=$" + column; parameters.Add(("$" + column, value));
@@ -59,7 +60,7 @@ internal static class UsageQuery
             FROM usage_requests r JOIN users u ON u.id=r.user_id WHERE
             """ + where + " ORDER BY r.request_started_at DESC,r.request_id DESC LIMIT $limit OFFSET $offset", parameters.ToArray()))
         using (var reader = command.ExecuteReader())
-            while (reader.Read()) rows.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+            while (reader.Read()) rows.Add(new(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetInt64(3),
                 Number(reader, 4), new DateTimeOffset(reader.GetInt64(5), TimeSpan.Zero),
                 Number(reader, 6) is { } end ? new DateTimeOffset(end, TimeSpan.Zero) : null,
                 reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.GetString(9), reader.GetBoolean(10),
@@ -84,21 +85,21 @@ internal static class UsageQuery
             decimal.Parse(reader.GetString(4), CultureInfo.InvariantCulture), reader.GetInt64(5), reader.GetInt64(6))));
         return result;
     }
-    /// <summary>在同一事务内读出本页明细各行的上游尝试，按请求编号分组、按次序排列；名称先取记账时的快照，旧记录没有快照时按候选主键现查（停用的上游照样查得到），并带出它此刻是否已停用。本页用与明细相同的条件、排序和分页圈定。</summary>
+    /// <summary>在同一事务内读出本页明细各行的上游尝试（经整数外键连回用量，按请求编号分组、按次序排列）；名称先取记账时的快照，旧记录没有快照时按候选主键现查（停用的上游照样查得到），并带出它此刻是否已停用。本页用与明细相同的条件、排序和分页圈定。</summary>
     private static Dictionary<string, IReadOnlyList<UpstreamAttemptRow>> Attempts(SqliteConnection connection, SqliteTransaction transaction, string where, (string Name, object? Value)[] args)
     {
         using var command = Command(connection, transaction, """
-            SELECT a.request_id,a.attempt,a.candidate_id,COALESCE(a.upstream_name,c.name),a.upstream_version,a.started_at,a.headers_ms,a.duration_ms,a.upstream_status,
+            SELECT q.request_id,a.attempt,a.candidate_id,COALESCE(a.upstream_name,c.name),a.upstream_version,a.started_at,a.headers_ms,a.duration_ms,a.upstream_status,
                 a.upstream_request_id,a.error_type,a.error_message,a.connect_failure,a.disposition,c.deleted_at IS NOT NULL
-            FROM usage_attempts a LEFT JOIN upstream_candidates c ON c.id=a.candidate_id
-            WHERE a.request_id IN (SELECT r.request_id FROM usage_requests r WHERE
-            """ + where + " ORDER BY r.request_started_at DESC,r.request_id DESC LIMIT $limit OFFSET $offset) ORDER BY a.request_id,a.attempt", args);
+            FROM usage_attempts a JOIN usage_requests q ON q.id=a.usage_request_id LEFT JOIN upstream_candidates c ON c.id=a.candidate_id
+            WHERE a.usage_request_id IN (SELECT r.id FROM usage_requests r WHERE
+            """ + where + " ORDER BY r.request_started_at DESC,r.request_id DESC LIMIT $limit OFFSET $offset) ORDER BY q.request_id,a.attempt", args);
         using var reader = command.ExecuteReader(); var result = new Dictionary<string, List<UpstreamAttemptRow>>();
         string? Text(int column) => reader.IsDBNull(column) ? null : reader.GetString(column);
         while (reader.Read())
         {
             if (!result.TryGetValue(reader.GetString(0), out var list)) result[reader.GetString(0)] = list = [];
-            list.Add(new(reader.GetInt32(1), Text(2), Text(3), reader.GetInt64(4), new DateTimeOffset(reader.GetInt64(5), TimeSpan.Zero), Number(reader, 6),
+            list.Add(new(reader.GetInt32(1), Number(reader, 2), Text(3), reader.GetInt64(4), new DateTimeOffset(reader.GetInt64(5), TimeSpan.Zero), Number(reader, 6),
                 reader.GetInt64(7), (int?)Number(reader, 8), Text(9), Text(10), Text(11), Text(12), reader.GetString(13)) { Deleted = reader.GetBoolean(14) });
         }
         return result.ToDictionary(item => item.Key, item => (IReadOnlyList<UpstreamAttemptRow>)item.Value);

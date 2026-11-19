@@ -6,10 +6,10 @@ namespace Application.Interfaces.Usage;
 public interface IUsageRepository
 {
     /// <summary>写入请求开始记录，归属取自已鉴权的使用者与令牌。</summary>
-    void InsertStart(string requestId, string userId, string? tokenId, long startedAtTicks, string kind);
+    void InsertStart(string requestId, long? userId, long? tokenId, long startedAtTicks, string kind);
 
     /// <summary>把仍处于开始状态的记录标记为已发送，记下首先要试的那一家，并复制它当时的单价快照；返回受影响行数。</summary>
-    int MarkDispatched(string requestId, long version, string? candidateId, string? model);
+    int MarkDispatched(string requestId, long version, long? candidateId, string? model);
 
     /// <summary>
     /// 在一个事务里读出单价快照、调用 <paramref name="price"/> 计算金额并写入结束结果与各次尝试；记录已结束时不覆盖。

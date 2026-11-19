@@ -6,7 +6,7 @@ using static Infrastructure.Persistence.RelayDatabase;
 namespace Infrastructure.Persistence;
 
 /// <summary>在同一事务中将基础库升级到候选测试和版本化激活结构。</summary>
-internal sealed class UpstreamSchema : IDatabaseMigration
+internal sealed class UpstreamSchema(RelayDataOptions options) : IDatabaseMigration
 {
     /// <summary>排在第二位（20）：在旧数据导入之后、用量架构升级之前执行。</summary>
     public int Order => 20;
@@ -21,7 +21,7 @@ internal sealed class UpstreamSchema : IDatabaseMigration
         using var transaction = connection.BeginTransaction();
         var settings = JsonSerializer.Deserialize<RelayConfiguration>((string)Scalar(connection, transaction, "SELECT json FROM settings WHERE id=1")!, ConfigurationFiles.Json)!;
         var baseUrl = (string)Scalar(connection, transaction, "SELECT base_url FROM upstream WHERE id=1")!;
-        var options = UpstreamOptions.Legacy(settings, baseUrl);
+        var upstream = UpstreamOptions.Legacy(settings, baseUrl);
         Execute(connection, transaction, """
             ALTER TABLE upstream ADD COLUMN options_json TEXT;
             ALTER TABLE upstream ADD COLUMN report_json TEXT;
@@ -30,7 +30,9 @@ internal sealed class UpstreamSchema : IDatabaseMigration
                 created_at INTEGER NOT NULL, test_started_at INTEGER);
             PRAGMA user_version=2;
             """);
-        Execute(connection, transaction, "UPDATE upstream SET options_json=$json WHERE id=1", ("$json", JsonSerializer.Serialize(options, ConfigurationFiles.Json)));
+        Execute(connection, transaction, "UPDATE upstream SET options_json=$json WHERE id=1", ("$json", JsonSerializer.Serialize(upstream, ConfigurationFiles.Json)));
+        // 仅供测试：与其他各版一样在提交前给一次注入点，用例借它让程序自己停在版本 1。
+        options.MigrationCheckpoint?.Invoke();
         transaction.Commit();
     }
 }

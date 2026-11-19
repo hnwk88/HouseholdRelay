@@ -28,7 +28,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     private Outcome? last;
 
     /// <summary>记下客户端与中转的版本；客户端更新、没有升级在跑、离上次失败已过 <see cref="RetryAfter"/> 时在后台起一次升级，立即返回。</summary>
-    public void Observe(string? clientVersion, string relayVersion, string clientId)
+    public void Observe(string? clientVersion, string relayVersion, long? clientId)
     {
         // 判断「要不要起」与「记下正在跑」在同一把锁里，并发的请求只会有一个起升级。
         lock (sync)
@@ -50,7 +50,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     }
 
     /// <summary>中转版本、最近一次看到的客户端版本（使用者按主键读显示名）、两边谁新、上次升级的时间与结果，读成一段话；不启动 Claude Code。</summary>
-    public string Describe(Func<string, string> displayName)
+    public string Describe(Func<long?, string> displayName)
     {
         Seen? client; Outcome? outcome; bool busy;
         // 三样在同一把锁里一起读，读句里的版本、结果与「正在升级」对得上。
@@ -183,7 +183,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     private static partial Regex Spaces();
 
     /// <summary>最近一次发往官方账户的请求：客户端版本（看不出时为 null）、使用者主键、中转版本与时刻。</summary>
-    private sealed record Seen(string? ClientVersion, string ClientId, string RelayVersion, DateTimeOffset At);
+    private sealed record Seen(string? ClientVersion, long? ClientId, string RelayVersion, DateTimeOffset At);
 
     /// <summary>一次升级的结果：时刻、是否升上去、读句。</summary>
     private sealed record Outcome(DateTimeOffset At, bool Succeeded, string Sentence);

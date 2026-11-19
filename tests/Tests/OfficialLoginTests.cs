@@ -35,7 +35,7 @@ static class OfficialLoginTests
             Check(!raw.Contains("fixture-login-token") && !raw.Contains("fixture-inherited-secret"));
             var candidate = web.Upstreams.LatestCandidate()!;
             Check(candidate.Name == FakeClaude.Email && candidate.Options is { OfficialLogin: true, Mode: "oauth", Authentication: "bearer" });
-            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate.Id);
+            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate.Uid);
             using (var environment = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "fake-env.json"))))
             {
                 Check(environment.RootElement.GetProperty("inherited").GetArrayLength() == 0, environment.RootElement.ToString());
@@ -109,7 +109,7 @@ static class OfficialLoginTests
         catch (InvalidOperationException error) { Check(error.Message.Contains("登录官方账户"), error.Message); }
 
         var removed = await service.LoginOfficial(service.ReadActive().Version, options, "将删除的账户", CancellationToken.None);
-        Check(Directory.Exists(Path.Combine(host.Home.Path, ".state", "official-accounts", removed)));
+        Check(Directory.Exists(Path.Combine(host.Home.Path, ".state", "official-accounts", service.ReadCandidate(removed).Uid)));
         service.Delete(removed);
         Check(NoAccountDirectories(host) && service.ListCandidates().Count == 0, "Deleting an official login upstream must remove its account directory");
     }
@@ -129,7 +129,7 @@ static class OfficialLoginTests
             var id = await service.LoginOfficial(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新卡住", CancellationToken.None);
             service.ChooseModel(id, "fixture-model");
             Check((await service.TestCandidate(id, true, CancellationToken.None)).CanActivate); service.Activate(id);
-            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", id);
+            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", service.ReadCandidate(id).Uid);
             FakeClaude.Write(directory, "fixture-login-token-expired", -1);
             foreach (var (path, expected) in new[] { ("/", "刷新卡住"), ("/Connection", "刷新卡住"), ("/Pricing", "正在设置：刷新卡住"), ("/Upstream", "名称：刷新卡住") })
             {
@@ -156,9 +156,9 @@ static class OfficialLoginTests
         {
             var service = web.Upstreams; var accounts = web.App.Services.GetRequiredService<IOfficialAccountLogin>();
             var id = await service.LoginOfficial(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新中删除", CancellationToken.None);
-            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", id); var log = Path.Combine(directory, "fake-calls.log");
+            var uid = service.ReadCandidate(id).Uid; var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", uid); var log = Path.Combine(directory, "fake-calls.log");
             FakeClaude.Write(directory, "fixture-login-token-expired", -1);
-            var reading = Task.Run(() => accounts.ReadAccessToken(id));
+            var reading = Task.Run(() => accounts.ReadAccessToken(uid));
             var started = false;
             for (var attempt = 0; attempt < 100 && !started; attempt++)
             {
@@ -174,7 +174,7 @@ static class OfficialLoginTests
             Check(await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(35))) == reading, "The waiting token read must finish");
             await Task.Delay(500);
             Check(!Directory.Exists(directory) && service.ListCandidates().Count == 0, "No directory may reappear after the refresh ends");
-            Check(accounts.ReadAccessToken(id) is null && !Directory.Exists(directory), "A deleted account must not start a new refresh");
+            Check(accounts.ReadAccessToken(uid) is null && !Directory.Exists(directory), "A deleted account must not start a new refresh");
         });
     }
 

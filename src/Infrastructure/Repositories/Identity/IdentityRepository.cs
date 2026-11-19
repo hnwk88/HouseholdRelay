@@ -8,7 +8,7 @@ using static Infrastructure.Persistence.RelayDatabase;
 
 namespace Infrastructure.Repositories.Identity;
 
-/// <summary>users 与 tokens 表的读写；每次写入在同一事务里读回并校验鉴权名单，校验失败整体回滚。</summary>
+/// <summary>users 与 tokens 表的读写；主键由库生成。每次写入在同一事务里读回并校验鉴权名单，校验失败整体回滚。</summary>
 internal sealed class IdentityRepository(RelayDatabase database) : IIdentityRepository
 {
     /// <summary>按创建顺序列出使用者。</summary>
@@ -17,10 +17,10 @@ internal sealed class IdentityRepository(RelayDatabase database) : IIdentityRepo
         using var connection = database.Open();
         using var command = Command(connection, null, """
             SELECT u.id,u.name,u.display_name,u.enabled,t.version FROM users u
-            JOIN tokens t ON t.user_id=u.id AND t.revoked_at IS NULL ORDER BY u.rowid
+            JOIN tokens t ON t.user_id=u.id AND t.revoked_at IS NULL ORDER BY u.id
             """);
         using var reader = command.ExecuteReader(); var users = new List<RelayUser>();
-        while (reader.Read()) users.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3), reader.GetInt32(4)));
+        while (reader.Read()) users.Add(new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3), reader.GetInt32(4)));
         return users;
     }
 
@@ -28,29 +28,33 @@ internal sealed class IdentityRepository(RelayDatabase database) : IIdentityRepo
     public IReadOnlyList<ClientAccess> ReadAccess()
     { using var connection = database.Open(); return ReadAccess(connection, null); }
 
-    /// <summary>新建使用者与第一版令牌。</summary>
-    public IReadOnlyList<ClientAccess> Create(string userId, string name, string displayName, string tokenHash) => Change((connection, transaction) =>
+    /// <summary>新建使用者，拿到库生成的主键后写第一版令牌。</summary>
+    public CreatedIdentity Create(string name, string displayName, string tokenHash)
     {
-        if (Convert.ToInt32(Scalar(connection, transaction, "SELECT COUNT(*) FROM users")) >= 8)
-            throw new InvalidOperationException("最多支持 8 名使用者；轮换令牌不会占用新的名额。");
-        if (Scalar(connection, transaction, "SELECT id FROM users WHERE name=$name", ("$name", name)) is not null)
-            throw new InvalidOperationException("客户端名称已存在。");
-        Execute(connection, transaction, "INSERT INTO users VALUES($id,$name,$display,1)", ("$id", userId), ("$name", name), ("$display", displayName));
-        Execute(connection, transaction, "INSERT INTO tokens VALUES($id,$user,1,$hash,NULL)",
-            ("$id", Guid.NewGuid().ToString("N")), ("$user", userId), ("$hash", tokenHash));
-        return 0;
-    }).Permissions;
+        var result = Change((connection, transaction) =>
+        {
+            if (Convert.ToInt32(Scalar(connection, transaction, "SELECT COUNT(*) FROM users")) >= 8)
+                throw new InvalidOperationException("最多支持 8 名使用者；轮换令牌不会占用新的名额。");
+            if (Scalar(connection, transaction, "SELECT id FROM users WHERE name=$name", ("$name", name)) is not null)
+                throw new InvalidOperationException("客户端名称已存在。");
+            var userId = (long)Scalar(connection, transaction, "INSERT INTO users(name,display_name,enabled) VALUES($name,$display,1) RETURNING id",
+                ("$name", name), ("$display", displayName))!;
+            Execute(connection, transaction, "INSERT INTO tokens(user_id,version,hash,revoked_at) VALUES($user,1,$hash,NULL)", ("$user", userId), ("$hash", tokenHash));
+            return userId;
+        });
+        return new CreatedIdentity(result.Value, result.Permissions);
+    }
 
     /// <summary>修改显示名。</summary>
-    public IReadOnlyList<ClientAccess> Rename(string userId, string displayName) => Change((connection, transaction) => RequireUser(Execute(connection, transaction,
+    public IReadOnlyList<ClientAccess> Rename(long userId, string displayName) => Change((connection, transaction) => RequireUser(Execute(connection, transaction,
         "UPDATE users SET display_name=$display WHERE id=$id", ("$display", displayName), ("$id", userId)))).Permissions;
 
     /// <summary>启用或停用使用者。</summary>
-    public IReadOnlyList<ClientAccess> SetEnabled(string userId, bool enabled) => Change((connection, transaction) => RequireUser(Execute(connection, transaction,
+    public IReadOnlyList<ClientAccess> SetEnabled(long userId, bool enabled) => Change((connection, transaction) => RequireUser(Execute(connection, transaction,
         "UPDATE users SET enabled=$enabled WHERE id=$id", ("$enabled", enabled), ("$id", userId)))).Permissions;
 
     /// <summary>撤销当前令牌并写入下一版。</summary>
-    public RotatedIdentity Rotate(string userId, string tokenHash)
+    public RotatedIdentity Rotate(long userId, string tokenHash)
     {
         var result = Change((connection, transaction) =>
         {
@@ -59,8 +63,8 @@ internal sealed class IdentityRepository(RelayDatabase database) : IIdentityRepo
             var version = Convert.ToInt32(Scalar(connection, transaction, "SELECT MAX(version) FROM tokens WHERE user_id=$id", ("$id", userId))) + 1;
             Execute(connection, transaction, "UPDATE tokens SET revoked_at=$time WHERE user_id=$id AND revoked_at IS NULL",
                 ("$time", DateTimeOffset.UtcNow.ToString("O")), ("$id", userId));
-            Execute(connection, transaction, "INSERT INTO tokens VALUES($id,$user,$version,$hash,NULL)",
-                ("$id", Guid.NewGuid().ToString("N")), ("$user", userId), ("$version", version), ("$hash", tokenHash));
+            Execute(connection, transaction, "INSERT INTO tokens(user_id,version,hash,revoked_at) VALUES($user,$version,$hash,NULL)",
+                ("$user", userId), ("$version", version), ("$hash", tokenHash));
             return name;
         });
         return new RotatedIdentity(result.Value, result.Permissions);
@@ -82,7 +86,7 @@ internal sealed class IdentityRepository(RelayDatabase database) : IIdentityRepo
             SELECT u.name,t.hash,u.enabled,u.id,t.id FROM users u JOIN tokens t ON t.user_id=u.id AND t.revoked_at IS NULL
             """);
         using var reader = command.ExecuteReader(); var clients = new List<ClientAccess>();
-        while (reader.Read()) clients.Add(new(reader.GetString(0), reader.GetString(1), reader.GetBoolean(2), reader.GetString(3), reader.GetString(4)));
+        while (reader.Read()) clients.Add(new(reader.GetString(0), reader.GetString(1), reader.GetBoolean(2), reader.GetInt64(3), reader.GetInt64(4)));
         return clients;
     }
     /// <summary>更新行数不是 1 时说明使用者不存在。</summary>

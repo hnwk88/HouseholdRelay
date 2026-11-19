@@ -161,30 +161,27 @@ static class UpstreamAttemptTests
         int Count(string sql) { using var connection = process.Database.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
         Check(Count("SELECT COUNT(*) FROM usage_attempts") == 2);
         clock.Set(now); Check(await usage.Cleanup() == 1);
-        Check(Count("SELECT COUNT(*) FROM usage_attempts WHERE request_id='expired'") == 0 && Count("SELECT COUNT(*) FROM usage_attempts WHERE request_id='boundary'") == 1);
+        // 尝试记录按整数外键挂在用量下；清理删掉的那条用量连同它的尝试一起没了，剩下的一条尝试属于边界上那条。
+        Check(Count("SELECT COUNT(*) FROM usage_attempts") == 1 && Count("SELECT COUNT(*) FROM usage_attempts a JOIN usage_requests r ON r.id=a.usage_request_id WHERE r.request_id='boundary'") == 1);
         Check(Count("SELECT COUNT(*) FROM usage_requests") == 1);
     }
 
-    /// <summary>架构升级 v4 → v5 失败整体回滚：版本号仍为 4、没有尝试表、已有用量一条不少；去掉故障后升级成功，用量原样可查。</summary>
-    public static async Task SchemaRollback()
+    /// <summary>架构升级 v4 → v5 失败整体回滚（起点是程序从真实 v3 旧库自己升到的版本 4）：版本号仍为 4、没有尝试表、已有用量一条不少；去掉故障后一路升到最新版，用量原样在。</summary>
+    public static Task SchemaRollback()
     {
-        using var home = new TestHome(); var process = new TestProcess(home.Path); var token = process.Identities.Create("迁移");
-        var user = process.Identities.Clients.Authenticate(token.Token)!;
-        await process.Usage.Start("kept", user, "inference"); await process.Usage.Finish("kept", new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(3, 4)));
-        process.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TABLE usage_attempts; PRAGMA user_version=4;"));
+        using var home = DatabaseUpgradeTests.LegacyAt("v3", 4);
+        int Count(string sql) { using var connection = DatabaseUpgradeTests.Connect(DatabaseUpgradeTests.Database(home.Path)); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
         var rejected = false;
         try { _ = new TestProcess(home.Path, migrationCheckpoint: () => throw new IOException("fixture-checkpoint")).Database; }
         catch (IOException error) when (error.Message == "fixture-checkpoint") { /* 检查点在建表之后、写版本号之前失败，整个升级应回滚；随后核对版本号、表和用量。 */ rejected = true; }
         Check(rejected, "Checkpoint failure must abort the upgrade");
-        using (var connection = process.Database.Open())
-        {
-            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 4);
-            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM sqlite_master WHERE name='usage_attempts'")) == 0);
-            Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_requests WHERE request_id='kept' AND input_tokens=3")) == 1);
-        }
-        var upgraded = new TestProcess(home.Path);
-        using (var connection = upgraded.Database.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == RelayDatabase.CurrentVersion);
-        Check(upgraded.Usage.Query(new()).Rows.Single().Tokens == new UsageTokens(3, 4));
+        Check(Count("PRAGMA user_version") == 4 && Count("SELECT COUNT(*) FROM sqlite_master WHERE name='usage_attempts'") == 0);
+        Check(Count("SELECT COUNT(*) FROM usage_requests") == 6 && Count("SELECT COUNT(*) FROM usage_requests WHERE request_id='fixture-v3-0' AND input_tokens=100") == 1);
+        _ = new TestProcess(home.Path).Database;
+        // 不经用量查询的 40 天窗口直接数：夹具的用量时间是生成那天，过了窗口查询就读不到了。
+        Check(Count("PRAGMA user_version") == RelayDatabase.CurrentVersion && Count("SELECT COUNT(*) FROM usage_requests") == 6);
+        Check(Count("SELECT COUNT(*) FROM usage_requests WHERE request_id='fixture-v3-0' AND input_tokens=100 AND output_tokens=20") == 1);
+        return Task.CompletedTask;
     }
 
     /// <summary>连接失败分类直接按异常链判定：域名解析、拒绝连接、代理不可用、TLS、建连超时、中转总超时、客户端取消、回传中断与中转自己的固定提示。</summary>
@@ -213,7 +210,7 @@ static class UpstreamAttemptTests
         }
         var redirect = Fail(new RelayFailure(502, "Upstream redirect rejected."));
         Check(redirect.ErrorType == "protocol" && redirect.ErrorMessage == "Upstream redirect rejected.");
-        var row = new UpstreamAttemptRow(1, "gone", null, 3, DateTimeOffset.UtcNow, null, 15240, null, null, "connection_failed", null, "connect_timeout", "client");
+        var row = new UpstreamAttemptRow(1, 999, null, 3, DateTimeOffset.UtcNow, null, 15240, null, null, "connection_failed", null, "connect_timeout", "client");
         Check(UsageLabels.Attempts([row]) == "已删除的上游，无响应，连不上上游：建连超时，15.2 秒" && UsageLabels.Attempts([]) == "未发往上游");
         return Task.CompletedTask;
     }
@@ -231,14 +228,14 @@ static class UpstreamAttemptTests
     }
 
     /// <summary>以给定供应商名称保存、测试并激活指向模拟上游的候选，返回候选主键。</summary>
-    private static async Task<string> Activate(WebFixture web, UpstreamFixture upstream, string name)
+    private static async Task<long> Activate(WebFixture web, UpstreamFixture upstream, string name)
     {
         var id = web.Upstreams.SaveCandidate(web.Upstreams.ReadActive().Version, upstream.Options(), Secret, name);
         Check((await web.Upstreams.TestCandidate(id, true, CancellationToken.None)).CanActivate); web.Upstreams.Activate(id); return id;
     }
 
     /// <summary>模拟「测过之后上游变坏」：保存一个连不上的候选，把当前在用那家的通过报告抄给它，再切换过去，返回它的主键。</summary>
-    private static Task<string> ForceActive(WebFixture web, UpstreamOptions options, string name)
+    private static Task<long> ForceActive(WebFixture web, UpstreamOptions options, string name)
     {
         var active = web.Upstreams.ReadActive(); var id = web.Upstreams.SaveCandidate(active.Version, options, Secret, name);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """

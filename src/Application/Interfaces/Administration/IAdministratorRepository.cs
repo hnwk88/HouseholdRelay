@@ -12,13 +12,13 @@ public interface IAdministratorRepository
     byte[]? ReadProtectedBootstrapCode();
 
     /// <summary>在一个事务里核对引导码哈希、写入管理员并删除引导码；已设置或引导码不符时拒绝。</summary>
-    void Initialize(string administratorId, string passwordHash, string bootstrapCodeHash);
+    void Initialize(string passwordHash, string bootstrapCodeHash);
 
     /// <summary>读取唯一管理员的主键与密码哈希；尚未设置时为空。</summary>
     AdministratorCredential? ReadAdministrator();
 
     /// <summary>清理已过期会话并写入新会话（只保存会话令牌的哈希）。</summary>
-    void CreateSession(string sessionHash, string administratorId, long now, long expiresAt);
+    void CreateSession(string sessionHash, long administratorId, long now, long expiresAt);
 
     /// <summary>会话哈希是否存在且未过期。</summary>
     bool IsSessionValid(string sessionHash, long now);
