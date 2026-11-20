@@ -77,7 +77,7 @@ static class ClaudeConfigurationTests
         web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>().PrepareAccount(AccountId);
         Check(accounts.ReadAccessToken(AccountId) == FakeClaude.RefreshedToken, "Explicit preparation makes a subsequent fake refresh possible");
         using var prepared = JsonDocument.Parse(File.ReadAllBytes(path));
-        Check(prepared.RootElement.GetProperty("userID").GetString() == web.Settings.Read().Value.DeviceId);
+        Check(prepared.RootElement.GetProperty("userID").GetString() == (await web.Settings.Read()).Value.DeviceId);
         Check(prepared.RootElement.GetProperty("machineID").GetString() == "keep");
     }
 

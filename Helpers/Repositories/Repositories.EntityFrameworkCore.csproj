@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Repositories.EntityFrameworkCore</AssemblyName>
+    <RootNamespace>Repositories</RootNamespace>
+    <Description>基于 EF Core 的通用仓储实现，不写死具体工程名称和数据库上下文类型。</Description>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Repositories.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Repository.cs" />
+    <Compile Include="RepositoryServiceCollectionExtensions.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
+    <!-- 本工程补：WithLockWaitAsync 用关系型提供程序的命令超时（SetCommandTimeout）。 -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+  </ItemGroup>
+
+</Project>

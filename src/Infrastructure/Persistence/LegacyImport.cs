@@ -23,7 +23,7 @@ internal sealed class LegacyImport(ISecretProtector protector, ICertificateFacto
             || new[] { "relay.db-wal", "relay.db-shm", "serving.lock" }.Any(name => File.Exists(System.IO.Path.Combine(state, name))))
             throw new InvalidOperationException("发现已有站点的残留资产，请恢复完整配套备份，不能重新创建身份。");
         var path = System.IO.Path.Combine(state, "server.json");
-        if (File.Exists(path)) return DeserializeSettings(File.ReadAllText(path).TrimStart('\uFEFF'));
+        if (File.Exists(path)) return RelaySettings.Deserialize(File.ReadAllText(path).TrimStart('\uFEFF'));
         if (new[] { "account.dpapi", "tls.dpapi", "relay-ca.pem" }.Any(name => File.Exists(System.IO.Path.Combine(state, name))))
             throw new InvalidOperationException("旧数据目录缺少 server.json，请恢复完整备份，不能新建身份。");
         return null;
@@ -52,8 +52,8 @@ internal sealed class LegacyImport(ISecretProtector protector, ICertificateFacto
         using var transaction = connection.BeginTransaction();
         if (files.TryGetValue("server.json", out var json))
         {
-            var config = DeserializeSettings(Encoding.UTF8.GetString(json).TrimStart('﻿'));
-            Execute(connection, transaction, "UPDATE settings SET json=$json,version=version+1 WHERE id=1", ("$json", SerializeSettings(config)));
+            var config = RelaySettings.Deserialize(Encoding.UTF8.GetString(json).TrimStart('﻿'));
+            Execute(connection, transaction, "UPDATE settings SET json=$json,version=version+1 WHERE id=1", ("$json", RelaySettings.Serialize(config)));
             foreach (var client in config.Clients)
             {
                 var userId = Guid.NewGuid().ToString("N");

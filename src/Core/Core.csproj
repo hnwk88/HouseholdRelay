@@ -1,6 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <!-- 领域类型与纯规则：不引用任何项目和外部包（台账 D-005）。 -->
+  <!--
+    领域类型与纯规则：不引用外部包（台账 D-005）。唯一的项目引用是通用仓储的抽象项目：实体继承它的 BaseEntity，
+    它只依赖基础类库，不带 EF Core（台账「运行时所有数据经中康通用 EF 仓储流转」）。
+  -->
   <ItemGroup>
     <InternalsVisibleTo Include="Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Helpers\Repositories\Repositories.Abstractions.csproj" />
   </ItemGroup>
 </Project>

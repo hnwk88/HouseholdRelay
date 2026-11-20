@@ -9,12 +9,12 @@ namespace Infrastructure.ExternalSources.ClaudeCode;
 /// </summary>
 public static class ChildProxyEnvironment
 {
-    private static readonly string[] Names = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"];
+    private static readonly string[] _names = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"];
 
     /// <summary>先删除六个代理变量（大小写各三个）及其他名字含 PROXY 的继承变量，再按 <paramref name="route"/> 写入：有代理时大小写都写 HTTP(S)_PROXY，NO_PROXY 始终写入并含本机回环地址。</summary>
     public static void Apply(ProcessStartInfo start, ProxyRoute route)
     {
-        foreach (var name in Names) start.Environment.Remove(name);
+        foreach (var name in _names) start.Environment.Remove(name);
         foreach (var key in start.Environment.Keys.Where(key => key.Contains("PROXY", StringComparison.OrdinalIgnoreCase)).ToArray()) start.Environment.Remove(key);
         if (route.Address is { } address)
         {

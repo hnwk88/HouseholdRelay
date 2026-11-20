@@ -9,20 +9,20 @@ public interface IIdentityService
     ClientRegistry Clients { get; }
 
     /// <summary>列出使用者。</summary>
-    IReadOnlyList<RelayUser> List();
+    Task<IReadOnlyList<RelayUser>> List();
 
     /// <summary>读取已提交的鉴权名单。</summary>
-    IReadOnlyList<ClientAccess> ReadAccess();
+    Task<IReadOnlyList<ClientAccess>> ReadAccess();
 
     /// <summary>新建使用者并签发第一版个人令牌；旧客户端迁移时可指定原名称。</summary>
-    IssuedToken Create(string displayName, string? legacyName = null);
+    Task<IssuedToken> Create(string displayName, string? legacyName = null);
 
     /// <summary>修改显示名，令牌不变。</summary>
-    void Rename(long userId, string displayName);
+    Task Rename(long userId, string displayName);
 
     /// <summary>启用或停用使用者，鉴权立即生效。</summary>
-    void SetEnabled(long userId, bool enabled);
+    Task SetEnabled(long userId, bool enabled);
 
     /// <summary>轮换个人令牌，旧令牌立即失效。</summary>
-    IssuedToken Rotate(long userId);
+    Task<IssuedToken> Rotate(long userId);
 }

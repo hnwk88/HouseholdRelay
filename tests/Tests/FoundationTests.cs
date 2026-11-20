@@ -14,12 +14,12 @@ static partial class FoundationTests
     /// 停用成员轮换后仍保持停用；过期版本的配置保存被拒绝；重启后轮换令牌、改名、端口和登录会话都还在，
     /// 注销后重启进程也认不出该会话；数据库文件中不含明文令牌和管理员密码。
     /// </summary>
-    public static Task Persistence()
+    public static async Task Persistence()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database;
         var settings = process.Settings; var identities = process.Identities; var administrators = process.Administrators;
-        Check(identities.List().Count == 0 && !settings.HasCredential && !settings.HasCertificate);
-        settings.Read().Value.Validate();
+        Check((await identities.List()).Count == 0 && !await settings.HasCredential() && !await settings.HasCertificate());
+        (await settings.Read()).Value.Validate();
         using (var connection = database.Open())
         {
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == RelayDatabase.CurrentVersion);
@@ -27,57 +27,55 @@ static partial class FoundationTests
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA synchronous")) == 2);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA foreign_keys")) == 1);
         }
-        administrators.Initialize(administrators.BootstrapCode()!, WebFixture.Password);
-        Check(administrators.BootstrapCode() is null);
-        var session = administrators.Login(WebFixture.Password)!; Check(administrators.IsSessionValid(session));
-        var a = identities.Create("甲"); var b = identities.Create("乙");
-        identities.SetEnabled(b.UserId, false); var disabled = identities.Rotate(b.UserId);
-        Check(identities.Clients.Authenticate(disabled.Token) is null, "Rotation must preserve disabled state");
-        identities.Rename(a.UserId, "甲的显示名"); var rotated = identities.Rotate(a.UserId);
-        Check(identities.Clients.Authenticate(a.Token) is null);
-        var snapshot = settings.Read(); snapshot.Value.ListenPort = 9001; settings.Save(snapshot.Version, snapshot.Value);
+        await administrators.Initialize((await administrators.BootstrapCode())!, WebFixture.Password);
+        Check(await administrators.BootstrapCode() is null);
+        var session = (await administrators.Login(WebFixture.Password))!; Check(await administrators.IsSessionValid(session));
+        var a = await identities.Create("甲"); var b = await identities.Create("乙");
+        await identities.SetEnabled(b.UserId, false); var disabled = await identities.Rotate(b.UserId);
+        Check(await identities.Clients.Authenticate(disabled.Token) is null, "Rotation must preserve disabled state");
+        await identities.Rename(a.UserId, "甲的显示名"); var rotated = await identities.Rotate(a.UserId);
+        Check(await identities.Clients.Authenticate(a.Token) is null);
+        var snapshot = await settings.Read(); snapshot.Value.ListenPort = 9001; await settings.Save(snapshot.Version, snapshot.Value);
         var staleRejected = false;
-        try { settings.Save(snapshot.Version, snapshot.Value); } catch (InvalidOperationException) { /* 用已提交过的旧版本号保存必须被拒绝；捕获到即记为拒绝成功，未抛出则下一行断言判失败。 */ staleRejected = true; }
+        try { await settings.Save(snapshot.Version, snapshot.Value); } catch (InvalidOperationException) { /* 用已提交过的旧版本号保存必须被拒绝；捕获到即记为拒绝成功，未抛出则下一行断言判失败。 */ staleRejected = true; }
         Check(staleRejected, "A stale form must not overwrite a committed configuration");
         var restarted = new TestProcess(home.Path); var restored = restarted.Identities;
-        Check(restored.Clients.Authenticate(rotated.Token)?.UserId == a.UserId);
-        Check(restored.List().Single(user => user.Id == a.UserId).DisplayName == "甲的显示名");
-        Check(restarted.Settings.Read().Value.ListenPort == 9001);
-        Check(restarted.Administrators.IsSessionValid(session)); administrators.Logout(session);
-        Check(!restarted.Administrators.IsSessionValid(session));
+        Check((await restored.Clients.Authenticate(rotated.Token))?.UserId == a.UserId);
+        Check((await restored.List()).Single(user => user.Id == a.UserId).DisplayName == "甲的显示名");
+        Check((await restarted.Settings.Read()).Value.ListenPort == 9001);
+        Check(await restarted.Administrators.IsSessionValid(session)); await administrators.Logout(session);
+        Check(!await restarted.Administrators.IsSessionValid(session));
         var allBytes = Encoding.UTF8.GetString(File.ReadAllBytes(database.Path));
         Check(!allBytes.Contains(a.Token) && !allBytes.Contains(rotated.Token) && !allBytes.Contains(WebFixture.Password));
-        return Task.CompletedTask;
     }
 
     /// <summary>
     /// 验证旧版安装迁移：启用的旧令牌可登录并获得成员编号，停用的旧令牌仍被拒绝；设备号、User-Agent、上游凭据和带私钥的证书都被保留；
     /// 旧文件原样备份到 legacy-backups；之后即使旧 server.json 被篡改，再次启动也不会重复导入（成员仍为 2 人、编号不变）。
     /// </summary>
-    public static Task Migration()
+    public static async Task Migration()
     {
         using var home = new TestHome(); var legacy = home.WriteLegacy();
         var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities; var settings = process.Settings;
-        var first = identities.Clients.Authenticate("legacy-study-token"); Check(first is not null && first.UserId is not null);
-        Check(identities.Clients.Authenticate("legacy-office-token") is null);
-        Check(settings.Read().Value.DeviceId == legacy.DeviceId && settings.Read().Value.UpstreamUserAgent == legacy.UpstreamUserAgent);
+        var first = await identities.Clients.Authenticate("legacy-study-token"); Check(first is not null && first.UserId is not null);
+        Check(await identities.Clients.Authenticate("legacy-office-token") is null);
+        Check((await settings.Read()).Value.DeviceId == legacy.DeviceId && (await settings.Read()).Value.UpstreamUserAgent == legacy.UpstreamUserAgent);
         Check(process.ActiveCredential() == "fixture-legacy-upstream-secret");
-        using (var certificate = TestProcess.CertificateFactory.LoadServerCertificate(settings.LoadCertificate()!)) Check(certificate.HasPrivateKey);
+        using (var certificate = TestProcess.CertificateFactory.LoadServerCertificate((await settings.LoadCertificate())!)) Check(certificate.HasPrivateKey);
         var backup = Directory.GetDirectories(System.IO.Path.Combine(database.State, "legacy-backups")).Single();
         foreach (var name in new[] { "server.json", "account.dpapi", "tls.dpapi", "relay-ca.pem" })
             Check(File.ReadAllBytes(System.IO.Path.Combine(backup, name)).SequenceEqual(File.ReadAllBytes(System.IO.Path.Combine(database.State, name))));
         File.WriteAllText(System.IO.Path.Combine(database.State, "server.json"), "untrusted obsolete JSON");
         var reopened = new TestProcess(home.Path).Identities;
-        Check(reopened.Clients.Authenticate("legacy-study-token")?.Id == first!.Id);
-        Check(reopened.List().Count == 2, "Repeated startup must not reimport");
-        return Task.CompletedTask;
+        Check((await reopened.Clients.Authenticate("legacy-study-token"))?.Id == first!.Id);
+        Check((await reopened.List()).Count == 2, "Repeated startup must not reimport");
     }
 
     /// <summary>
     /// 验证迁移回滚与数据库丢失时失败即关闭：在迁移提交前注入故障，启动失败且旧文件字节不变；重试后恰好导入一次；
     /// 管理员初始化后删除数据库，再次启动必须报错且不新建数据库，防止任何人借机重新进入首次设置。
     /// </summary>
-    public static Task Recovery()
+    public static async Task Recovery()
     {
         using var home = new TestHome(); home.WriteLegacy();
         var source = System.IO.Path.Combine(home.Path, ".state", "server.json"); var before = File.ReadAllBytes(source);
@@ -87,14 +85,13 @@ static partial class FoundationTests
         catch (IOException) { failed = true; }
         Check(failed && File.ReadAllBytes(source).SequenceEqual(before));
         var process = new TestProcess(home.Path); var database = process.Database;
-        Check(process.Identities.List().Count == 2, "Retry after rollback must import exactly once");
-        var administrators = process.Administrators; administrators.Initialize(administrators.BootstrapCode()!, WebFixture.Password);
+        Check((await process.Identities.List()).Count == 2, "Retry after rollback must import exactly once");
+        var administrators = process.Administrators; await administrators.Initialize((await administrators.BootstrapCode())!, WebFixture.Password);
         // 故意删除已完成初始化的数据库，模拟数据库文件丢失。
         File.Delete(database.Path);
         var lostRejected = false;
         try { _ = new TestProcess(home.Path).Database; } catch (InvalidOperationException) { /* 已初始化过的安装丢了数据库必须拒绝启动，而不是新建空库重新开放首次设置。 */ lostRejected = true; }
         Check(lostRejected && !File.Exists(database.Path), "Missing database must not open setup again");
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -105,40 +102,43 @@ static partial class FoundationTests
     public static async Task ConcurrentWrites()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var db = process.Database;
-        var service = process.Identities; var user = service.Create("甲");
+        var service = process.Identities; var user = await service.Create("甲");
         var other = new TestProcess(home.Path).Identities;
         // 两个服务独立连接同时写不同列，事务不能回写整份过期名单。
         await Task.WhenAll(Task.Run(() => service.Rename(user.UserId, "改名后的甲")), Task.Run(() => other.SetEnabled(user.UserId, false)));
-        Check(service.List().Single().DisplayName == "改名后的甲" && !service.List().Single().Enabled);
-        Check(service.Clients.Authenticate(user.Token) is null, "Other service commits must revoke immediately");
-        var races = Enumerable.Range(0, 10).Select(index => Task.Run(() =>
+        Check((await service.List()).Single().DisplayName == "改名后的甲" && !(await service.List()).Single().Enabled);
+        Check(await service.Clients.Authenticate(user.Token) is null, "Other service commits must revoke immediately");
+        var races = Enumerable.Range(0, 10).Select(index => Task.Run(async () =>
         {
-            try { new TestProcess(home.Path).Identities.Create("使用者" + index); return true; } catch (InvalidOperationException) { /* 超出成员上限的创建会被拒绝，记为失败以便统计成功数。 */ return false; }
+            try { await new TestProcess(home.Path).Identities.Create("使用者" + index); return true; } catch (InvalidOperationException) { /* 超出成员上限的创建会被拒绝，记为失败以便统计成功数。 */ return false; }
         }));
         // 等待全部并发创建结束；成功数必须恰好为 7，说明上限检查和插入在同一事务里，不会被并发突破。
-        var results = await Task.WhenAll(races); Check(results.Count(success => success) == 7 && service.List().Count == 8);
-        for (var index = 0; index < 10; index++) service.Rotate(user.UserId);
-        Check(service.List().Count == 8 && service.List().Single(item => item.Id == user.UserId).TokenVersion == 11);
+        var results = await Task.WhenAll(races); Check(results.Count(success => success) == 7 && (await service.List()).Count == 8);
+        // 满 8 人后再建，读出的必须是给人看的那句上限提示（领域规则 User.EnsureRoomFor），不是名单校验兜底的「客户端配置错误」。
+        var refusal = "";
+        try { await service.Create("第九人"); } catch (InvalidOperationException error) { /* 第 9 人必须被拒；记下读句，下面核对它是上限提示而不是兜底校验的话。 */ refusal = error.Message; }
+        Check(refusal == "最多支持 8 名使用者；轮换令牌不会占用新的名额。", "The ninth user must read the limit sentence: " + refusal);
+        for (var index = 0; index < 10; index++) await service.Rotate(user.UserId);
+        Check((await service.List()).Count == 8 && (await service.List()).Single(item => item.Id == user.UserId).TokenVersion == 11);
     }
 
     /// <summary>
     /// 验证权限写入失败不会发布半截吊销：用触发器让新令牌写入失败，轮换必须报错，旧令牌仍可用且令牌版本仍为 1；
     /// 去掉触发器后轮换成功，旧令牌失效、新令牌指向同一成员。
     /// </summary>
-    public static Task PermissionFailure()
+    public static async Task PermissionFailure()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities;
-        var issued = identities.Create("故障验证用户");
+        var issued = await identities.Create("故障验证用户");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction,
             "CREATE TRIGGER reject_token_insert BEFORE INSERT ON tokens BEGIN SELECT RAISE(ABORT,'fixture failure'); END"));
         var failed = false;
-        try { identities.Rotate(issued.UserId); } catch (Microsoft.Data.Sqlite.SqliteException) { /* 触发器让写入中止，轮换必须以 SQLite 异常整体回滚，随后核对旧令牌未被吊销。 */ failed = true; }
-        Check(failed && identities.Clients.Authenticate(issued.Token)?.UserId == issued.UserId);
-        Check(identities.List().Single().TokenVersion == 1, "Failed rotation must roll back old-token revocation");
+        try { await identities.Rotate(issued.UserId); } catch (Exception error) when ((error as Microsoft.Data.Sqlite.SqliteException ?? error.InnerException as Microsoft.Data.Sqlite.SqliteException) is { SqliteErrorCode: 19 }) { /* 触发器让写入中止，轮换必须以 SQLite 异常整体回滚（经 EF 写库时包在 DbUpdateException 里），随后核对旧令牌未被吊销。 */ failed = true; }
+        Check(failed && (await identities.Clients.Authenticate(issued.Token))?.UserId == issued.UserId);
+        Check((await identities.List()).Single().TokenVersion == 1, "Failed rotation must roll back old-token revocation");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TRIGGER reject_token_insert"));
-        var replacement = identities.Rotate(issued.UserId);
-        Check(identities.Clients.Authenticate(issued.Token) is null && identities.Clients.Authenticate(replacement.Token)?.UserId == issued.UserId);
-        return Task.CompletedTask;
+        var replacement = await identities.Rotate(issued.UserId);
+        Check(await identities.Clients.Authenticate(issued.Token) is null && (await identities.Clients.Authenticate(replacement.Token))?.UserId == issued.UserId);
     }
 
     /// <summary>
@@ -149,7 +149,7 @@ static partial class FoundationTests
     public static async Task Revocation()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var identities = process.Identities;
-        var a = identities.Create("甲"); var b = identities.Create("乙");
+        var a = await identities.Create("甲"); var b = await identities.Create("乙");
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var fixture = await Fixture.Create(async context =>
@@ -162,7 +162,7 @@ static partial class FoundationTests
         var first = Send(a.Token); await entered.Task;
         var second = Send(b.Token); await Until(() => fixture.Relay.Admission.Active == 2);
         var queued = Send(a.Token); await Until(() => fixture.Relay.Admission.Queued == 1);
-        var external = new TestProcess(home.Path).Identities; var rotated = external.Rotate(a.UserId);
+        var external = new TestProcess(home.Path).Identities; var rotated = await external.Rotate(a.UserId);
         release.TrySetResult();
         using var r1 = await first; using var r2 = await second; using var rq = await queued;
         Check(r1.IsSuccessStatusCode && r2.IsSuccessStatusCode && rq.StatusCode == HttpStatusCode.Unauthorized && fixture.Calls.Count == 2);
@@ -172,11 +172,11 @@ static partial class FoundationTests
         uploadRequest.Content = upload; uploadRequest.Headers.Authorization = new("Bearer", b.Token);
         var response = fixture.Http.SendAsync(uploadRequest); await upload.Started.Task;
         await Until(() => fixture.Relay.Admission.Active == 1);
-        external.SetEnabled(b.UserId, false); upload.Continue.TrySetResult();
+        await external.SetEnabled(b.UserId, false); upload.Continue.TrySetResult();
         using var rejected = await response; Check(rejected.StatusCode == HttpStatusCode.Unauthorized && fixture.Calls.Count == 3);
         // 改名后仍共享同一人的并发槽；不能通过新显示名绕过排队。
-        Check(identities.Clients.Authenticate(rotated.Token)?.UserId == a.UserId);
-        external.Rename(a.UserId, "重命名的甲");
-        Check(identities.Clients.Authenticate(rotated.Token)?.UserId == a.UserId);
+        Check((await identities.Clients.Authenticate(rotated.Token))?.UserId == a.UserId);
+        await external.Rename(a.UserId, "重命名的甲");
+        Check((await identities.Clients.Authenticate(rotated.Token))?.UserId == a.UserId);
     }
 }

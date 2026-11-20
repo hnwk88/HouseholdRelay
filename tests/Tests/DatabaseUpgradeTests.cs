@@ -13,7 +13,7 @@ static class DatabaseUpgradeTests
     /// 版本 8 真实旧库（提交 2dd823c 生成：三家上游、一家改过名、一家被物理删除留下孤儿）升到 9：各表行数相等；单价少掉的正好是另存的孤儿单价；
     /// 用量和尝试按上游归属的条数，只有孤儿那一组挪到「无上游」，差额等于另存的悬空引用；升级前备份是完整的版本 8 库；三张表对已保存上游有外键；读句不含本机用户名。
     /// </summary>
-    public static Task RealVersion8()
+    public static async Task RealVersion8()
     {
         using var home = Legacy("v8");
         var before = Snapshot(Database(home.Path));
@@ -45,16 +45,15 @@ static class DatabaseUpgradeTests
         var again = new TestProcess(home.Path);
         Check(!again.Get<IRelayInstance>().UpgradedOnOpen && Directory.GetDirectories(Path.Combine(home.Path, ".state", "upgrade-backups")).Length == 1);
         // 旧记录没有名称快照，读当前名字（含改过的名字）。
-        var rows = again.Usage.Query(new()).Attempts;
-        Check(rows["fixture-v8-1"].Single().Name == "夹具乙供应商改名" && rows["fixture-v8-2"].Single().CandidateId is null);
-        return Task.CompletedTask;
+        var rows = (await again.Usage.Query(new())).Attempts;
+        Check(rows["fixture-v8-1"].Single().Name == "夹具乙供应商改名" && rows["fixture-v8-2"].Single().UpstreamCandidateId is null);
     }
 
     /// <summary>
     /// 版本 3 真实旧库（提交 39c6785 生成：三家上游两家带不同代理、两条按活动版本计的单价、六条用量）一路升到 9：
     /// 使用者、令牌、上游、用量条数不变；活动上游没有来源，版本 6 搬不过去的两条单价整行另存；没被选作全局代理的那个旧代理地址原值另存。
     /// </summary>
-    public static Task RealVersion3()
+    public static async Task RealVersion3()
     {
         using var home = Legacy("v3");
         var before = Snapshot(Database(home.Path));
@@ -66,16 +65,15 @@ static class DatabaseUpgradeTests
         var archived = Archived(database.Path);
         Check(before.Rows["usage_prices"] == 2 && after.Rows["usage_prices"] == 0 && archived.GetValueOrDefault("usage_prices/price-not-migrated") == 2, "Prices that cannot be rekeyed are archived, not dropped");
         Check(archived.GetValueOrDefault("upstream_candidates/dropped-proxy") == 1);
-        Check(process.Settings.Read().Value.ProxyUrl == "http://127.0.0.1:7891");
+        Check((await process.Settings.Read()).Value.ProxyUrl == "http://127.0.0.1:7891");
         using (var connection = Connect(database.Path))
             Check(((string)RelayDatabase.Scalar(connection, null, "SELECT row_json FROM migration_archive WHERE reason='dropped-proxy'")!).Contains("http://127.0.0.1:7890"));
-        Check(process.Upstreams.ListCandidates().Select(item => item.Name).SequenceEqual(["relay-a.example.com", "relay-b.example.com", "relay-c.example.com"]));
+        Check((await process.Upstreams.ListCandidates()).Select(item => item.Name).SequenceEqual(["relay-a.example.com", "relay-b.example.com", "relay-c.example.com"]));
         Check(process.Get<IRelayInstance>().LastUpgrade!.FromVersion == 3);
-        return Task.CompletedTask;
     }
 
     /// <summary>真实版本 3 旧库升级中途失败：整体回滚，库仍是版本 3、各表条数不变，备份已经做好；去掉故障后照常升到 9。</summary>
-    public static Task RealVersion3Rollback()
+    public static async Task RealVersion3Rollback()
     {
         using var home = Legacy("v3");
         var before = Snapshot(Database(home.Path));
@@ -86,8 +84,7 @@ static class DatabaseUpgradeTests
         Check(rejected && Version(Database(home.Path)) == 3 && Snapshot(Database(home.Path)).Rows.SequenceEqual(before.Rows));
         Check(Directory.GetFiles(Path.Combine(home.Path, ".state", "upgrade-backups"), "relay.db", SearchOption.AllDirectories).Length == 1);
         var upgraded = new TestProcess(home.Path);
-        Check(Version(upgraded.Database.Path) == RelayDatabase.CurrentVersion && upgraded.Usage.Query(new() { From = DateTimeOffset.UtcNow.AddDays(-1) }).Total == 6);
-        return Task.CompletedTask;
+        Check(Version(upgraded.Database.Path) == RelayDatabase.CurrentVersion && (await upgraded.Usage.Query(new() { From = DateTimeOffset.UtcNow.AddDays(-1) })).Total == 6);
     }
 
     /// <summary>备份做不成就不升级：备份目录的位置被一个同名文件占住时启动报错、读出「没有升级」，库仍是版本 8。</summary>
@@ -107,7 +104,7 @@ static class DatabaseUpgradeTests
     /// 版本 4 迁移找活动来源：真实版本 3 旧库里两家已激活上游与活动行原文一致时不猜，来源留空、不补建，两个主键另存；
     /// 地址解析不出主机名的那家名称留空，页面读「未命名上游」。旧库里这两种状态要靠测试通过才激活，这里在真实旧表上直接写数据行，不改结构。
     /// </summary>
-    public static Task AmbiguousSourceAndUnnamed()
+    public static async Task AmbiguousSourceAndUnnamed()
     {
         using var home = Legacy("v3");
         string first, second;
@@ -125,7 +122,7 @@ static class DatabaseUpgradeTests
                 """, ("$report", report), ("$first", first), ("$second", second), ("$third", ids[2]));
         }
         var process = new TestProcess(home.Path);
-        Check(process.Upstreams.ReadOverview().CandidateId is null && process.Upstreams.ListCandidates().Count == 3, "Ambiguous source must not be guessed or duplicated");
+        Check((await process.Upstreams.ReadOverview()).UpstreamCandidateId is null && (await process.Upstreams.ListCandidates()).Count == 3, "Ambiguous source must not be guessed or duplicated");
         using (var connection = Connect(process.Database.Path))
         {
             var kept = new List<string>();
@@ -134,8 +131,7 @@ static class DatabaseUpgradeTests
             Check(kept.SequenceEqual(new[] { first, second }.Order(StringComparer.Ordinal)));
             Check((string?)RelayDatabase.Scalar(connection, null, "SELECT name FROM upstream_candidates ORDER BY created_at DESC,rowid DESC LIMIT 1") == "");
         }
-        Check(process.Upstreams.ListCandidates()[2].Name == "未命名上游");
-        return Task.CompletedTask;
+        Check((await process.Upstreams.ListCandidates())[2].Name == "未命名上游");
     }
 
     /// <summary>
@@ -144,18 +140,18 @@ static class DatabaseUpgradeTests
     /// </summary>
     public static async Task SoftDeleteKeepsHistory()
     {
-        using var home = new TestHome(); var process = new TestProcess(home.Path); var token = process.Identities.Create("停用");
-        var user = process.Identities.Clients.Authenticate(token.Token)!; var version = process.Upstreams.ReadOverview().Version;
-        var gone = process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://gone.example.com" }, "sk-gone-0001", "顺丰中转");
-        process.Pricing.Save(gone, "fixture-model", "USD", 1m, 2m, null, null);
+        using var home = new TestHome(); var process = new TestProcess(home.Path); var token = await process.Identities.Create("停用");
+        var user = (await process.Identities.Clients.Authenticate(token.Token))!; var version = (await process.Upstreams.ReadOverview()).Version;
+        var gone = await process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://gone.example.com" }, "sk-gone-0001", "顺丰中转");
+        await process.Pricing.Save(gone, "fixture-model", "USD", 1m, 2m, null, null);
         await process.Usage.Start("served", user, "inference"); await process.Usage.Dispatch("served", version, gone, "fixture-model");
         Check(await process.Usage.Finish("served", new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(1, 2)) { Attempts = [new UpstreamAttempt(1, gone, version, DateTimeOffset.UtcNow)] }));
-        process.Upstreams.Rename(gone, "顺丰中转改名");
-        var references = process.Upstreams.Delete(gone);
+        await process.Upstreams.Rename(gone, "顺丰中转改名");
+        var references = await process.Upstreams.Delete(gone);
         Check(references == new Application.Contracts.Upstream.UpstreamReferences(1, 1, 1), references.ToString());
-        Check(process.Upstreams.ListCandidates().Count == 0);
+        Check((await process.Upstreams.ListCandidates()).Count == 0);
         var missing = false;
-        try { process.Upstreams.ReadCandidate(gone); }
+        try { await process.Upstreams.ReadCandidate(gone); }
         // 停用的上游按设计读作「不存在」，抛出提示重新加载的说明；接住它就是要验证的结果。
         catch (InvalidOperationException) { missing = true; }
         Check(missing, "A deleted upstream reads as gone everywhere else");
@@ -169,11 +165,11 @@ static class DatabaseUpgradeTests
             catch (SqliteException error) when (error.SqliteErrorCode == 19) { blocked = true; }
             Check(blocked, "Foreign key must reject a price for a missing upstream");
         }
-        var attempt = process.Usage.Query(new()).Attempts["served"].Single();
+        var attempt = (await process.Usage.Query(new())).Attempts["served"].Single();
         Check(attempt.Name == "顺丰中转" && UsageLabels.Attempts([attempt]).StartsWith("顺丰中转（已删除），", StringComparison.Ordinal), UsageLabels.Attempts([attempt]));
         // 停用的上游不能再存单价：保存在事务里核对那一家仍在用。
         var rejected = false;
-        try { process.Pricing.Save(gone, "other-model", "USD", 1m, 2m, null, null); }
+        try { await process.Pricing.Save(gone, "other-model", "USD", 1m, 2m, null, null); }
         // 按设计拒绝并读出原因；接住它就是要验证的结果。
         catch (InvalidOperationException) { rejected = true; }
         Check(rejected, "A deleted upstream takes no new prices");
@@ -187,10 +183,10 @@ static class DatabaseUpgradeTests
     public static async Task WebDeleteReadsReferences()
     {
         await using var web = await WebFixture.Create(); await web.Login();
-        var token = web.Identities.Create("网页"); var user = web.Identities.Clients.Authenticate(token.Token)!;
-        var version = web.Upstreams.ReadOverview().Version;
-        var gone = web.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://gone.example.com" }, "sk-web-gone-0001", "顺丰中转");
-        web.Pricing.Save(gone, "fixture-model", "USD", 1m, 2m, null, null);
+        var token = await web.Identities.Create("网页"); var user = (await web.Identities.Clients.Authenticate(token.Token))!;
+        var version = (await web.Upstreams.ReadOverview()).Version;
+        var gone = await web.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://gone.example.com" }, "sk-web-gone-0001", "顺丰中转");
+        await web.Pricing.Save(gone, "fixture-model", "USD", 1m, 2m, null, null);
         var usage = web.App.Services.GetRequiredService<IUsageService>();
         await usage.Start("web-served", user, "inference"); await usage.Dispatch("web-served", version, gone, "fixture-model");
         var attempt = new UpstreamAttempt(1, gone, version, DateTimeOffset.UtcNow); attempt.Headers(200, null, text => text);

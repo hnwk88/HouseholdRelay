@@ -189,21 +189,21 @@ static class FakeClaude
 /// </summary>
 sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
 {
-    private readonly string directory = Directory.CreateTempSubdirectory("hr-fake-claude-").FullName;
+    private readonly string _directory = Directory.CreateTempSubdirectory("hr-fake-claude-").FullName;
     private string version = "1.0.0";
 
     /// <summary>假 Claude Code 此刻的身份版本；<see cref="Reinstall"/> 或假升级改它（假升级直接改写 claude.cmd 的版本行）。</summary>
-    public string Version => File.Exists(Path.Combine(directory, "claude.cmd"))
-        && System.Text.RegularExpressions.Regex.Match(File.ReadAllText(Path.Combine(directory, "claude.cmd")), FakeClaude.VersionVariable + @"=(\S+)") is { Success: true } found ? found.Groups[1].Value : version;
+    public string Version => File.Exists(Path.Combine(_directory, "claude.cmd"))
+        && System.Text.RegularExpressions.Regex.Match(File.ReadAllText(Path.Combine(_directory, "claude.cmd")), FakeClaude.VersionVariable + @"=(\S+)") is { Success: true } found ? found.Groups[1].Value : version;
 
     /// <summary>假 <c>claude update</c> 要升到的版本；为空时假升级不改版本。要在第一次定位之前设好（写进 claude.cmd）。</summary>
     public string UpdateTo { get; set; } = "";
 
     /// <summary>假 <c>claude update</c> 被跑了几次（每次在 claude.cmd 旁的 .updates 文件里记一行）。</summary>
-    public int Updates => File.Exists(Path.Combine(directory, "claude.cmd.updates")) ? File.ReadAllLines(Path.Combine(directory, "claude.cmd.updates")).Length : 0;
+    public int Updates => File.Exists(Path.Combine(_directory, "claude.cmd.updates")) ? File.ReadAllLines(Path.Combine(_directory, "claude.cmd.updates")).Length : 0;
 
     /// <summary>假 Claude 回显文件的位置，在本定位器自己的临时目录里。</summary>
-    private string SeenPath => Path.Combine(directory, "seen-userid.log");
+    private string SeenPath => Path.Combine(_directory, "seen-userid.log");
 
     /// <summary>假 Claude 每次发请求前读到的（入口，userID），按发生顺序。</summary>
     public IReadOnlyList<(string Entrypoint, string UserId)> SeenUserIds => File.Exists(SeenPath)
@@ -216,7 +216,7 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
     {
         scenario = newScenario; version = newVersion;
         // 只删本定位器自己临时目录里的那个小脚本，下次定位时按新场景和版本重写。
-        File.Delete(Path.Combine(directory, "claude.cmd"));
+        File.Delete(Path.Combine(_directory, "claude.cmd"));
     }
 
     /// <summary>把本定位器与不建窗口的登录参数登记进网页主机，覆盖正式登记。</summary>
@@ -230,7 +230,7 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
     public string FindClaude()
     {
         if (scenario == "missing") throw new InvalidOperationException("未找到 Claude Code 原生 claude.exe，请先安装官方客户端。");
-        var path = Path.Combine(directory, "claude.cmd");
+        var path = Path.Combine(_directory, "claude.cmd");
         if (!File.Exists(path))
         {
             var host = Environment.ProcessPath!;
@@ -255,7 +255,7 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
     public void Dispose()
     {
         // 只删本定位器自己在系统临时目录下建的那个目录；假进程还没完全退出占着文件时放弃，残留的只是一个小脚本。
-        try { Directory.Delete(directory, true); }
+        try { Directory.Delete(_directory, true); }
         // 文件仍被占用：放弃清理，不让测试因此失败。
         catch (IOException) { }
     }

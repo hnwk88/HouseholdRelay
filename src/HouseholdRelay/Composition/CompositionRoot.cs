@@ -24,7 +24,8 @@ public static class CompositionRoot
         services.AddApplication();
         services.AddInfrastructure(configureData);
         // 启动时读一次设置作为本进程的中转配置；监听端口和转发限制改动在重启服务后生效。
-        services.AddSingleton(provider => provider.GetRequiredService<IConfigurationService>().Read().Value);
+        // 依赖注入的工厂是同步合同，只能在这里同步等待一次；Microsoft.Data.Sqlite 的异步读在内部同步完成，没有同步上下文，不会死锁。
+        services.AddSingleton(provider => provider.GetRequiredService<IConfigurationService>().Read().GetAwaiter().GetResult().Value);
         services.AddRelayServer();
         services.AddSingleton<ManagementCommands>();
         services.AddSingleton<ServeCommand>();

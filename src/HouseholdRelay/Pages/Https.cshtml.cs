@@ -33,9 +33,9 @@ public sealed class HttpsModel(IConfigurationService settings, ICertificateServi
     /// <summary>操作成功后的提示文字，提醒需要重启服务才能生效。</summary>
     public string? Notice { get; private set; }
     /// <summary>打开 HTTPS 设置页（需已登录）：读取当前设置版本、对外地址、监听端口与证书信息，只读。</summary>
-    public void OnGet()
+    public async Task OnGetAsync()
     {
-        var value = settings.Read(); Version = value.Version; PublicUrl = value.Value.PublicUrl; ListenPort = value.Value.ListenPort; Load();
+        var value = await settings.Read(); Version = value.Version; PublicUrl = value.Value.PublicUrl; ListenPort = value.Value.ListenPort; await Load();
     }
     /// <summary>导入可信 PFX 证书并保存地址与端口（需已登录且通过防 CSRF 校验）：先限长读取文件，导入后立即清零证书字节，并清空密码与文件绑定值；需重启服务才生效。</summary>
     public async Task<IActionResult> OnPostAsync()
@@ -47,35 +47,35 @@ public sealed class HttpsModel(IConfigurationService settings, ICertificateServi
                 if (CertificateFile is null || CertificateFile.Length is 0 or > 1024 * 1024) throw new InvalidOperationException("请选择小于 1 MB 的 PFX 证书文件。");
                 await using var input = CertificateFile.OpenReadStream();
                 var bytes = await UpstreamResponses.ReadBounded(input, 1024 * 1024, HttpContext.RequestAborted);
-                try { certificates.Import(Version, PublicUrl, ListenPort, bytes, Password); }
+                try { await certificates.Import(Version, PublicUrl, ListenPort, bytes, Password); }
                 // PFX 字节里含服务器私钥，导入成功或失败都立即清零，不让私钥留在托管内存里等待回收。
                 finally { CryptographicOperations.ZeroMemory(bytes); }
                 Notice = "可信证书及地址已保存。请重启服务使监听端口和证书生效，再从实际客户端验证连接。";
-                Version = settings.Read().Version; ModelState.Remove(nameof(Version));
+                Version = (await settings.Read()).Version; ModelState.Remove(nameof(Version));
             }
         }
         // 校验失败、版本冲突、域名不符等业务拒绝都抛 InvalidOperationException，消息是给管理员的中文提示，显示在表单上而不是变成 503。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         // 无论成败都清掉密码和上传文件的绑定值与模型状态，确保重新渲染的页面不会把 PFX 密码回填到表单里。
         finally { Password = null; CertificateFile = null; ModelState.Remove(nameof(Password)); ModelState.Remove(nameof(CertificateFile)); }
-        Load(); return Page();
+        await Load(); return Page();
     }
     /// <summary>创建私有 CA 及服务器证书并保存地址与端口（需已登录且通过防 CSRF 校验）；已有证书时须勾选 <see cref="ReplaceExisting"/> 才会替换。需重启服务生效，客户端须核对指纹后安装一次信任。</summary>
-    public IActionResult OnPostPrivate()
+    public async Task<IActionResult> OnPostPrivateAsync()
     {
         try
         {
             if (ModelState.IsValid)
             {
-                certificates.CreatePrivate(Version, PublicUrl, ListenPort, ReplaceExisting);
+                await certificates.CreatePrivate(Version, PublicUrl, ListenPort, ReplaceExisting);
                 Notice = "私有 CA 及服务器证书已创建。请重启服务，并在每台客户端核对指纹、安装一次信任。";
-                Version = settings.Read().Version; ModelState.Remove(nameof(Version));
+                Version = (await settings.Read()).Version; ModelState.Remove(nameof(Version));
             }
         }
         // 版本冲突、地址不合法或拒绝覆盖已有证书等业务拒绝只显示为表单错误，不改动已保存的证书。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        Load(); return Page();
+        await Load(); return Page();
     }
     /// <summary>重新读取证书摘要与 CA 指纹，供每个处理程序在渲染页面前刷新展示内容。</summary>
-    private void Load() { Info = certificates.ReadInfo(); AuthorityFingerprint = certificates.AuthorityFingerprint(); }
+    private async Task Load() { Info = await certificates.ReadInfo(); AuthorityFingerprint = await certificates.AuthorityFingerprint(); }
 }

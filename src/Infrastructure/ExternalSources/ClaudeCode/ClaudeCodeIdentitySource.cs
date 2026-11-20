@@ -17,11 +17,11 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
     ISiteIdentityService siteIdentity) : IClaudeCodeIdentitySource
 {
     /// <summary>重取失败后这么久之内不再重取，直接读出上次的原因。</summary>
-    private static readonly TimeSpan RetryAfter = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan _retryAfter = TimeSpan.FromSeconds(60);
     /// <summary>一次重取最多等这么久（本机启动 Claude Code 通常几秒）。</summary>
-    private static readonly TimeSpan CaptureLimit = TimeSpan.FromSeconds(30);
-    private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly ConcurrentDictionary<string, Entry> entries = new(StringComparer.Ordinal);
+    private static readonly TimeSpan _captureLimit = TimeSpan.FromSeconds(30);
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.Ordinal);
 
     /// <summary>
     /// 返回入口 <paramref name="entrypoint"/> 与本机此刻这份 claude.exe 对得上的身份：指纹没变直接用已取到的；变了或从没取过就在本机以那种模式重取一次（不碰官方），失败时抛出读给人听的原因。
@@ -33,12 +33,12 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
         if (!ClaudeCodeClient.CapturableEntrypoints.Contains(entrypoint)) entrypoint = ClaudeCodeClient.DefaultEntrypoint;
         var (executable, fingerprint) = Locate();
         if (Known(entrypoint, fingerprint) is { } known) return known;
-        await gate.WaitAsync(cancellation);
+        await _gate.WaitAsync(cancellation);
         try
         {
             // 排在前面的那个请求可能刚取完，同一份 claude.exe 的同一入口不再取第二次。
             if (Known(entrypoint, fingerprint) is { } settled) return settled;
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation); timeout.CancelAfter(CaptureLimit);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation); timeout.CancelAfter(_captureLimit);
             ClaudeCodeIdentity identity;
             try { identity = ClaudeCodeIdentity.From(await probe.Capture(entrypoint, timeout.Token), FileVersion(executable), entrypoint, clock.GetUtcNow()); }
             // 取不全、对不上：记下这句原因。
@@ -53,11 +53,11 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
             catch (IOException) { throw Remember(entrypoint, fingerprint, ClaudeCodeIdentity.CaptureFailed); }
             // 调用方没取消却到了时限：本机 Claude Code 卡住了。
             catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) { throw Remember(entrypoint, fingerprint, ClaudeCodeIdentity.CaptureFailed); }
-            entries[entrypoint] = new(fingerprint, identity, null, clock.GetUtcNow());
+            _entries[entrypoint] = new(fingerprint, identity, null, clock.GetUtcNow());
             return identity;
         }
         // 成败都放开闸门，排队等着的请求才能读到结果或接着重取，不会一直卡住。
-        finally { gate.Release(); }
+        finally { _gate.Release(); }
     }
 
     /// <summary>
@@ -69,7 +69,7 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
         try
         {
             var (_, fingerprint) = Locate();
-            var current = entries.Where(item => item.Value.Fingerprint == fingerprint).OrderBy(item => item.Key, StringComparer.Ordinal).ToArray();
+            var current = _entries.Where(item => item.Value.Fingerprint == fingerprint).OrderBy(item => item.Key, StringComparer.Ordinal).ToArray();
             var taken = current.Where(item => item.Value.Identity is not null)
                 .Select(item => $"{EntrypointLabel(item.Key)} 用 {item.Value.Identity!.Version}（{TimeZoneInfo.ConvertTime(item.Value.Identity.CapturedAt, clock.LocalTimeZone).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} 取得）").ToArray();
             var failures = current.Select(item => item.Value.Failure).OfType<string>().Distinct().ToArray();
@@ -90,16 +90,16 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
     /// <summary>同一份 claude.exe 这个入口已取到的身份；上次重取失败且还在 60 秒内时直接抛出那句原因；其余情况为 null，要重取。</summary>
     private ClaudeCodeIdentity? Known(string entrypoint, string fingerprint)
     {
-        if (!entries.TryGetValue(entrypoint, out var known) || known.Fingerprint != fingerprint) return null;
+        if (!_entries.TryGetValue(entrypoint, out var known) || known.Fingerprint != fingerprint) return null;
         if (known.Identity is not null) return known.Identity;
-        if (clock.GetUtcNow() - known.At < RetryAfter) throw new ClaudeCodeIdentityUnavailableException(known.Failure!);
+        if (clock.GetUtcNow() - known.At < _retryAfter) throw new ClaudeCodeIdentityUnavailableException(known.Failure!);
         return null;
     }
 
     /// <summary>记下这份 claude.exe 这个入口的重取失败与时刻，返回要抛出的异常。</summary>
     private ClaudeCodeIdentityUnavailableException Remember(string entrypoint, string fingerprint, string failure)
     {
-        entries[entrypoint] = new(fingerprint, null, failure, clock.GetUtcNow());
+        _entries[entrypoint] = new(fingerprint, null, failure, clock.GetUtcNow());
         return new(failure);
     }
 

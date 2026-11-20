@@ -28,7 +28,7 @@ internal static class PersonalUsage
             await context.Response.SendFileAsync(Path.Combine(AppContext.BaseDirectory, "wwwroot", asset), context.RequestAborted);
             return true;
         }
-        var client = clients.Authenticate(RelayServer.GetToken(context.Request)) ?? throw new RelayFailure(401, "Invalid or disabled relay token.");
+        var client = await clients.Authenticate(RelayServer.GetToken(context.Request)) ?? throw new RelayFailure(401, "Invalid or disabled relay token.");
         // 只按库里的使用者主键圈定；没有主键的鉴权项（旧内存夹具）不能查，免得筛选条件为空读成全家的用量。
         if (store is null || client.UserId is not { } self) throw new RelayFailure(503, "Usage storage unavailable.");
         var query = context.Request.Query;
@@ -49,7 +49,7 @@ internal static class PersonalUsage
         // 筛选校验的中文提示是写给管理页的，这里统一转成 400 和固定英文消息，不向外部客户端透露校验细节。
         catch (InvalidOperationException) { throw new RelayFailure(400, "Invalid usage query."); }
         UsageReport report;
-        try { report = store.Query(filter); }
+        try { report = await store.Query(filter); }
         // 只把可恢复的存储故障（数据库异常、文件访问失败、记录状态不满足）转成 503，不暴露 SQL 或路径；其他异常继续上抛，由调用方按内部错误处理。
         catch (Exception error) when (UsageService.StorageError(error)) { throw new RelayFailure(503, "Usage storage unavailable."); }
         await context.Response.WriteAsJsonAsync(report, context.RequestAborted);

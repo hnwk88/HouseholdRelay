@@ -23,9 +23,9 @@ static class ClaudeCodeIdentityTests
     /// <summary>官方账户登录文件里的访问令牌；断言它不出现在读句里。</summary>
     private const string Token = "fixture-identity-official-token";
     /// <summary>仅用于两个全新隔离目录的同一固定假设备号，不来自或写入任何个人配置。</summary>
-    private static readonly string NativeDevice = new('d', 64);
+    private static readonly string _nativeDevice = new('d', 64);
     /// <summary>不算身份、跟着每次请求或连接走的头：认证、主机、长度、协议版本、beta、内容类型、编码和会话编号。</summary>
-    private static readonly HashSet<string> PerRequest = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> _perRequest = new(StringComparer.OrdinalIgnoreCase)
     { "Authorization", "Host", "Content-Length", "Content-Type", "Accept-Encoding", "Connection", "anthropic-version", "anthropic-beta", "X-Claude-Code-Session-Id",
         "X-Stainless-Retry-Count", "X-Claude-Code-Agent-Id", "X-Claude-Code-Parent-Agent-Id" };
 
@@ -55,7 +55,7 @@ static class ClaudeCodeIdentityTests
             var launcher = new NativeCliIsolationLauncher();
             return new ClaudeCodeIdentitySource(launcher, new ClaudeCodeProbe(launcher, provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<IUpstreamProxy>(), provider.GetRequiredService<IClaudeConfigurationPreparation>(), provider.GetRequiredService<ISiteIdentityService>(), provider.GetRequiredService<IOwnedClaudeProcesses>()), TimeProvider.System, provider.GetRequiredService<ISiteIdentityService>());
         }));
-        var study = web.Identities.Create("书房"); var bedroom = web.Identities.Create("卧室");
+        var study = await web.Identities.Create("书房"); var bedroom = await web.Identities.Create("卧室");
         var beforeBusiness = mock.Calls.Count;
         using (var first = await Send(web, study.Token, new string('a', 64), ("User-Agent", "claude-cli/1.9.9 (external, cli)"), ("x-app", "cli"), ("X-Stainless-OS", "MacOS"),
             ("X-Stainless-Arch", "arm64"), ("X-Stainless-Runtime-Version", "v22.1.0"), ("X-Stainless-Package-Version", "0.99.0"), ("X-Claude-Code-Session-Id", "session-study"),
@@ -69,8 +69,8 @@ static class ClaudeCodeIdentityTests
         foreach (var call in relayed)
         {
             foreach (var (name, value) in identity) Check(call.Headers.TryGetValue(name, out var sent) && sent == value, $"{name}: sent {sent}, real claude.exe sends {value}");
-            Check(call.Headers.Keys.All(name => identity.ContainsKey(name) || PerRequest.Contains(name) || ClaudeCodeIdentity.RequestHeaders.Contains(name)), "Only the unified identity may leave: " + string.Join(", ", call.Headers.Keys));
-            Check(call.Headers["Authorization"] == "Bearer " + Token && call.Body.Contains(web.Settings.Read().Value.DeviceId, StringComparison.Ordinal));
+            Check(call.Headers.Keys.All(name => identity.ContainsKey(name) || _perRequest.Contains(name) || ClaudeCodeIdentity.RequestHeaders.Contains(name)), "Only the unified identity may leave: " + string.Join(", ", call.Headers.Keys));
+            Check(call.Headers["Authorization"] == "Bearer " + Token && call.Body.Contains((await web.Settings.Read()).Value.DeviceId, StringComparison.Ordinal));
         }
         // 内容长度与按当次透传的头（会话编号、每请求新生成的请求编号等）本就每次不同，其余必须逐值相同。
         var shared = relayed[0].Headers.Keys.Where(name => name != "Content-Length" && !ClaudeCodeIdentity.RequestHeaders.Contains(name)).ToArray();
@@ -78,13 +78,13 @@ static class ClaudeCodeIdentityTests
         Check(relayed[0].Headers.Keys.Order(StringComparer.OrdinalIgnoreCase).SequenceEqual(relayed[1].Headers.Keys.Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase));
         Check(relayed[0].Headers["X-Claude-Code-Session-Id"] == "session-study" && relayed[1].Headers["X-Claude-Code-Session-Id"] == "session-bedroom", "Session ids follow the request body");
         Check(!relayed.Any(call => call.Body.Contains(new string('a', 64), StringComparison.Ordinal) || call.Body.Contains(new string('b', 64), StringComparison.Ordinal)));
-        var host = web.Identities.Create("MyCoAI 宿主");
+        var host = await web.Identities.Create("MyCoAI 宿主");
         using (var third = await Send(web, host.Token, new string('c', 64), ("User-Agent", "claude-cli/0.7.7 (external, sdk-cli)"), ("x-app", "cli"), ("X-Stainless-OS", "Windows"),
             ("X-Claude-Code-Session-Id", "session-host"), ("anthropic-version", "2023-06-01")))
             Check(third.StatusCode == HttpStatusCode.OK, await third.Content.ReadAsStringAsync());
         var sdk = mock.Calls.Last();
         foreach (var (name, value) in print) Check(sdk.Headers.TryGetValue(name, out var sent) && sent == value, $"sdk-cli {name}: sent {sent}, real claude.exe --print sends {value}");
-        Check(sdk.Headers.Keys.All(name => print.ContainsKey(name) || PerRequest.Contains(name) || ClaudeCodeIdentity.RequestHeaders.Contains(name)), "Only the sdk-cli identity may leave: " + string.Join(", ", sdk.Headers.Keys));
+        Check(sdk.Headers.Keys.All(name => print.ContainsKey(name) || _perRequest.Contains(name) || ClaudeCodeIdentity.RequestHeaders.Contains(name)), "Only the sdk-cli identity may leave: " + string.Join(", ", sdk.Headers.Keys));
         var business = mock.Calls.Skip(beforeBusiness).ToArray();
         var callerDevices = new[] { new string('a', 64), new string('b', 64), new string('c', 64) };
         Check(business.Length == 3 && business.All(call => !callerDevices.Any(device => call.Body.Contains(device, StringComparison.Ordinal))),
@@ -96,7 +96,7 @@ static class ClaudeCodeIdentityTests
 
     /// <summary>从一次实抓里取出身份头：去掉跟着每次请求或连接走的头，再去掉产品按当次透传的 <see cref="ClaudeCodeIdentity.RequestHeaders"/>（2.1.325 起两种模式都带提示编号与请求编号）。</summary>
     private static Dictionary<string, string> Identity(UpstreamCall call) =>
-        call.Headers.Where(header => !PerRequest.Contains(header.Key) && !ClaudeCodeIdentity.RequestHeaders.Contains(header.Key)).ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
+        call.Headers.Where(header => !_perRequest.Contains(header.Key) && !ClaudeCodeIdentity.RequestHeaders.Contains(header.Key)).ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 请求头分类（用户 2026-11-12 定的甲）：实抓只缓存稳定白名单；SDK 重试次数与子代理编号按客户端这一次的值发往官方，客户端不带就不带、不补造；
@@ -112,7 +112,7 @@ static class ClaudeCodeIdentityTests
         using var claude = new FakeClaudeLauncher("extra-headers");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         using (var first = await Send(web, person.Token, new string('a', 64), ("X-Stainless-Retry-Count", "2"), ("X-Claude-Code-Agent-Id", "agent-one"),
             ("X-Claude-Code-Parent-Agent-Id", "agent-root"), (FakeClaude.UnclassifiedHeader, "client-value"),
             ("X-Claude-Code-Request-Class", "main"), ("X-Claude-1p-Request-Class", "main"), ("X-Claude-Code-Prompt-Id", "11111111-2222-4333-8444-555555555555"),
@@ -154,7 +154,7 @@ static class ClaudeCodeIdentityTests
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         var before = mock.Calls.Count;
         // claude-cli 客户端但没带 X-Client-Request-Id：视为未开开关。
         using (var off = await Send(web, person.Token, new string('a', 64), ("User-Agent", "claude-cli/2.1.323 (external, cli)"), ("X-Client-Request-Id", "")))
@@ -165,7 +165,7 @@ static class ClaudeCodeIdentityTests
                 "The message carries the copyable switch command: " + said);
         }
         Check(mock.Calls.Count == before, "A switched-off Claude Code request never reaches the official upstream");
-        using var lease = web.Relay.Upstreams.Acquire();
+        using var lease = await web.Relay.Upstreams.Acquire();
         Check(!lease.Paused && lease.CooldownSeconds == 0, "The local refusal does not pause or cool down the upstream");
         // 非 Claude Code 客户端（无 claude-cli User-Agent）不判这一条，照旧放行。
         using (var other = await Send(web, person.Token, new string('a', 64), ("User-Agent", "some-sdk/1.0")))
@@ -189,7 +189,7 @@ static class ClaudeCodeIdentityTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
         var before = mock.Calls.Count; claude.Reinstall("missing", claude.Version);
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         using var response = await Send(web, person.Token, new string('a', 64), ("User-Agent", "claude-cli/9.9.9 (external, cli)"));
         Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && await Message(response) == ClaudeCodeIdentity.NotFound);
         Check(mock.Calls.Count == before, "Nothing may reach the official upstream without the unified identity");
@@ -202,7 +202,7 @@ static class ClaudeCodeIdentityTests
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         using (var first = await Send(web, person.Token, new string('a', 64))) Check(first.StatusCode == HttpStatusCode.OK);
         Check(mock.Calls.Last().Headers["User-Agent"] == "claude-cli/1.0.0 (external, sdk-cli)", mock.Calls.Last().Headers["User-Agent"]);
         claude.Reinstall("success", "1.0.1");
@@ -217,7 +217,7 @@ static class ClaudeCodeIdentityTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
         var before = mock.Calls.Count; claude.Reinstall("no-identity", "1.0.2");
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         using var response = await Send(web, person.Token, new string('a', 64));
         Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && await Message(response) == ClaudeCodeIdentity.CaptureFailed);
         Check(mock.Calls.Count == before, "A failed recapture must not fall back to any other identity");
@@ -237,7 +237,7 @@ static class ClaudeCodeIdentityTests
         {
             await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
             await mock.Activate(web.Upstreams, "fixture-unchanged-secret", mock.Options(mode: mode, authentication: authentication));
-            var person = web.Identities.Create("书房");
+            var person = await web.Identities.Create("书房");
             using (var response = await Send(web, person.Token, new string('a', 64), client)) Check(response.StatusCode == HttpStatusCode.OK);
             var sent = mock.Calls.Last().Headers;
             var expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -285,7 +285,7 @@ static class ClaudeCodeIdentityTests
             context.Response.StatusCode = 429;
             await context.Response.WriteAsJsonAsync(new { type = "error", error = new { type = "rate_limit_error", message = "Rejected for " + Token + ". " + new string('x', 400) } });
         };
-        var id = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, Options(mock), FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, Options(mock), FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
         var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None);
         var quote = report.Message[report.Message.IndexOf("上游原话：", StringComparison.Ordinal)..];
         Check(report.Call == "cooldown" && report.Message.StartsWith("最小模型调用受到上游限流，请稍后重新测试。上游原话：rate_limit_error：Rejected for [redacted].", StringComparison.Ordinal), report.Message);
@@ -362,7 +362,7 @@ static class ClaudeCodeIdentityTests
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, ".claude.json");
         var json = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();
-        json["userID"] = NativeDevice;
+        json["userID"] = _nativeDevice;
         File.WriteAllText(path, json.ToJsonString());
     }
 
@@ -379,7 +379,7 @@ static class ClaudeCodeIdentityTests
             observed = identifier.Substring(5, 64);
         }
         else { using var inner = JsonDocument.Parse(identifier); observed = inner.RootElement.GetProperty("device_id").GetString()!; }
-        Check(launches == 1 && observed == NativeDevice, "A new isolated native directory must send exactly its pre-seeded userID without request rewriting.");
+        Check(launches == 1 && observed == _nativeDevice, "A new isolated native directory must send exactly its pre-seeded userID without request rewriting.");
         var deviceHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(observed)));
         var directoryHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(directory)));
         Console.WriteLine($"Native direct fixture: mode={mode}; fresh_directory_hash={directoryHash}; actual_process_launches={launches}; observed_requests={native.Calls.Count}; preseed_matches_wire=true; device_hash={deviceHash}.");
@@ -390,9 +390,9 @@ static class ClaudeCodeIdentityTests
     private static async Task<WebFixture> Official(FakeClaudeLauncher claude, UpstreamFixture mock, Action<IServiceCollection>? extra = null)
     {
         var web = await WebFixture.Create(overrides: services => { claude.Register(services); extra?.Invoke(services); });
-        var id = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, Options(mock), FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, Options(mock), FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
         var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None);
-        Check(report.CanActivate, report.Message); web.Upstreams.Activate(id);
+        Check(report.CanActivate, report.Message); await web.Upstreams.Activate(id);
         return web;
     }
 
@@ -430,7 +430,7 @@ static class ClaudeCodeIdentityTests
     /// </summary>
     private static async Task Same(WebFixture web, string sentence)
     {
-        var state = web.Relay.Upstreams.Status(web.Upstreams.ReadActive().Version);
+        var state = web.Relay.Upstreams.Status((await web.Upstreams.ReadActive()).Version);
         Check(!state.Paused && state.CooldownSeconds == 0, "Refusing to send is not the official upstream's fault");
         var report = await Settled(web, 1); var row = report.Rows.Single(); var attempt = report.AttemptsOf(row.RequestId).Single();
         Check(row is { Outcome: "failed", Dispatched: false } && attempt.ErrorType == "identity_unavailable" && attempt.ErrorMessage == sentence, JsonSerializer.Serialize(attempt));

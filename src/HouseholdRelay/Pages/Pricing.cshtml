@@ -14,7 +14,7 @@
 }
 <form method="get" class="card usage-filters">
     <div><label for="pricing-upstream">上游</label>
-        <select id="pricing-upstream" name="candidateId">
+        <select id="pricing-upstream" name="upstreamCandidateId">
             @foreach (var item in Model.Saved) { <option value="@item.Id" selected="@(item.Id == Model.Selected?.Id)">@item.Name@(item.Id == Model.ActiveId ? "（在用）" : "")</option> }
         </select></div>
     <div class="full"><button type="submit">查看这家的费率</button></div>
@@ -26,7 +26,7 @@
 }
 <h2>正在设置：@Model.Selected.Name</h2>
 <form method="post" class="card usage-filters">
-    <input asp-for="CandidateId" type="hidden" />
+    <input asp-for="UpstreamCandidateId" type="hidden" />
     <div><label asp-for="ModelName">模型（精确匹配）</label><input asp-for="ModelName" maxlength="160" required /></div>
     <div><label asp-for="Currency">币种代码</label><input asp-for="Currency" maxlength="3" required placeholder="例如 USD 或 CNY" /></div>
     <div><label asp-for="InputPrice">输入单价 / 百万 Token</label><input asp-for="InputPrice" type="number" min="0" max="1000000" step="any" /></div>
@@ -39,6 +39,6 @@
 {
     <section class="card"><h2>@price.Model · @price.Currency</h2>
         <p>每百万 Token：输入 @(price.InputPerMillion?.ToString() ?? "未知") · 输出 @(price.OutputPerMillion?.ToString() ?? "未知") · 缓存读 @(price.CacheReadPerMillion?.ToString() ?? "未知") · 缓存写 @(price.CacheWritePerMillion?.ToString() ?? "未知")</p>
-        <a asp-page="/Pricing" asp-route-candidateId="@Model.Selected.Id" asp-route-modelName="@price.Model">调整此模型费率</a>
+        <a asp-page="/Pricing" asp-route-upstreamCandidateId="@Model.Selected.Id" asp-route-modelName="@price.Model">调整此模型费率</a>
     </section>
 }

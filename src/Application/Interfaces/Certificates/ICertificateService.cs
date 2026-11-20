@@ -6,20 +6,20 @@ namespace Application.Interfaces.Certificates;
 public interface ICertificateService
 {
     /// <summary>可展示的证书状态；未配置时为空。</summary>
-    CertificateInfo? ReadInfo();
+    Task<CertificateInfo?> ReadInfo();
 
     /// <summary>校验并导入系统信任的服务器证书 PFX，同时保存对外地址和监听端口。</summary>
-    void Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password);
+    Task Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password);
 
     /// <summary>加载并重新校验当前证书及其链；未配置时为空。</summary>
-    ServerCertificates? LoadForServing();
+    Task<ServerCertificates?> LoadForServing();
 
     /// <summary>私有 CA 的公共 PEM；没有私有 CA 时为空。</summary>
-    string? ReadAuthorityPem();
+    Task<string?> ReadAuthorityPem();
 
     /// <summary>私有 CA 的 SHA-256 指纹，供客户端安装信任前核对。</summary>
-    string? AuthorityFingerprint();
+    Task<string?> AuthorityFingerprint();
 
     /// <summary>签发新的私有 CA 与服务器证书；已有证书时须明确确认替换。</summary>
-    void CreatePrivate(long settingsVersion, string publicUrl, int listenPort, bool replaceExisting = false);
+    Task CreatePrivate(long settingsVersion, string publicUrl, int listenPort, bool replaceExisting = false);
 }

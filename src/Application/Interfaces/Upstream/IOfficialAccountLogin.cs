@@ -37,7 +37,7 @@ public interface IOfficialAccountLogin
     /// 读出的字节在返回后清零，<paramref name="commit"/> 要用就当场用完。凭据不在、续期迟迟不结束或 <paramref name="commit"/> 抛出时恢复续期并抛出（读出的原因不含文件内容）。
     /// 账户目录不删，等管理员按「删除」。
     /// </summary>
-    T Export<T>(IReadOnlyList<string> accountIds, Func<IReadOnlyList<byte[]>, T> commit);
+    Task<T> Export<T>(IReadOnlyList<string> accountIds, Func<IReadOnlyList<byte[]>, Task<T>> commit);
 
     /// <summary>删除 <paramref name="accountId"/> 的配置目录（上游被删除时调用）：先结束该账户正在跑的刷新（有上限）再删，之后不再刷新它；目录不存在或删不掉时不抛出，残留的只是一个不再被引用的目录。</summary>
     void Remove(string accountId);

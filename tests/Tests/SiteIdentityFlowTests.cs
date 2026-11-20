@@ -19,11 +19,13 @@ static class SiteIdentityFlowTests
         await using var official = await UpstreamFixture.Create(); await using var api = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(config => { config.MaxConcurrent = 8; config.MaxPerClient = 2; }, claude.Register);
         var officialId = await Official(web, official); var apiId = await api.Activate(web.Upstreams);
-        web.Upstreams.Activate(officialId, web.Upstreams.ReadOverview().Version); web.Upstreams.SetFailover(false);
+        await web.Upstreams.Activate(officialId, (await web.Upstreams.ReadOverview()).Version); await web.Upstreams.SetFailover(false);
         var service = web.App.Services.GetRequiredService<ISiteIdentityService>(); var before = service.Current;
-        var people = Enumerable.Range(0, 4).Select(index => web.Identities.Create("独立地点" + index)).ToArray();
+        // 签发改成异步后逐个等完，保持原来按顺序签发四个身份的做法，不让四次签发并发争用。
+        var people = new IssuedToken[4];
+        for (var index = 0; index < people.Length; index++) people[index] = await web.Identities.Create("独立地点" + index);
         var identities = IdentityRows(web.Database);
-        var credentialPath = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(officialId).Uid, OfficialCredential.FileName);
+        var credentialPath = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(officialId)).Uid, OfficialCredential.FileName);
         var credentials = File.ReadAllBytes(credentialPath);
         official.Handler = context => Json(context, new { input_tokens = 10, output_tokens = 11, cache_read_input_tokens = 2, cache_creation_input_tokens = 3 });
         for (var index = 0; index < people.Length; index++)
@@ -57,8 +59,8 @@ static class SiteIdentityFlowTests
                 using var request = Message(web, people[1].Token, 1, "closed"); using var response = await web.Http.SendAsync(request);
                 Check(response.StatusCode == HttpStatusCode.ServiceUnavailable);
             }
-            Check(official.Calls.Count == officialCalls && !changing.IsCompleted && web.Settings.Read().Value.DeviceId == before.DeviceId);
-            web.Upstreams.Activate(apiId, web.Upstreams.ReadOverview().Version); api.Handler = context => Json(context, new { input_tokens = 20, output_tokens = 21, cache_read_input_tokens = 0, cache_creation_input_tokens = 0 });
+            Check(official.Calls.Count == officialCalls && !changing.IsCompleted && (await web.Settings.Read()).Value.DeviceId == before.DeviceId);
+            await web.Upstreams.Activate(apiId, (await web.Upstreams.ReadOverview()).Version); api.Handler = context => Json(context, new { input_tokens = 20, output_tokens = 21, cache_read_input_tokens = 0, cache_creation_input_tokens = 0 });
             using (var request = Message(web, people[2].Token, 2, "api-during"))
             using (var response = await web.Http.SendAsync(request)) Check(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
             Check(!changing.IsCompleted && official.Calls.Count == officialCalls, "Independent API traffic cannot release or bypass the official SSE permit");
@@ -69,7 +71,7 @@ static class SiteIdentityFlowTests
         // 任一断言失败也先释放本用例的模拟 SSE，避免宿主清理被测试自己挂住。
         finally { release.TrySetResult(); }
         official.Handler = context => Json(context, new { input_tokens = 10, output_tokens = 11, cache_read_input_tokens = 2, cache_creation_input_tokens = 3 });
-        web.Upstreams.Activate(officialId, web.Upstreams.ReadOverview().Version);
+        await web.Upstreams.Activate(officialId, (await web.Upstreams.ReadOverview()).Version);
         for (var index = 0; index < people.Length; index++)
         {
             using var request = Message(web, people[index].Token, index, "after"); using var response = await web.Http.SendAsync(request);
@@ -84,7 +86,7 @@ static class SiteIdentityFlowTests
             var report = await Personal(web, person.Token);
             Check(report.Rows.All(row => row.UserId == person.UserId) && report.Rows.Count(row => row.Outcome == "succeeded") >= 2);
             Check(report.Rows.Where(row => row.Outcome == "succeeded" && row.Tokens.Input == 10).All(row => row.Tokens.Output == 11));
-            Check(web.Identities.Clients.Authenticate(person.Token)?.UserId == person.UserId);
+            Check((await web.Identities.Clients.Authenticate(person.Token))?.UserId == person.UserId);
         }
     }
 
@@ -95,8 +97,8 @@ static class SiteIdentityFlowTests
         await using var official = await UpstreamFixture.Create(); await using var api = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var officialId = await Official(web, official); await api.Activate(web.Upstreams);
-        var person = web.Identities.Create("状态与备用检查"); var service = web.App.Services.GetRequiredService<ISiteIdentityService>();
-        var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(officialId).Uid);
+        var person = await web.Identities.Create("状态与备用检查"); var service = web.App.Services.GetRequiredService<ISiteIdentityService>();
+        var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(officialId)).Uid);
         FakeClaude.Write(directory, "fixture-expired-for-maintenance", -1);
         var before = File.ReadAllBytes(Path.Combine(directory, OfficialCredential.FileName));
         var log = File.ReadAllText(Path.Combine(directory, "fake-calls.log")); var calls = official.Calls.Count;
@@ -105,7 +107,7 @@ static class SiteIdentityFlowTests
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, web.Url + "/status"); request.Headers.Authorization = new("Bearer", person.Token);
             using var response = await web.Http.SendAsync(request); Check(response.StatusCode == HttpStatusCode.OK);
-            Check(web.Upstreams.ReadStandby().All(item => !item.Options.OfficialAccount || item.BlockedByIdentity && item.Credential is null));
+            Check((await web.Upstreams.ReadStandby()).All(item => !item.Options.OfficialAccount || item.BlockedByIdentity && item.Credential is null));
             Check(await Call(web, person.Token) == HttpStatusCode.OK);
             Check(File.ReadAllText(Path.Combine(directory, "fake-calls.log")) == log && official.Calls.Count == calls);
             Check(File.ReadAllBytes(Path.Combine(directory, OfficialCredential.FileName)).SequenceEqual(before));
@@ -125,7 +127,7 @@ static class SiteIdentityFlowTests
         await using var web = await WebFixture.Create(overrides: claude.Register);
         await compatible.Activate(web.Upstreams, options: compatible.Options(mode: "oauth", authentication: "bearer"));
         var service = web.App.Services.GetRequiredService<ISiteIdentityService>(); var before = service.Current;
-        var person = web.Identities.Create("兼容账户换号");
+        var person = await web.Identities.Create("兼容账户换号");
         using (var response = await UpstreamFixture.RelayRequest(web, person.Token, "before-refresh"))
             Check(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         Check(LegacyDevice(compatible.Calls.Last().Body) == before.DeviceId, "Compatible OAuth starts on the site device");
@@ -148,12 +150,12 @@ static class SiteIdentityFlowTests
         await using var official = await UpstreamFixture.Create(); await using var api = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var officialId = await Official(web, official); await api.Activate(web.Upstreams);
-        web.Upstreams.Activate(officialId, web.Upstreams.ReadOverview().Version); web.Upstreams.SetFailover(false);
+        await web.Upstreams.Activate(officialId, (await web.Upstreams.ReadOverview()).Version); await web.Upstreams.SetFailover(false);
         var preparation = web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>();
-        var person = web.Identities.Create("占用核对");
-        var path = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(officialId).Uid, ".claude.json");
+        var person = await web.Identities.Create("占用核对");
+        var path = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(officialId)).Uid, ".claude.json");
         // 受控准备让本代核对失效，下一次官方请求一定要打开文件。
-        preparation.PrepareAccount(web.Upstreams.ReadCandidate(officialId).Uid);
+        preparation.PrepareAccount((await web.Upstreams.ReadCandidate(officialId)).Uid);
         var calls = official.Calls.Count; string blocked;
         using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
@@ -163,12 +165,12 @@ static class SiteIdentityFlowTests
                 Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && blocked.Contains("正被其他程序占用", StringComparison.Ordinal), blocked);
             }
             Check(official.Calls.Count == calls, "An occupied private configuration must not reach the official upstream");
-            web.Upstreams.SetFailover(true);
+            await web.Upstreams.SetFailover(true);
             var apiCalls = api.Calls.Count;
             using (var response = await UpstreamFixture.RelayRequest(web, person.Token, "occupied-failover"))
                 Check(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
             Check(api.Calls.Count == apiCalls + 1 && official.Calls.Count == calls, "The independent API may serve while the official account is locally blocked");
-            web.Upstreams.SetFailover(false);
+            await web.Upstreams.SetFailover(false);
         }
         // 释放后立即可用：本地阻断没有进入认证暂停或冷却。
         using (var response = await UpstreamFixture.RelayRequest(web, person.Token, "released"))
@@ -182,7 +184,7 @@ static class SiteIdentityFlowTests
                 if (response.StatusCode == HttpStatusCode.OK) warm++;
             }
         Check(warm == 8 && official.Calls.Count == calls + 9, "A validated account must not reopen its private configuration on every request");
-        var report = await Settled(web, web.Relay.Usage!.Query(new()).Total);
+        var report = await Settled(web, (await web.Relay.Usage!.Query(new())).Total);
         Check(report.Rows.All(row => row.Outcome != "interrupted"), "A local configuration block is not an interrupted upstream response");
         Console.WriteLine($"cold_occupied_status=503; official_calls_while_cold_occupied=0; failover_api_calls=1; warm_occupied_ok={warm}/8; claude_json_opens_per_warm_request=0");
     }
@@ -200,7 +202,7 @@ static class SiteIdentityFlowTests
         // 账户测试的探测目录先单独核对：不依赖后面业务请求的副作用，撤掉预置时这里直接报出。
         var probed = claude.SeenUserIds;
         Check(probed.Count >= 1 && probed.All(item => item.UserId == service.Current.DeviceId), "The account-test probe directory must be preseeded with the site device before the client starts");
-        var person = web.Identities.Create("预置编号核对");
+        var person = await web.Identities.Create("预置编号核对");
         using (var response = await UpstreamFixture.RelayRequest(web, person.Token, "preseed-business"))
             Check(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         // 终端入口的客户端让中转在伪控制台里抓 cli 身份，那个目录同样要预置。
@@ -228,11 +230,11 @@ static class SiteIdentityFlowTests
     /// <summary>仅假凭据与回环地址，导入、测试并激活一个真实流程中的官方账户候选。</summary>
     private static async Task<long> Official(WebFixture web, UpstreamFixture mock)
     {
-        var id = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version,
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version,
             new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model" },
             FakeClaude.Credential("fixture-maintenance-official", 60), "维护官方夹具", default);
         var tested = await web.Upstreams.TestCandidate(id, true, default); Check(tested.CanActivate, tested.Message);
-        web.Upstreams.Activate(id); return id;
+        await web.Upstreams.Activate(id); return id;
     }
 
     /// <summary>四台客户端各自保持会话，设备值刻意不同以验证官方出口统一。</summary>

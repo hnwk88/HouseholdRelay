@@ -34,7 +34,8 @@ async function stop() {
 function snapshot() {
     const database = new DatabaseSync(path.join(temporary, '.state', 'relay.db'), { readOnly: true });
     try {
-        const state = database.prepare('SELECT version,operation_id,pending FROM site_identity WHERE id=1').get();
+        // 库版本 11 起站点身份按整数外键指向维护操作，文本操作号留在操作表里；关联回去取出，和页面表单里的操作号同一口径。
+        const state = database.prepare('SELECT s.version,o.operation_id,s.pending FROM site_identity s LEFT JOIN site_identity_operations o ON o.id=s.site_identity_operation_id WHERE s.id=1').get();
         const config = JSON.parse(database.prepare('SELECT json FROM settings WHERE id=1').get().json);
         return { ...state, device: config.deviceId };
     } finally { database.close(); }

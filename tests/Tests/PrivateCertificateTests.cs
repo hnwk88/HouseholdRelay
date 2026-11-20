@@ -16,18 +16,18 @@ static class PrivateCertificateTests
     /// 新进程加载到带私钥的叶证书和两级证书链；主机名不符的验证被拒；把保存的证书换成过期证书后加载服务证书被拒；
     /// 显式替换后得到新的根证书并能正常加载。
     /// </summary>
-    public static Task Lifecycle()
+    public static async Task Lifecycle()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database;
         var settings = process.Settings; var certificates = process.Certificates;
-        var version = settings.Read().Version;
-        certificates.CreatePrivate(version, "https://localhost:8787", 8787);
-        var fingerprint = certificates.AuthorityFingerprint();
-        Check(fingerprint?.Length == 64 && certificates.ReadInfo()?.Mode == "private");
-        Reject(() => certificates.CreatePrivate(version, "https://localhost:8787", 8787, true));
-        Reject(() => certificates.CreatePrivate(settings.Read().Version, "https://localhost:8787", 8787));
-        Check(certificates.AuthorityFingerprint() == fingerprint, "Rejected writes must preserve the active root");
-        using (var serving = new TestProcess(home.Path).Certificates.LoadForServing()!)
+        var version = (await settings.Read()).Version;
+        await certificates.CreatePrivate(version, "https://localhost:8787", 8787);
+        var fingerprint = await certificates.AuthorityFingerprint();
+        Check(fingerprint?.Length == 64 && (await certificates.ReadInfo())?.Mode == "private");
+        await Reject(() => certificates.CreatePrivate(version, "https://localhost:8787", 8787, true));
+        await Reject(async () => await certificates.CreatePrivate((await settings.Read()).Version, "https://localhost:8787", 8787));
+        Check(await certificates.AuthorityFingerprint() == fingerprint, "Rejected writes must preserve the active root");
+        using (var serving = (await new TestProcess(home.Path).Certificates.LoadForServing())!)
             Check(serving.Certificate.HasPrivateKey && serving.Chain.Count == 2);
         // 与实际启动相同的验证必须拒绝篡改后的地址与过期叶证书。
         using var leaf = TestProcess.CertificateFactory.CreateCertificate("localhost", out var ca);
@@ -40,11 +40,10 @@ static class PrivateCertificateTests
         using var expired = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddDays(-1));
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction,
             "UPDATE secrets SET protected=$value WHERE name='tls'", ("$value", WindowsSecrets.Protect(expired.Export(X509ContentType.Pkcs12)))));
-        Reject(() => certificates.LoadForServing()?.Dispose());
-        certificates.CreatePrivate(settings.Read().Version, "https://localhost:8787", 8787, true);
-        Check(certificates.AuthorityFingerprint() != fingerprint, "Replacement must advertise a new root");
-        using var restored = certificates.LoadForServing(); Check(restored is not null);
-        return Task.CompletedTask;
+        await Reject(async () => (await certificates.LoadForServing())?.Dispose());
+        await certificates.CreatePrivate((await settings.Read()).Version, "https://localhost:8787", 8787, true);
+        Check(await certificates.AuthorityFingerprint() != fingerprint, "Replacement must advertise a new root");
+        using var restored = await certificates.LoadForServing(); Check(restored is not null);
     }
 
     /// <summary>
@@ -57,15 +56,15 @@ static class PrivateCertificateTests
         await using var web = await WebFixture.Create(); var settings = web.Settings;
         using (var anonymous = await web.Http.GetAsync(web.Url + "/Connection?handler=TrustPackage")) Check(anonymous.StatusCode == HttpStatusCode.Redirect);
         await web.Login();
-        var values = new Dictionary<string, string> { ["Version"] = settings.Read().Version.ToString(), ["PublicUrl"] = "https://localhost:8787", ["ListenPort"] = "8787" };
+        var values = new Dictionary<string, string> { ["Version"] = (await settings.Read()).Version.ToString(), ["PublicUrl"] = "https://localhost:8787", ["ListenPort"] = "8787" };
         using (var forged = await web.Post("/Https?handler=Private", values)) Check(forged.StatusCode == HttpStatusCode.BadRequest);
-        Check(!settings.HasCertificate);
+        Check(!await settings.HasCertificate());
         values["__RequestVerificationToken"] = await web.Csrf("/Https");
         using var created = await web.Post("/Https?handler=Private", values);
-        Check(created.IsSuccessStatusCode && settings.HasCertificate);
-        var certificates = web.Certificates; var fingerprint = certificates.AuthorityFingerprint();
+        Check(created.IsSuccessStatusCode && await settings.HasCertificate());
+        var certificates = web.Certificates; var fingerprint = await certificates.AuthorityFingerprint();
         using var stale = await web.Post("/Https?handler=Private", values);
-        Check(certificates.AuthorityFingerprint() == fingerprint);
+        Check(await certificates.AuthorityFingerprint() == fingerprint);
         using var download = await web.Http.GetAsync(web.Url + "/Connection?handler=TrustPackage");
         Check(download.IsSuccessStatusCode && download.Headers.CacheControl?.NoStore == true);
         using var bytes = new MemoryStream(await download.Content.ReadAsByteArrayAsync()); using var zip = new ZipArchive(bytes);
@@ -84,14 +83,14 @@ static class PrivateCertificateTests
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database;
         var settings = process.Settings; var certificates = process.Certificates;
-        certificates.CreatePrivate(settings.Read().Version, "https://localhost:8787", 8787);
-        using var serving = certificates.LoadForServing()!;
-        using var relayServices = TestProcess.StandaloneRelay(settings.Read().Value, null); var relay = relayServices.GetRequiredService<RelayServer>();
+        await certificates.CreatePrivate((await settings.Read()).Version, "https://localhost:8787", 8787);
+        using var serving = (await certificates.LoadForServing())!;
+        using var relayServices = TestProcess.StandaloneRelay((await settings.Read()).Value, null); var relay = relayServices.GetRequiredService<RelayServer>();
         await using var app = relay.Build(serving.Certificate, 0, serving.Chain); await app.StartAsync();
         var url = app.Urls.Single();
         using var untrusted = new HttpClient(new SocketsHttpHandler { UseProxy = false });
         await RejectTls(untrusted, url);
-        using var authority = X509Certificate2.CreateFromPem(certificates.ReadAuthorityPem()!);
+        using var authority = X509Certificate2.CreateFromPem((await certificates.ReadAuthorityPem())!);
         using var valid = Client(authority); using var response = await valid.GetAsync(url + "/healthz"); Check(response.IsSuccessStatusCode);
         using var otherLeaf = TestProcess.CertificateFactory.CreateCertificate("localhost", out var otherCa);
         using var otherRoot = X509Certificate2.CreateFromPem(otherCa); using var wrongRoot = Client(otherRoot);
@@ -128,4 +127,7 @@ static class PrivateCertificateTests
     /// <summary>断言给定的证书操作以 InvalidOperationException 被拒绝，否则判失败。</summary>
     private static void Reject(Action action)
     { var failed = false; try { action(); } catch (InvalidOperationException) { /* 只把预期的拒绝异常记为成功，其他异常照常抛出使测试失败。 */ failed = true; } Check(failed); }
+    /// <summary>断言给定的异步证书操作以 InvalidOperationException 被拒绝，否则判失败；返回 Task 的调用走这里并等它做完，才能接住异步抛出的拒绝。</summary>
+    private static async Task Reject(Func<Task> action)
+    { var failed = false; try { await action(); } catch (InvalidOperationException) { /* 只把预期的拒绝异常记为成功，其他异常照常抛出使测试失败。 */ failed = true; } Check(failed); }
 }

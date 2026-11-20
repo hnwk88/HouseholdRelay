@@ -77,7 +77,7 @@ internal sealed class UpstreamNamingSchema(RelayDataOptions options) : IDatabase
             var settings = JsonSerializer.Deserialize<RelayConfiguration>((string)Scalar(connection, transaction, "SELECT json FROM settings WHERE id=1")!, ConfigurationFiles.Json)
                 ?? throw new InvalidOperationException("实例配置损坏，请恢复备份。");
             settings.ProxyMode = "manual"; settings.ProxyUrl = proxy; settings.UpstreamProxy = null;
-            Execute(connection, transaction, "UPDATE settings SET json=$json,version=version+1 WHERE id=1", ("$json", SerializeSettings(settings)));
+            Execute(connection, transaction, "UPDATE settings SET json=$json,version=version+1 WHERE id=1", ("$json", RelaySettings.Serialize(settings)));
         }
         options.MigrationCheckpoint?.Invoke();
         Execute(connection, transaction, "PRAGMA user_version=4");

@@ -15,10 +15,10 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
 {
     private const uint ExtendedStartupInfoPresent = 0x00080000, CreateUnicodeEnvironment = 0x00000400;
     private const int UseStandardHandles = 0x00000100;
-    private static readonly IntPtr PseudoConsoleAttribute = 0x00020016;
-    private readonly IntPtr console, attributes, environment, processHandle, threadHandle;
-    private readonly FileStream input, output;
-    private readonly StringBuilder screen = new();
+    private static readonly IntPtr _pseudoConsoleAttribute = 0x00020016;
+    private readonly IntPtr _console, _attributes, _environment, _processHandle, _threadHandle;
+    private readonly FileStream _input, _output;
+    private readonly StringBuilder _screen = new();
     private int disposed;
 
     /// <summary>伪控制台里那个进程；结束、等待退出与读退出码都用它。</summary>
@@ -37,25 +37,25 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
         try
         {
             if (!CreatePipe(out inputRead, out inputWrite, IntPtr.Zero, 0) || !CreatePipe(out outputRead, out outputWrite, IntPtr.Zero, 0)) throw new Win32Exception();
-            var result = CreatePseudoConsole(new Size { X = 120, Y = 40 }, inputRead, outputWrite, 0, out console);
+            var result = CreatePseudoConsole(new Size { X = 120, Y = 40 }, inputRead, outputWrite, 0, out _console);
             if (result != 0) throw new Win32Exception(result);
             var size = IntPtr.Zero;
             InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
-            attributes = Marshal.AllocHGlobal(size);
-            if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size)
-                || !UpdateProcThreadAttribute(attributes, 0, PseudoConsoleAttribute, console, IntPtr.Size, IntPtr.Zero, IntPtr.Zero)) throw new Win32Exception();
+            _attributes = Marshal.AllocHGlobal(size);
+            if (!InitializeProcThreadAttributeList(_attributes, 1, 0, ref size)
+                || !UpdateProcThreadAttribute(_attributes, 0, _pseudoConsoleAttribute, _console, IntPtr.Size, IntPtr.Zero, IntPtr.Zero)) throw new Win32Exception();
             // 标准句柄留空并声明使用：否则子进程会继承父进程被重定向的管道，看不到终端。
-            var startup = new StartupInfoEx { StartupInfo = new StartupInformation { Size = Marshal.SizeOf<StartupInfoEx>(), Flags = UseStandardHandles }, AttributeList = attributes };
-            environment = Marshal.StringToHGlobalUni(string.Concat(start.Environment.Where(item => item.Value is not null)
+            var startup = new StartupInfoEx { StartupInfo = new StartupInformation { Size = Marshal.SizeOf<StartupInfoEx>(), Flags = UseStandardHandles }, AttributeList = _attributes };
+            _environment = Marshal.StringToHGlobalUni(string.Concat(start.Environment.Where(item => item.Value is not null)
                 .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase).Select(item => item.Key + "=" + item.Value + "\0")) + "\0");
             var directory = string.IsNullOrEmpty(start.WorkingDirectory) ? Environment.CurrentDirectory : start.WorkingDirectory;
             if (!CreateProcess(null, new StringBuilder(CommandLine(start)), IntPtr.Zero, IntPtr.Zero, false, ExtendedStartupInfoPresent | CreateUnicodeEnvironment,
-                environment, directory, ref startup, out var information)) throw new Win32Exception();
-            processHandle = information.Process; threadHandle = information.Thread;
+                _environment, directory, ref startup, out var information)) throw new Win32Exception();
+            _processHandle = information.Process; _threadHandle = information.Thread;
             Process = Process.GetProcessById(information.ProcessId);
             // 伪控制台已持有自己那一端，本进程的这两端关掉，进程退出后读端才会读到头。
             inputRead.Dispose(); outputWrite.Dispose();
-            input = new FileStream(inputWrite, FileAccess.Write, 1); output = new FileStream(outputRead, FileAccess.Read, 4096);
+            _input = new FileStream(inputWrite, FileAccess.Write, 1); _output = new FileStream(outputRead, FileAccess.Read, 4096);
             Drained = Task.Run(() => Read(answers));
         }
         // 建到一半失败：关掉已建的管道、伪控制台与内存，再把原因交给调用方。
@@ -63,7 +63,7 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
         {
             inputRead?.Dispose(); inputWrite?.Dispose(); outputRead?.Dispose(); outputWrite?.Dispose();
             Release();
-            if (processHandle == IntPtr.Zero && error is Win32Exception) notStarted?.Invoke();
+            if (_processHandle == IntPtr.Zero && error is Win32Exception) notStarted?.Invoke();
             throw;
         }
     }
@@ -83,7 +83,7 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
         Release();
         try { Process.WaitForExit(); }
         // 真正确认退出后才释放进程对象；调用方的持久登记和官方许可不能提前归还。
-        finally { input.Dispose(); output.Dispose(); Process.Dispose(); }
+        finally { _input.Dispose(); _output.Dispose(); Process.Dispose(); }
     }
 
     /// <summary>后台读屏幕：去掉终端控制序列后找提示，每种提示按一次键；只留最后 16 KB 屏幕文字，进程退出后读到头即结束。</summary>
@@ -93,13 +93,13 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
         try
         {
             int count;
-            while ((count = await output.ReadAsync(buffer)) > 0)
+            while ((count = await _output.ReadAsync(buffer)) > 0)
             {
-                screen.Append(Encoding.UTF8.GetString(buffer, 0, count));
-                if (screen.Length > 16384) screen.Remove(0, screen.Length - 16384);
-                var plain = Control().Replace(screen.ToString(), "");
+                _screen.Append(Encoding.UTF8.GetString(buffer, 0, count));
+                if (_screen.Length > 16384) _screen.Remove(0, _screen.Length - 16384);
+                var plain = Control().Replace(_screen.ToString(), "");
                 foreach (var (prompt, keys) in answers)
-                    if (plain.Contains(prompt, StringComparison.OrdinalIgnoreCase) && pressed.Add(prompt)) { await input.WriteAsync(Encoding.UTF8.GetBytes(keys)); await input.FlushAsync(); }
+                    if (plain.Contains(prompt, StringComparison.OrdinalIgnoreCase) && pressed.Add(prompt)) { await _input.WriteAsync(Encoding.UTF8.GetBytes(keys)); await _input.FlushAsync(); }
             }
         }
         // 伪控制台被关、管道断开：读到头了。
@@ -111,11 +111,11 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
     /// <summary>关伪控制台、释放属性表与环境块、关进程与线程句柄；只放非托管资源。</summary>
     private void Release()
     {
-        if (console != IntPtr.Zero) ClosePseudoConsole(console);
-        if (attributes != IntPtr.Zero) { DeleteProcThreadAttributeList(attributes); Marshal.FreeHGlobal(attributes); }
-        if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
-        if (threadHandle != IntPtr.Zero) CloseHandle(threadHandle);
-        if (processHandle != IntPtr.Zero) CloseHandle(processHandle);
+        if (_console != IntPtr.Zero) ClosePseudoConsole(_console);
+        if (_attributes != IntPtr.Zero) { DeleteProcThreadAttributeList(_attributes); Marshal.FreeHGlobal(_attributes); }
+        if (_environment != IntPtr.Zero) Marshal.FreeHGlobal(_environment);
+        if (_threadHandle != IntPtr.Zero) CloseHandle(_threadHandle);
+        if (_processHandle != IntPtr.Zero) CloseHandle(_processHandle);
     }
 
     /// <summary>按 Windows 命令行规则拼程序与参数（空参数写成 <c>""</c>，含空格或引号的加引号转义）；<c>.cmd</c>、<c>.bat</c> 经 <c>cmd.exe /d /s /c</c> 跑。</summary>

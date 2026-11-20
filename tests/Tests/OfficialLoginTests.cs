@@ -27,13 +27,13 @@ static class OfficialLoginTests
             var values = new Dictionary<string, string>
             {
                 ["Login.Name"] = "", ["Login.BaseUrl"] = mock.Url, ["Login.AllowPrivateNetwork"] = "true",
-                ["Version"] = web.Upstreams.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+                ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
             };
             using var page = await web.Post("/Upstream?handler=LoginAccount", values);
             var raw = await page.Content.ReadAsStringAsync(); var html = WebUtility.HtmlDecode(raw);
             Check(page.IsSuccessStatusCode && html.Contains($"官方账户登录成功，已保存为「{FakeClaude.Email}」") && html.Contains("<option value=\"fixture-model\""), html);
             Check(!raw.Contains("fixture-login-token") && !raw.Contains("fixture-inherited-secret"));
-            var candidate = web.Upstreams.LatestCandidate()!;
+            var candidate = (await web.Upstreams.LatestCandidate())!;
             Check(candidate.Name == FakeClaude.Email && candidate.Options is { OfficialLogin: true, Mode: "oauth", Authentication: "bearer" });
             var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate.Uid);
             using (var environment = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "fake-env.json"))))
@@ -48,10 +48,10 @@ static class OfficialLoginTests
                 Check(!Encoding.ASCII.GetString(copy.ToArray()).Contains("fixture-login-token"), "Login tokens must stay out of the database: " + file);
             }
 
-            web.Upstreams.ChooseModel(candidate.Id, "fixture-model");
+            await web.Upstreams.ChooseModel(candidate.Id, "fixture-model");
             var report = await web.Upstreams.TestCandidate(candidate.Id, true, CancellationToken.None);
-            Check(report.CanActivate, report.Message); web.Upstreams.Activate(candidate.Id);
-            var person = web.Identities.Create("登录测试");
+            Check(report.CanActivate, report.Message); await web.Upstreams.Activate(candidate.Id);
+            var person = await web.Identities.Create("登录测试");
             using (var first = await UpstreamFixture.RelayRequest(web, person.Token)) Check(first.StatusCode == HttpStatusCode.OK);
             Check(mock.Calls.Last().Headers["Authorization"] == "Bearer " + FakeClaude.FirstToken);
 
@@ -89,29 +89,29 @@ static class OfficialLoginTests
             var values = new Dictionary<string, string>
             {
                 ["Login.Name"] = "失败测试", ["Login.BaseUrl"] = mock.Url, ["Login.AllowPrivateNetwork"] = "true",
-                ["Version"] = web.Upstreams.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+                ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
             };
             using var page = await web.Post("/Upstream?handler=LoginAccount", values);
             var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
             Check(page.IsSuccessStatusCode && html.Contains(expected) && html.Contains("登录官方账户"), scenario + ": " + html);
-            Check(web.Upstreams.ListCandidates().Count == 0 && NoAccountDirectories(web), scenario);
+            Check((await web.Upstreams.ListCandidates()).Count == 0 && NoAccountDirectories(web), scenario);
         }
 
         using var named = new FakeClaudeLauncher("success");
         await using var host = await WebFixture.Create(overrides: named.Register);
         var service = host.Upstreams; var options = new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true };
-        try { await service.LoginOfficial(service.ReadActive().Version, options, new string('名', 41), CancellationToken.None); Check(false, "Overlong name must be refused"); }
+        try { await service.LoginOfficial((await service.ReadActive()).Version, options, new string('名', 41), CancellationToken.None); Check(false, "Overlong name must be refused"); }
         // 预期的拒绝：名称超长在登录前就读出要求。
         catch (InvalidOperationException error) { Check(error.Message.Contains("供应商名称"), error.Message); }
-        Check(NoAccountDirectories(host) && service.ListCandidates().Count == 0);
-        try { service.SaveCandidate(service.ReadActive().Version, options with { Mode = "oauth", Authentication = "bearer", OfficialLogin = true }, "fixture-pasted-token", "贴令牌"); Check(false, "Pasted tokens must not claim a login"); }
+        Check(NoAccountDirectories(host) && (await service.ListCandidates()).Count == 0);
+        try { await service.SaveCandidate((await service.ReadActive()).Version, options with { Mode = "oauth", Authentication = "bearer", OfficialLogin = true }, "fixture-pasted-token", "贴令牌"); Check(false, "Pasted tokens must not claim a login"); }
         // 预期的拒绝：官方登录只能经登录入口建立。
         catch (InvalidOperationException error) { Check(error.Message.Contains("登录官方账户"), error.Message); }
 
-        var removed = await service.LoginOfficial(service.ReadActive().Version, options, "将删除的账户", CancellationToken.None);
-        Check(Directory.Exists(Path.Combine(host.Home.Path, ".state", "official-accounts", service.ReadCandidate(removed).Uid)));
-        service.Delete(removed);
-        Check(NoAccountDirectories(host) && service.ListCandidates().Count == 0, "Deleting an official login upstream must remove its account directory");
+        var removed = await service.LoginOfficial((await service.ReadActive()).Version, options, "将删除的账户", CancellationToken.None);
+        Check(Directory.Exists(Path.Combine(host.Home.Path, ".state", "official-accounts", (await service.ReadCandidate(removed)).Uid)));
+        await service.Delete(removed);
+        Check(NoAccountDirectories(host) && (await service.ListCandidates()).Count == 0, "Deleting an official login upstream must remove its account directory");
     }
 
     /// <summary>
@@ -126,10 +126,10 @@ static class OfficialLoginTests
         await SettleOnFailure(async () =>
         {
             var service = web.Upstreams;
-            var id = await service.LoginOfficial(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新卡住", CancellationToken.None);
-            service.ChooseModel(id, "fixture-model");
-            Check((await service.TestCandidate(id, true, CancellationToken.None)).CanActivate); service.Activate(id);
-            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", service.ReadCandidate(id).Uid);
+            var id = await service.LoginOfficial((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新卡住", CancellationToken.None);
+            await service.ChooseModel(id, "fixture-model");
+            Check((await service.TestCandidate(id, true, CancellationToken.None)).CanActivate); await service.Activate(id);
+            var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", (await service.ReadCandidate(id)).Uid);
             FakeClaude.Write(directory, "fixture-login-token-expired", -1);
             foreach (var (path, expected) in new[] { ("/", "刷新卡住"), ("/Connection", "刷新卡住"), ("/Pricing", "正在设置：刷新卡住"), ("/Upstream", "名称：刷新卡住") })
             {
@@ -139,7 +139,7 @@ static class OfficialLoginTests
                 Check(page.IsSuccessStatusCode && clock.Elapsed < TimeSpan.FromSeconds(5) && html.Contains(expected), $"{path} took {clock.Elapsed.TotalSeconds:0.0}s: {html}");
             }
             Check(!File.ReadAllText(Path.Combine(directory, "fake-calls.log")).Contains("-p /usage"), "Opening pages must not start a token refresh");
-            Check(service.ReadOverview() is { Configured: true, Name: "刷新卡住" } overview && overview.CandidateId == id);
+            Check(await service.ReadOverview() is { Configured: true, Name: "刷新卡住" } overview && overview.UpstreamCandidateId == id);
         });
     }
 
@@ -155,8 +155,8 @@ static class OfficialLoginTests
         await SettleOnFailure(async () =>
         {
             var service = web.Upstreams; var accounts = web.App.Services.GetRequiredService<IOfficialAccountLogin>();
-            var id = await service.LoginOfficial(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新中删除", CancellationToken.None);
-            var uid = service.ReadCandidate(id).Uid; var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", uid); var log = Path.Combine(directory, "fake-calls.log");
+            var id = await service.LoginOfficial((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新中删除", CancellationToken.None);
+            var uid = (await service.ReadCandidate(id)).Uid; var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", uid); var log = Path.Combine(directory, "fake-calls.log");
             FakeClaude.Write(directory, "fixture-login-token-expired", -1);
             var reading = Task.Run(() => accounts.ReadAccessToken(uid));
             var started = false;
@@ -168,12 +168,12 @@ static class OfficialLoginTests
                 catch (IOException) { }
             }
             Check(started, "The refresh never started");
-            var clock = Stopwatch.StartNew(); service.Delete(id); clock.Stop();
+            var clock = Stopwatch.StartNew(); await service.Delete(id); clock.Stop();
             Check(clock.Elapsed < TimeSpan.FromSeconds(15) && !Directory.Exists(directory), $"Delete took {clock.Elapsed.TotalSeconds:0.0}s, directory left: {Directory.Exists(directory)}");
             // 等令牌那边与 35 秒计时赛跑：刷新被取消后它应很快收场，计时先到即判失败。
             Check(await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(35))) == reading, "The waiting token read must finish");
             await Task.Delay(500);
-            Check(!Directory.Exists(directory) && service.ListCandidates().Count == 0, "No directory may reappear after the refresh ends");
+            Check(!Directory.Exists(directory) && (await service.ListCandidates()).Count == 0, "No directory may reappear after the refresh ends");
             Check(accounts.ReadAccessToken(uid) is null && !Directory.Exists(directory), "A deleted account must not start a new refresh");
         });
     }
@@ -207,7 +207,7 @@ static class OfficialLoginTests
         using var current = await fast; Check(current.Snapshot.Credential == "fixture-pool-new");
         gate.Set();
         using var late = await slow; Check(late.Snapshot.Credential == "fixture-pool-new", "A read that started earlier must not replace the newer connection");
-        using var next = pool.Acquire(); Check(next.Snapshot.Credential == "fixture-pool-new");
+        using var next = await pool.Acquire(); Check(next.Snapshot.Credential == "fixture-pool-new");
     }
 
     /// <summary>第一次读卡在 <paramref name="gate"/> 上并返回旧凭据（模拟等刷新），之后每次立即返回新凭据。</summary>
@@ -215,16 +215,16 @@ static class OfficialLoginTests
     {
         private int reads;
         /// <summary>按读的先后返回旧或新凭据的同一版本快照。</summary>
-        public UpstreamSnapshot ReadActive()
+        public Task<UpstreamSnapshot> ReadActive()
         {
             var options = new UpstreamOptions { BaseUrl = "http://127.0.0.1:9", AllowPrivateNetwork = true };
-            if (Interlocked.Increment(ref reads) > 1) return new(1, options, "fixture-pool-new");
+            if (Interlocked.Increment(ref reads) > 1) return Task.FromResult(new UpstreamSnapshot(1, options, "fixture-pool-new"));
             waiting.Set(); gate.Wait(TimeSpan.FromSeconds(10));
-            return new(1, options, "fixture-pool-old");
+            return Task.FromResult(new UpstreamSnapshot(1, options, "fixture-pool-old"));
         }
 
         /// <summary>这个用例只看在用那一家的连接，没有备用上游。</summary>
-        public IReadOnlyList<UpstreamSnapshot> ReadStandby() => [];
+        public Task<IReadOnlyList<UpstreamSnapshot>> ReadStandby() => Task.FromResult<IReadOnlyList<UpstreamSnapshot>>([]);
     }
 
     /// <summary>数据目录下没有任何官方账户目录（目录本身不存在或为空）。</summary>

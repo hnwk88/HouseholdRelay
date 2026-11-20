@@ -7,7 +7,7 @@ namespace Application.Services.Relay;
 /// <summary>限时限量记录明确观测阶段；关闭时只检查状态，不扫描或复制请求正文。</summary>
 public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) : IProtocolDiagnostics
 {
-    private readonly object sync = new();
+    private readonly object _sync = new();
     private DateTimeOffset until;
     private int samples;
     private bool enabled;
@@ -18,7 +18,7 @@ public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) 
         get
         {
             // 时间与样本预算在同一锁下判断，状态读取也会结束过期采集。
-            lock (sync) return Active() ? $"临时取证进行中，已记录 {samples} 条，最多一百条或十分钟。" : "临时取证已关闭。";
+            lock (_sync) return Active() ? $"临时取证进行中，已记录 {samples} 条，最多一百条或十分钟。" : "临时取证已关闭。";
         }
     }
 
@@ -26,14 +26,14 @@ public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) 
     public void Start()
     {
         // 开始和记录共用同一把锁，不会把旧采集样本计入新预算。
-        lock (sync) { samples = 0; until = clock.GetUtcNow() + TimeSpan.FromMinutes(10); enabled = true; }
+        lock (_sync) { samples = 0; until = clock.GetUtcNow() + TimeSpan.FromMinutes(10); enabled = true; }
     }
 
     /// <summary>管理员关闭后后续记录立即停止。</summary>
     public void Stop()
     {
         // 与记录预算同步，停止返回后不会接受新样本。
-        lock (sync) enabled = false;
+        lock (_sync) enabled = false;
     }
 
     /// <summary>先检查预算，再写白名单字段；无法确认的环境、目录与会话明确记为未知。</summary>
@@ -41,7 +41,7 @@ public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) 
         string? version = null, string? entrypoint = null, int? status = null, string? error = null)
     {
         // 锁覆盖限额判断和写入，最后一个样本不会被并发请求重复消费。
-        lock (sync)
+        lock (_sync)
         {
             if (!Active()) return;
             samples++;

@@ -9,6 +9,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <!-- 根目录 .editorconfig 的四条 C# 命名规则在构建时执行，违反即构建失败（GZ-W-128）。 -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Product>HouseholdRelay</Product>
     <Authors>热心人AI工作室</Authors>
     <Company>热心人AI工作室</Company>

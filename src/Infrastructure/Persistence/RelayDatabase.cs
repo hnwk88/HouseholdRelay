@@ -7,7 +7,10 @@ using Microsoft.Data.Sqlite;
 
 namespace Infrastructure.Persistence;
 
-/// <summary>本实例唯一的配置数据库；连接和事务只覆盖本地短操作。</summary>
+/// <summary>
+/// 本实例唯一的配置数据库：建库、按顺序跑迁移链、升级前在线备份，并给出连接串与每次打开连接都要做的两项核对。
+/// 运行时的读写一律经 EF Core 与通用仓储（<see cref="RelayDbContext"/>），本类不再提供运行时读写入口；<see cref="Command"/> 等只给迁移链用。
+/// </summary>
 public sealed class RelayDatabase : IRelayInstance
 {
     /// <summary>数据目录的完整路径（来自 --home，默认程序目录），实例标记文件放在它下面。</summary>
@@ -19,28 +22,32 @@ public sealed class RelayDatabase : IRelayInstance
     /// <summary>本实例的唯一编号（32 位十六进制 GUID），同时写在库外的 .relay-instance 标记和库内元数据中，每次打开连接都核对二者一致，防止误用别的实例的数据库或备份。</summary>
     public string InstanceId { get; private set; } = "";
     /// <summary>本程序认识的最高库版本；更高的库（新版程序写过的）拒绝打开，加一版只改这里和新迁移类。</summary>
-    public const int CurrentVersion = 10;
+    public const int CurrentVersion = 11;
+    /// <summary>
+    /// 运行时与迁移链共用的连接串：只读写已有文件（文件不在绝不悄悄建空库）、开外键检查、遇锁最多等 10 秒、不用连接池（每次打开都重新核对实例）。
+    /// </summary>
+    internal string ConnectionString => _connectionString;
     /// <summary>最近一次架构升级的结果，存在 metadata 的 last_upgrade 里；从没升级过时为 null。</summary>
     public DatabaseUpgrade? LastUpgrade { get; private set; }
     /// <summary>这次打开时刚把已有数据的库升级过（做过升级前备份）。</summary>
     public bool UpgradedOnOpen { get; private set; }
     /// <summary>本次启动的升级编号：迁移写归档时带上它，升级结束按它汇总本次另存了几条。</summary>
     internal string UpgradeId { get; } = Guid.NewGuid().ToString("N");
-    private readonly string marker;
-    private readonly string connectionString;
-    private readonly ISecretProtector protector;
-    private readonly IDeviceIdGenerator deviceIds;
+    private readonly string _marker;
+    private readonly string _connectionString;
+    private readonly ISecretProtector _protector;
+    private readonly IDeviceIdGenerator _deviceIds;
 
     /// <summary>打开或首次创建实例数据库：用按数据目录命名的跨进程互斥量（最多等 15 秒）串行化初始化；实例标记与数据库必须同时存在或同时缺失，否则拒绝启动而不是重开首次设置；随后检查库版本与完整性，再按顺序执行全部迁移。作为单例由依赖注入创建，任何不一致都抛异常阻止启动。</summary>
     public RelayDatabase(RelayDataOptions options, ISecretProtector protector, IEnumerable<IDatabaseMigration> migrations, IDeviceIdGenerator deviceIds)
     {
-        this.protector = protector;
-        this.deviceIds = deviceIds;
+        this._protector = protector;
+        this._deviceIds = deviceIds;
         Home = System.IO.Path.GetFullPath(options.Home);
         State = System.IO.Path.Combine(Home, ".state");
         Path = System.IO.Path.Combine(State, "relay.db");
-        marker = System.IO.Path.Combine(Home, ".relay-instance");
-        connectionString = new SqliteConnectionStringBuilder
+        _marker = System.IO.Path.Combine(Home, ".relay-instance");
+        _connectionString = new SqliteConnectionStringBuilder
         { DataSource = Path, Mode = SqliteOpenMode.ReadWrite, ForeignKeys = true, DefaultTimeout = 10, Pooling = false }.ToString();
         // 只串行化建库和旧文件导入；普通网页和 CLI 写入由 SQLite 事务协调。
         using var startup = new Mutex(false, "Local\\HouseholdRelay-" + ConfigurationFiles.Hash(Home.ToUpperInvariant()));
@@ -52,11 +59,11 @@ public sealed class RelayDatabase : IRelayInstance
             catch (AbandonedMutexException) { acquired = true; }
             if (!acquired) throw new InvalidOperationException("另一进程正在初始化数据目录，请稍后重试。");
             protector.ProtectDirectory(State);
-            if (File.Exists(marker) != File.Exists(Path))
+            if (File.Exists(_marker) != File.Exists(Path))
                 throw new InvalidOperationException("实例标记与数据库不完整。请恢复本实例备份，不能自动重新开放首次设置。");
-            var created = !File.Exists(marker);
+            var created = !File.Exists(_marker);
             if (created) Create();
-            InstanceId = File.ReadAllText(marker).Trim();
+            InstanceId = File.ReadAllText(_marker).Trim();
             if (!Guid.TryParseExact(InstanceId, "N", out _)) throw new InvalidOperationException("实例标记损坏，请恢复备份。");
             int version;
             using (var connection = Open())
@@ -88,13 +95,13 @@ public sealed class RelayDatabase : IRelayInstance
     private void Create()
     {
         // 旧文件必须先通过校验；已有旧号直接沿用，损坏时连新实例标记也不创建。
-        var initial = LegacyImport.ReadInitialConfiguration(State) ?? new RelayConfiguration { DeviceId = deviceIds.Generate() };
+        var initial = LegacyImport.ReadInitialConfiguration(State) ?? new RelayConfiguration { DeviceId = _deviceIds.Generate() };
         initial.Validate();
         InstanceId = Guid.NewGuid().ToString("N");
         // 标记在数据库之外；写到一半即停机也不会把旧实例误认为未初始化。
-        using (var file = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+        using (var file = new FileStream(_marker, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
             file.Write(Encoding.ASCII.GetBytes(InstanceId));
-        var createString = new SqliteConnectionStringBuilder(connectionString) { Mode = SqliteOpenMode.ReadWriteCreate }.ToString();
+        var createString = new SqliteConnectionStringBuilder(_connectionString) { Mode = SqliteOpenMode.ReadWriteCreate }.ToString();
         using var connection = new SqliteConnection(createString); connection.Open();
         Execute(connection, null, "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
         using var transaction = connection.BeginTransaction();
@@ -117,10 +124,10 @@ public sealed class RelayDatabase : IRelayInstance
             PRAGMA user_version=1;
             """);
         Execute(connection, transaction, "INSERT INTO metadata VALUES('instance_id',$id),('legacy_imported','0')", ("$id", InstanceId));
-        Execute(connection, transaction, "INSERT INTO settings VALUES(1,1,$json)", ("$json", SerializeSettings(initial)));
+        Execute(connection, transaction, "INSERT INTO settings VALUES(1,1,$json)", ("$json", RelaySettings.Serialize(initial)));
         var code = ConfigurationFiles.NewToken();
         Execute(connection, transaction, "INSERT INTO bootstrap VALUES(1,$hash,$protected)",
-            ("$hash", ConfigurationFiles.Hash(code)), ("$protected", protector.Protect(Encoding.UTF8.GetBytes(code))));
+            ("$hash", ConfigurationFiles.Hash(code)), ("$protected", _protector.Protect(Encoding.UTF8.GetBytes(code))));
         transaction.Commit();
     }
 
@@ -135,7 +142,7 @@ public sealed class RelayDatabase : IRelayInstance
         var file = System.IO.Path.Combine(folder, "relay.db");
         try
         {
-            protector.ProtectDirectory(folder);
+            _protector.ProtectDirectory(folder);
             var target = new SqliteConnectionStringBuilder { DataSource = file, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false }.ToString();
             using (var source = Open())
             using (var copy = new SqliteConnection(target))
@@ -176,23 +183,22 @@ public sealed class RelayDatabase : IRelayInstance
             while (reader.Read()) archived.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3)));
         }
         var upgrade = new DatabaseUpgrade(fromVersion, Convert.ToInt32(Scalar(connection, null, "PRAGMA user_version")), DateTimeOffset.UtcNow, backup, archived);
-        Execute(connection, null, "INSERT INTO metadata VALUES('last_upgrade',$json) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            ("$json", JsonSerializer.Serialize(upgrade, ConfigurationFiles.Json)));
+        // 升级结束时库已是当前版本：metadata 带整数主键与通用实体基类的列，写明列名，时刻与行版本照 EF 的口径补上（Unix 毫秒、8 字节随机）。
+        Execute(connection, null, """
+            INSERT INTO metadata(key,value,created_at,updated_at,row_version) VALUES('last_upgrade',$json,$now,$now,randomblob(8))
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,row_version=excluded.row_version
+            """, ("$json", JsonSerializer.Serialize(upgrade, ConfigurationFiles.Json)), ("$now", upgrade.At.ToUnixTimeMilliseconds()));
     }
 
-    /// <summary>已有数据库只以读写模式打开；文件遗失时绝不悄悄建空库。</summary>
-    public SqliteConnection Open(int? timeoutSeconds = null)
+    /// <summary>迁移链与升级前备份用的连接：已有数据库只以读写模式打开，文件遗失时绝不悄悄建空库；打开前后的核对与 EF Core 的连接拦截器是同一段代码。</summary>
+    public SqliteConnection Open()
     {
-        if (!File.Exists(Path) || !File.Exists(marker) || File.ReadAllText(marker).Trim() != InstanceId)
-            throw new InvalidOperationException("实例数据不可用，请检查数据目录或恢复备份。");
-        var connection = new SqliteConnection(timeoutSeconds is null ? connectionString
-            : new SqliteConnectionStringBuilder(connectionString) { DefaultTimeout = timeoutSeconds.Value }.ToString());
+        EnsureAvailable();
+        var connection = new SqliteConnection(_connectionString);
         try
         {
             connection.Open();
-            Execute(connection, null, "PRAGMA synchronous=FULL;");
-            if ((string?)Scalar(connection, null, "SELECT value FROM metadata WHERE key='instance_id'") != InstanceId)
-                throw new InvalidOperationException("数据库不属于当前实例，请恢复配套备份。");
+            Verify(connection);
             return connection;
         }
         catch
@@ -202,70 +208,42 @@ public sealed class RelayDatabase : IRelayInstance
         }
     }
 
-    /// <summary>打开一个新连接并开启事务执行写操作，委托正常返回才提交；委托抛异常时事务随释放回滚。连接和事务只在本次调用内存在，适合本地短操作。</summary>
-    public T Write<T>(Func<SqliteConnection, SqliteTransaction, T> action)
+    /// <summary>打开连接之前：数据库文件与库外的实例标记都还在、标记里仍是本实例的编号；不对就抛出，绝不连上别的实例或空库。</summary>
+    internal void EnsureAvailable()
     {
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction();
-        var result = action(connection, transaction);
-        transaction.Commit();
-        return result;
+        if (!File.Exists(Path) || !File.Exists(_marker) || File.ReadAllText(_marker).Trim() != InstanceId)
+            throw new InvalidOperationException("实例数据不可用，请检查数据目录或恢复备份。");
     }
 
-    /// <summary>创建绑定到给定连接和事务的参数化命令，null 参数值转为数据库 NULL；所有 SQL 都经这里传参，避免拼接。返回的命令由调用方释放。</summary>
-    public static SqliteCommand Command(SqliteConnection connection, SqliteTransaction? transaction, string sql, params (string Name, object? Value)[] parameters)
+    /// <summary>打开连接之后：设完全同步（每次提交都落盘），再核对库里的实例编号与标记一致；不一致说明误用了别的实例的库或备份，抛出。</summary>
+    /// <param name="connection">刚打开的连接。</param>
+    internal void Verify(SqliteConnection connection)
+    {
+        Execute(connection, null, "PRAGMA synchronous=FULL;");
+        if ((string?)Scalar(connection, null, "SELECT value FROM metadata WHERE key='instance_id'") != InstanceId)
+            throw new InvalidOperationException("数据库不属于当前实例，请恢复配套备份。");
+    }
+
+    /// <summary>迁移链用：创建绑定到给定连接和事务的参数化命令，null 参数值转为数据库 NULL；所有 SQL 都经这里传参，避免拼接。返回的命令由调用方释放。</summary>
+    internal static SqliteCommand Command(SqliteConnection connection, SqliteTransaction? transaction, string sql, params (string Name, object? Value)[] parameters)
     {
         var command = connection.CreateCommand(); command.Transaction = transaction; command.CommandText = sql;
         foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         return command;
     }
-    /// <summary>执行一条不返回结果集的参数化 SQL，返回受影响行数；命令在方法内释放。</summary>
-    public static int Execute(SqliteConnection connection, SqliteTransaction? transaction, string sql, params (string Name, object? Value)[] parameters)
+    /// <summary>迁移链用：执行一条不返回结果集的参数化 SQL，返回受影响行数；命令在方法内释放。</summary>
+    internal static int Execute(SqliteConnection connection, SqliteTransaction? transaction, string sql, params (string Name, object? Value)[] parameters)
     { using var command = Command(connection, transaction, sql, parameters); return command.ExecuteNonQuery(); }
-    /// <summary>执行参数化查询并返回第一行第一列，数据库 NULL 或无结果都返回 null；命令在方法内释放。</summary>
-    public static object? Scalar(SqliteConnection connection, SqliteTransaction? transaction, string sql, params (string Name, object? Value)[] parameters)
+    /// <summary>迁移链用：执行参数化查询并返回第一行第一列，数据库 NULL 或无结果都返回 null；命令在方法内释放。</summary>
+    internal static object? Scalar(SqliteConnection connection, SqliteTransaction? transaction, string sql, params (string Name, object? Value)[] parameters)
     { using var command = Command(connection, transaction, sql, parameters); var value = command.ExecuteScalar(); return value is DBNull ? null : value; }
 
-    /// <summary>把配置序列化为 settings 表的 JSON：先深拷贝再清空客户端列表，因为用户和令牌哈希单独存表，不应重复写进设置。</summary>
-    internal static string SerializeSettings(RelayConfiguration config)
-    {
-        var copy = JsonSerializer.Deserialize<RelayConfiguration>(JsonSerializer.Serialize(config, ConfigurationFiles.Json), ConfigurationFiles.Json)!;
-        copy.Clients = [];
-        return JsonSerializer.Serialize(copy, ConfigurationFiles.Json);
-    }
-
-    /// <summary>反序列化并校验设置；缺失或损坏的设备编号只报告恢复，不补造身份。</summary>
-    internal static RelayConfiguration DeserializeSettings(string json)
-    {
-        try
-        {
-            var value = JsonSerializer.Deserialize<RelayConfiguration>(json, ConfigurationFiles.Json)
-                ?? throw new InvalidOperationException("实例配置损坏，请恢复配套备份。");
-            value.Validate();
-            return value;
-        }
-        // JSON 异常可能带原始内容的位置；对外只提供固定的配置恢复提示。
-        catch (JsonException) { throw new InvalidOperationException("实例配置损坏，请恢复配套备份。"); }
-    }
-
-    /// <summary>在调用方连接或事务中读取同一份设置与版本。</summary>
+    /// <summary>迁移链用：在调用方连接或事务中读取并校验设置与版本（各版本的 settings 表都有这两列）；运行时读设置经 <see cref="RelaySettings"/> 实体。</summary>
     internal static SettingsSnapshot ReadSettings(SqliteConnection connection, SqliteTransaction? transaction)
     {
         using var command = Command(connection, transaction, "SELECT version,json FROM settings WHERE id=1");
         using var reader = command.ExecuteReader();
         if (!reader.Read()) throw new InvalidOperationException("实例配置缺失，请恢复配套备份。");
-        return new(reader.GetInt64(0), DeserializeSettings(reader.GetString(1)));
-    }
-
-    /// <summary>普通配置和证书事务共同使用的写入边界：版本匹配且设备编号逐字相同时才保存。</summary>
-    internal static void SaveSettings(SqliteConnection connection, SqliteTransaction transaction, long version, RelayConfiguration config)
-    {
-        config.Validate();
-        var current = ReadSettings(connection, transaction);
-        if (!StringComparer.Ordinal.Equals(current.Value.DeviceId, config.DeviceId))
-            throw new InvalidOperationException("普通设置不能更换站点设备编号，请使用设备维护操作。");
-        if (Execute(connection, transaction, "UPDATE settings SET version=version+1,json=$json WHERE id=1 AND version=$version",
-            ("$json", SerializeSettings(config)), ("$version", version)) != 1)
-            throw new InvalidOperationException("配置已被另一页面或命令修改，请重新加载页面再保存。");
+        return new(reader.GetInt64(0), RelaySettings.Deserialize(reader.GetString(1)));
     }
 }

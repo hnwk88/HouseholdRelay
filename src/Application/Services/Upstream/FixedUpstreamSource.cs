@@ -8,10 +8,10 @@ namespace Application.Services.Upstream;
 public sealed class FixedUpstreamSource(UpstreamSnapshot snapshot) : IActiveUpstreamSource
 {
     /// <summary>始终返回同一固定快照。</summary>
-    public UpstreamSnapshot ReadActive() => snapshot;
+    public Task<UpstreamSnapshot> ReadActive() => Task.FromResult(snapshot);
 
     /// <summary>独立中转模式只有这一个固定上游，没有备用。</summary>
-    public IReadOnlyList<UpstreamSnapshot> ReadStandby() => [];
+    public Task<IReadOnlyList<UpstreamSnapshot>> ReadStandby() => Task.FromResult<IReadOnlyList<UpstreamSnapshot>>([]);
 
     /// <summary>校验凭据格式并只允许本机 HTTP 模拟上游，再按旧式配置组成版本 0 的快照。</summary>
     public static FixedUpstreamSource ForLegacy(RelayConfiguration config, string? credential, Uri? testUpstream)

@@ -19,10 +19,10 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     /// <summary>自动升级失败后这么久之内不再自动试。</summary>
     internal static readonly TimeSpan RetryAfter = TimeSpan.FromHours(1);
     /// <summary>一次升级最多等这么久（要下载安装包）。</summary>
-    private static readonly TimeSpan UpdateLimit = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan _updateLimit = TimeSpan.FromMinutes(10);
     /// <summary>升级命令原话进读句的最大字符数（含截断时补的省略号）。</summary>
     private const int QuoteLimit = 200;
-    private readonly Lock sync = new();
+    private readonly Lock _sync = new();
     private Task<string>? running;
     private Seen? seen;
     private Outcome? last;
@@ -31,7 +31,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     public void Observe(string? clientVersion, string relayVersion, long? clientId)
     {
         // 判断「要不要起」与「记下正在跑」在同一把锁里，并发的请求只会有一个起升级。
-        lock (sync)
+        lock (_sync)
         {
             seen = new(clientVersion, clientId, relayVersion, clock.GetUtcNow());
             if (ClaudeCodeClient.Compare(clientVersion, relayVersion) is not > 0 || running is not null) return;
@@ -45,7 +45,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     {
         Task<string> task;
         // 与自动升级共用同一个「正在跑」：按钮撞上后台升级时等那一次，不另起。
-        lock (sync) task = running ??= Begin();
+        lock (_sync) task = running ??= Begin();
         return task.WaitAsync(cancellation);
     }
 
@@ -54,7 +54,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     {
         Seen? client; Outcome? outcome; bool busy;
         // 三样在同一把锁里一起读，读句里的版本、结果与「正在升级」对得上。
-        lock (sync) { client = seen; outcome = last; busy = running is not null; }
+        lock (_sync) { client = seen; outcome = last; busy = running is not null; }
         var text = new StringBuilder();
         if (client is null) text.Append("还没有发往官方账户的请求，中转与客户端的 Claude Code 版本要等第一次发往官方后才读得出。");
         else
@@ -86,7 +86,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
         // 升级器自己的意外：读成失败，不让后台任务的异常无人接住。
         catch (Exception error) when (error is IOException or Win32Exception or InvalidOperationException or OperationCanceledException)
         { outcome = new(clock.GetUtcNow(), false, "升级没能完成：" + Clip(error.Message)); }
-        lock (sync) { last = outcome; running = null; }
+        lock (_sync) { last = outcome; running = null; }
         return outcome.Sentence;
     });
 
@@ -110,11 +110,11 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
         {
             using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动 claude update。");
             process.PriorityClass = ProcessPriorityClass.BelowNormal; process.StandardInput.Close();
-            using var timeout = new CancellationTokenSource(UpdateLimit);
+            using var timeout = new CancellationTokenSource(_updateLimit);
             var output = Collect(process.StandardOutput, timeout.Token); var errors = Collect(process.StandardError, timeout.Token);
             try { await process.WaitForExitAsync(timeout.Token); }
             // 到了时限还没完：结束整棵进程树，按没升上去读出。
-            catch (OperationCanceledException) { process.Kill(true); await process.WaitForExitAsync(); return new(clock.GetUtcNow(), false, $"升级超过 {UpdateLimit.TotalMinutes} 分钟没有完成，已停下，版本仍是 {before ?? "未知"}。"); }
+            catch (OperationCanceledException) { process.Kill(true); await process.WaitForExitAsync(); return new(clock.GetUtcNow(), false, $"升级超过 {_updateLimit.TotalMinutes} 分钟没有完成，已停下，版本仍是 {before ?? "未知"}。"); }
             said = (await errors + " " + await output).Trim(); exitCode = process.ExitCode;
         }
         finally

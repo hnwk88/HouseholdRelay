@@ -20,7 +20,7 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
     public async Task Run(WebApplication admin, int adminPort)
     {
         ServerCertificates? loaded = null;
-        try { loaded = certificates.LoadForServing(); }
+        try { loaded = await certificates.LoadForServing(); }
         // 证书损坏或配置不符时只降级为不启用对外 HTTPS，管理网页照常启动，让操作者能在本机重新导入证书。
         catch (Exception error) when (error is CryptographicException or InvalidOperationException)
         { Console.WriteLine("HTTPS 证书无法启用，请在本机管理页面检查证书链、域名和有效期后重新导入。"); }
@@ -31,9 +31,10 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
         Console.WriteLine($"本机管理：http://127.0.0.1:{adminPort}；按 Ctrl+C 停止。");
         // 只在这次启动刚升级过时读；之前的升级记录留在管理首页。
         if (instance.UpgradedOnOpen && instance.LastUpgrade is { } upgrade) Console.WriteLine(upgrade.Sentence());
-        var bootstrap = administrators.BootstrapCode();
+        var bootstrap = await administrators.BootstrapCode();
         if (bootstrap is not null) Console.WriteLine($"首次设置引导码（仅供本机输入）：{bootstrap}");
-        Console.WriteLine(api is null ? "对外 HTTPS 未启用，请在本机网页创建或导入证书并重启。" : certificates.ReadInfo()?.Mode == "trusted"
+        var mode = api is null ? null : (await certificates.ReadInfo())?.Mode;
+        Console.WriteLine(api is null ? "对外 HTTPS 未启用，请在本机网页创建或导入证书并重启。" : mode == "trusted"
             ? $"HTTPS 监听端口：{config.ListenPort}；请从实际客户端验证连接。"
             : $"私有 CA HTTPS 监听端口：{config.ListenPort}；请从连接页下载公共信任包，每台客户端安装一次。");
         await admin.WaitForShutdownAsync();

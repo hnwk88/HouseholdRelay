@@ -20,23 +20,23 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     IOwnedClaudeProcesses ownedProcesses, IProtocolDiagnostics? diagnostics = null) : IOfficialAccountLogin
 {
     /// <summary>令牌离到期不足这么久就让 CLI 刷新。</summary>
-    private static readonly TimeSpan RefreshMargin = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan _refreshMargin = TimeSpan.FromMinutes(5);
     /// <summary>令牌已过期时，转发最多等刷新这么久。</summary>
-    private static readonly TimeSpan RefreshWait = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan _refreshWait = TimeSpan.FromSeconds(30);
     /// <summary>同一账户两次刷新之间至少隔这么久，刷新失败时不至于每个请求都起一个 CLI。</summary>
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan _refreshInterval = TimeSpan.FromMinutes(1);
     /// <summary>删除账户时最多等被取消的刷新结束这么久，再删目录。</summary>
-    private static readonly TimeSpan RemoveWait = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan _removeWait = TimeSpan.FromSeconds(10);
     /// <summary>登录、刷新与抓取统一身份按官方接口地址解析代理。</summary>
     internal static readonly Uri OfficialTarget = new("https://" + UpstreamDetection.OfficialHost);
     // 取消源只取消不释放：没有计时器也不取等待句柄，不占非托管资源；释放了反而会让删除时的取消撞上已释放的对象。
-    private readonly Dictionary<string, (Task Task, DateTimeOffset StartedAt, CancellationTokenSource Stop)> refreshes = new(StringComparer.Ordinal);
-    /// <summary>已删除的账户主键；与 <see cref="refreshes"/> 同一把锁，删除后不再起刷新，刷新结束时发现已删除就再删一次目录。</summary>
-    private readonly HashSet<string> removed = new(StringComparer.Ordinal);
-    /// <summary>已导出搬走的账户主键；与 <see cref="refreshes"/> 同一把锁，搬走后不再起刷新，账户目录留着等管理员删除。</summary>
-    private readonly HashSet<string> moved = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (Task Task, DateTimeOffset StartedAt, CancellationTokenSource Stop)> _refreshes = new(StringComparer.Ordinal);
+    /// <summary>已删除的账户主键；与 <see cref="_refreshes"/> 同一把锁，删除后不再起刷新，刷新结束时发现已删除就再删一次目录。</summary>
+    private readonly HashSet<string> _removed = new(StringComparer.Ordinal);
+    /// <summary>已导出搬走的账户主键；与 <see cref="_refreshes"/> 同一把锁，搬走后不再起刷新，账户目录留着等管理员删除。</summary>
+    private readonly HashSet<string> _moved = new(StringComparer.Ordinal);
     /// <summary>搬走时最多等正在跑的刷新结束这么久：刷新本身限时 60 秒，多留一点余量。</summary>
-    private static readonly TimeSpan MoveWait = TimeSpan.FromSeconds(70);
+    private static readonly TimeSpan _moveWait = TimeSpan.FromSeconds(70);
 
     /// <summary>
     /// 定位 claude.exe、按全局设置解析代理（启用却取不到时抛出 <see cref="UpstreamProxyUnavailableException"/>），建好受保护的配置目录后运行 <c>claude auth login</c> 等它结束；
@@ -115,19 +115,19 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     /// <summary>账户目录里有可用的凭据文件；只读文件，不刷新、不等待，供打开页面时判断「已配置」。</summary>
     public bool HasCredential(string accountId) => Read(Directory(accountId)) is not null;
 
-    /// <summary>读最新凭据；离到期不足 <see cref="RefreshMargin"/> 时在后台让 CLI 刷新，已过期时最多等 <see cref="RefreshWait"/> 后重读，刷新不成仍返回旧令牌，由上游的拒绝触发重新登录提示。</summary>
+    /// <summary>读最新凭据；离到期不足 <see cref="_refreshMargin"/> 时在后台让 CLI 刷新，已过期时最多等 <see cref="_refreshWait"/> 后重读，刷新不成仍返回旧令牌，由上游的拒绝触发重新登录提示。</summary>
     public string? ReadAccessToken(string accountId)
     {
         // 已删除或搬走的账户不再读文件，也不能因查询状态而重新启动续期。
-        lock (refreshes) if (removed.Contains(accountId) || moved.Contains(accountId)) return null;
+        lock (_refreshes) if (_removed.Contains(accountId) || _moved.Contains(accountId)) return null;
         using var operation = siteIdentity.Enter();
         configuration.ValidateAccount(accountId);
         var directory = Directory(accountId);
         var credential = Read(directory);
-        if (credential?.ExpiresAt is not { } expires || expires - clock.GetUtcNow() > RefreshMargin) return credential?.AccessToken;
+        if (credential?.ExpiresAt is not { } expires || expires - clock.GetUtcNow() > _refreshMargin) return credential?.AccessToken;
         var refresh = Refresh(accountId, directory);
         if (expires > clock.GetUtcNow()) return credential.AccessToken;
-        refresh.Wait(RefreshWait);
+        refresh.Wait(_refreshWait);
         return Read(directory)?.AccessToken ?? credential.AccessToken;
     }
 
@@ -135,7 +135,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     public string? ReadAccountUuid(string accountId)
     {
         // 与删除、搬走共用这把锁，读到的是最新状态：已删除或搬走的账户不再读私有配置，也不因此触发续期。
-        lock (refreshes) if (removed.Contains(accountId) || moved.Contains(accountId)) return null;
+        lock (_refreshes) if (_removed.Contains(accountId) || _moved.Contains(accountId)) return null;
         return configuration.AccountUuid(accountId);
     }
 
@@ -143,12 +143,12 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     public void RecordAccount(string accountId, Core.Upstream.OfficialAccountProfile profile)
     {
         // 与删除、搬走共用这把锁判断最新状态。
-        lock (refreshes) if (removed.Contains(accountId) || moved.Contains(accountId)) throw new InvalidOperationException("这个官方账户已经删除或搬走，本机不再保存它的账户资料。");
+        lock (_refreshes) if (_removed.Contains(accountId) || _moved.Contains(accountId)) throw new InvalidOperationException("这个官方账户已经删除或搬走，本机不再保存它的账户资料。");
         configuration.RecordAccount(accountId, profile);
     }
 
     /// <summary>
-    /// 上游被删除时删掉它的账户目录：先记为已删除并取消正在跑的刷新，等它结束进程树（最多 <see cref="RemoveWait"/>）再删，免得 CLI 占着文件或把目录重新写出；
+    /// 上游被删除时删掉它的账户目录：先记为已删除并取消正在跑的刷新，等它结束进程树（最多 <see cref="_removeWait"/>）再删，免得 CLI 占着文件或把目录重新写出；
     /// 主键不合格式时拒绝，删不掉时放弃。
     /// </summary>
     public void Remove(string accountId)
@@ -156,62 +156,62 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         var directory = Directory(accountId);
         (Task Task, DateTimeOffset StartedAt, CancellationTokenSource Stop)? running = null;
         // 记已删除与取出正在跑的刷新在同一把锁里：否则刷新可能在两步之间登记，删除后又起一个 CLI 写出目录。
-        lock (refreshes)
+        lock (_refreshes)
         {
-            removed.Add(accountId);
-            if (refreshes.Remove(accountId, out var last) && !last.Task.IsCompleted) running = last;
+            _removed.Add(accountId);
+            if (_refreshes.Remove(accountId, out var last) && !last.Task.IsCompleted) running = last;
         }
         // 取消放在锁外：取消回调会同步结束进程树，不该占着刷新登记表的锁。
-        if (running is { } refresh) { refresh.Stop.Cancel(); Task.WhenAny(refresh.Task, Task.Delay(RemoveWait)).Wait(); }
+        if (running is { } refresh) { refresh.Stop.Cancel(); Task.WhenAny(refresh.Task, Task.Delay(_removeWait)).Wait(); }
         // 刚被结束的进程树可能还占着这个工作目录一小会儿：删不掉就稍等重试，最多约 5 秒，之后放弃。
         for (var attempt = 0; attempt < 25 && RemoveDirectory(directory); attempt++) Thread.Sleep(200);
     }
 
     /// <summary>
-    /// 导出即搬走：先记为已搬走（此后不再起刷新），等这些账户正在跑的刷新自己结束（最多 <see cref="MoveWait"/>，不取消，免得 CLI 死在改写凭据文件的半途），
+    /// 导出即搬走：先记为已搬走（此后不再起刷新），等这些账户正在跑的刷新自己结束（最多 <see cref="_moveWait"/>，不取消，免得 CLI 死在改写凭据文件的半途），
     /// 再按顺序读出各自的凭据文件原文交给 <paramref name="commit"/>（加密打包并在库里记为已导出）。读不到凭据、等不完刷新或 <paramref name="commit"/> 抛出时，
     /// 本次新记的账户恢复续期，异常原样抛出；读出的文件字节无论成败都清零。账户目录不删。
     /// </summary>
-    public T Export<T>(IReadOnlyList<string> accountIds, Func<IReadOnlyList<byte[]>, T> commit)
+    public async Task<T> Export<T>(IReadOnlyList<string> accountIds, Func<IReadOnlyList<byte[]>, Task<T>> commit)
     {
         var directories = accountIds.Select(Directory).ToArray();
         var added = new List<string>(); var running = new List<Task>();
         // 记已搬走与取出正在跑的刷新在同一把锁里：否则刷新可能在两步之间登记，搬走之后又换一次令牌，导出的那份就作废了。
-        lock (refreshes)
+        lock (_refreshes)
             foreach (var id in accountIds)
             {
-                if (moved.Add(id)) added.Add(id);
-                if (refreshes.TryGetValue(id, out var last) && !last.Task.IsCompleted) running.Add(last.Task);
+                if (_moved.Add(id)) added.Add(id);
+                if (_refreshes.TryGetValue(id, out var last) && !last.Task.IsCompleted) running.Add(last.Task);
             }
         var files = new List<byte[]>();
         try
         {
             // 并行等所有正在跑的刷新：它们写完凭据文件再读，导出的才是最新令牌；等不完就不导出，免得拿到马上作废的旧令牌。
-            if (!Task.WhenAll(running).Wait(MoveWait))
+            if (!Task.WhenAll(running).Wait(_moveWait))
                 throw new InvalidOperationException("要导出的官方账户正在续期，还没结束。请过一分钟再按「导出加密文件」。");
             foreach (var directory in directories)
                 files.Add(ReadFile(directory) ?? throw new InvalidOperationException("要导出的官方账户里有一家的登录凭据已经不在了。请不勾选它再导出，或者删除它后重新登录。"));
-            return commit(files);
+            return await commit(files);
         }
         // 没导出成：本次新记的账户照常续期，之前就已搬走的保持原样。
-        catch { lock (refreshes) foreach (var id in added) moved.Remove(id); throw; }
+        catch { lock (_refreshes) foreach (var id in added) _moved.Remove(id); throw; }
         // 登录文件里有访问令牌和刷新令牌：交出去加密以后无论成败都清零。
         finally { foreach (var file in files) CryptographicOperations.ZeroMemory(file); }
     }
 
-    /// <summary>同一账户同时只跑一次刷新，且两次之间至少隔 <see cref="RefreshInterval"/>；否则返回上一次的任务。已删除或已搬走的账户不再刷新。</summary>
+    /// <summary>同一账户同时只跑一次刷新，且两次之间至少隔 <see cref="_refreshInterval"/>；否则返回上一次的任务。已删除或已搬走的账户不再刷新。</summary>
     private Task Refresh(string accountId, string directory)
     {
         // 并发请求同时发现令牌快到期：查上一次刷新与登记新刷新必须在同一把锁里，否则会各起一个 CLI 同时改写凭据文件。
-        lock (refreshes)
+        lock (_refreshes)
         {
-            if (removed.Contains(accountId) || moved.Contains(accountId)) return Task.CompletedTask;
-            if (refreshes.TryGetValue(accountId, out var last) && (!last.Task.IsCompleted || clock.GetUtcNow() - last.StartedAt < RefreshInterval)) return last.Task;
+            if (_removed.Contains(accountId) || _moved.Contains(accountId)) return Task.CompletedTask;
+            if (_refreshes.TryGetValue(accountId, out var last) && (!last.Task.IsCompleted || clock.GetUtcNow() - last.StartedAt < _refreshInterval)) return last.Task;
             var operation = siteIdentity.Enter();
             var stop = new CancellationTokenSource();
             // 后台任务独立占一个许可，调用方先返回也不会让维护漏掉仍在写凭据的 CLI。
             var task = Task.Run(async () => { using (operation) await RunRefresh(accountId, directory, stop.Token); });
-            refreshes[accountId] = (task, clock.GetUtcNow(), stop);
+            _refreshes[accountId] = (task, clock.GetUtcNow(), stop);
             return task;
         }
     }
@@ -238,7 +238,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         }
         bool gone;
         // 已删除集合与删除方共用这把锁，读到的是删除之后的最新状态。
-        lock (refreshes) gone = removed.Contains(accountId);
+        lock (_refreshes) gone = _removed.Contains(accountId);
         // 刷新途中上游被删：CLI 可能在删除之后又写出了目录，这里补删，不留残目录。
         if (gone) RemoveDirectory(directory);
     }

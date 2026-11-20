@@ -5,7 +5,7 @@
   ],
   "说明": {
     "护住什么": "仓储只做通用数据搬运，不碰网络（HttpClient、IHttpClientFactory）和对象映射（IMapper）。守的规则：[GZ-S-047]。",
-    "口径": "仓储文件＝src 下文件名以 Repository.cs 结尾的 .cs，按原文找整词，每处一条（注释里写了也报）。",
+    "口径": "仓储文件＝src 与 Helpers 下文件名以 Repository.cs 结尾的 .cs（运行时仓储只剩中康通用仓储 Helpers/Repositories，2026-11-20 起一并选中），按原文找整词，每处一条（注释里写了也报）。",
     "来源": "中康 zk-architecture 包 check_layer_dependency_boundaries 第一段原样拆出（2026-11-18）；第二段「Helpers 不引用业务项目命名空间」属第二批 check_helpers_no_project_reference。"
   },
   "pipeline": [
@@ -24,7 +24,8 @@
             {
               "type": "root",
               "value": [
-                "src"
+                "src",
+                "Helpers"
               ]
             },
             {
@@ -38,7 +39,7 @@
             {
               "type": "includePath",
               "value": [
-                "^src/([^/]+/)*[^/]*Repository\\.cs$"
+                "^(?:src|Helpers)/([^/]+/)*[^/]*Repository\\.cs$"
               ]
             }
           ],

@@ -6,9 +6,9 @@ namespace Core.Relay;
 /// <summary>按全局并发、单人并发、排队长度和每分钟次数准入中转请求。</summary>
 public sealed class Admission(RelayConfiguration config)
 {
-    private readonly SemaphoreSlim global = new(config.MaxConcurrent);
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new();
-    private readonly ConcurrentDictionary<string, (long Minute, int Count)> rates = new();
+    private readonly SemaphoreSlim _global = new(config.MaxConcurrent);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new();
+    private readonly ConcurrentDictionary<string, (long Minute, int Count)> _rates = new();
     private int queued, active;
     /// <summary>当前正在排队等待名额的请求数（含刚进入、尚未拿到名额的）；无锁读取的瞬时值，仅供状态展示。</summary>
     public int Queued => Volatile.Read(ref queued);
@@ -20,7 +20,7 @@ public sealed class Admission(RelayConfiguration config)
     public void CheckRate(string name)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds(); var minute = now / 60;
-        var item = rates.AddOrUpdate(name, (minute, 1), (_, previous) => previous.Minute == minute ? (minute, previous.Count + 1) : (minute, 1));
+        var item = _rates.AddOrUpdate(name, (minute, 1), (_, previous) => previous.Minute == minute ? (minute, previous.Count + 1) : (minute, 1));
         if (item.Count > config.RequestsPerMinute) throw new RelayFailure(429, "Client request rate limit reached.", (int)(60 - now % 60));
     }
 
@@ -34,7 +34,7 @@ public sealed class Admission(RelayConfiguration config)
         if (Interlocked.Increment(ref queued) > config.MaxQueued)
         { Interlocked.Decrement(ref queued); throw new RelayFailure(429, "Relay queue is full.", 5); }
         // 每个客户端一个信号量，按名称懒创建且从不移除；GetOrAdd 在并发下可能多建一个但只有一个会被存下并共用。
-        var gate = gates.GetOrAdd(name, _ => new SemaphoreSlim(config.MaxPerClient));
+        var gate = _gates.GetOrAdd(name, _ => new SemaphoreSlim(config.MaxPerClient));
         var gotClient = false; var gotGlobal = false;
         // 链接调用方的取消令牌，再叠加排队超时；using 保证无论成功失败都释放计时器资源。
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
@@ -43,8 +43,8 @@ public sealed class Admission(RelayConfiguration config)
         try
         {
             await gate.WaitAsync(timeout.Token); gotClient = true;
-            await global.WaitAsync(timeout.Token); gotGlobal = true; Interlocked.Increment(ref active);
-            return new Release(() => { Interlocked.Decrement(ref active); global.Release(); gate.Release(); });
+            await _global.WaitAsync(timeout.Token); gotGlobal = true; Interlocked.Increment(ref active);
+            return new Release(() => { Interlocked.Decrement(ref active); _global.Release(); gate.Release(); });
         }
         // 只有排队超时才转成 429；调用方自己取消（如客户端断开）时不拦截，让取消按原异常向上传播。
         catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)

@@ -33,12 +33,12 @@ public sealed class UsageModel(IUsageService usage, IIdentityService identities)
     /// <summary>查询得到的用量明细与统计；筛选条件不合法或模型绑定失败时为空。</summary>
     public UsageReport? Report { get; private set; }
     /// <summary>打开管理员用量页（需已登录）：补齐粒度与时区缺省值，校验筛选条件后查询报告，只读。</summary>
-    public void OnGet()
+    public async Task OnGetAsync()
     {
         Granularity ??= "day"; TimeZone ??= TimeZoneInfo.Local.Id;
-        Users = identities.List();
+        Users = await identities.List();
         if (!ModelState.IsValid) return;
-        try { Report = usage.Query(new(UserId, From, Until, Kind, ModelName, Outcome, PageNumber, Granularity, TimeZone)); }
+        try { Report = await usage.Query(new(UserId, From, Until, Kind, ModelName, Outcome, PageNumber, Granularity, TimeZone)); }
         // 筛选条件不合法（时间倒置、未知类别或时区等）时抛 InvalidOperationException，只显示为页面错误，不展示报告。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
     }

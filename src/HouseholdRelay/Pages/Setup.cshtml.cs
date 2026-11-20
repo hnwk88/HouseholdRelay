@@ -15,15 +15,15 @@ public sealed class SetupModel(IAdministratorService administrators) : PageModel
     /// <summary>再次输入的管理密码，须与 <see cref="Password"/> 一致；处理后清空。</summary>
     [BindProperty] public string Confirmation { get; set; } = "";
     /// <summary>打开首次设置页：已初始化时返回 404，否则显示表单。</summary>
-    public IActionResult OnGet() => administrators.IsInitialized ? NotFound() : Page();
+    public async Task<IActionResult> OnGetAsync() => await administrators.IsInitialized() ? NotFound() : Page();
     /// <summary>提交首次设置：已初始化则 404；两次密码一致且引导码正确时创建管理员并跳转登录页。失败时清空全部输入及其模型状态再显示错误。</summary>
-    public IActionResult OnPost()
+    public async Task<IActionResult> OnPostAsync()
     {
-        if (administrators.IsInitialized) return NotFound();
+        if (await administrators.IsInitialized()) return NotFound();
         if (Password != Confirmation) ModelState.AddModelError("", "两次输入的管理密码不一致。");
         if (ModelState.IsValid)
         {
-            try { administrators.Initialize(Code, Password); return RedirectToPage("/Login", new { setup = true }); }
+            try { await administrators.Initialize(Code, Password); return RedirectToPage("/Login", new { setup = true }); }
             // 密码长度不在 12–128 个字符、引导码不正确等业务拒绝都抛 InvalidOperationException，只显示为表单错误，不创建管理员。
             catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         }

@@ -47,7 +47,7 @@ public static class Program
                     using var services = CompositionRoot.BuildCommandServices(home);
                     using var serving = services.GetRequiredService<IServingLock>().Acquire();
                     await services.GetRequiredService<ISiteIdentityService>().Prepare(CancellationToken.None);
-                    services.GetRequiredService<ManagementCommands>().SetAccount(); break;
+                    await services.GetRequiredService<ManagementCommands>().SetAccount(); break;
                 }
                 case "serve":
                 {
@@ -59,7 +59,7 @@ public static class Program
                 case "clients":
                 {
                     using var services = CompositionRoot.BuildCommandServices(home);
-                    services.GetRequiredService<ManagementCommands>().ManageClient(args.ElementAtOrDefault(1) ?? "list", Option("--name"), Option("--id"), Option("--display-name")); break;
+                    await services.GetRequiredService<ManagementCommands>().ManageClient(args.ElementAtOrDefault(1) ?? "list", Option("--name"), Option("--id"), Option("--display-name")); break;
                 }
                 case "client":
                 {
@@ -75,8 +75,9 @@ public static class Program
         // 本程序把参数错误、业务拒绝统一抛成 InvalidOperationException，消息本身就是写给操作者的中文提示，可以原样输出。
         catch (InvalidOperationException error) { Console.Error.WriteLine(error.Message); return 1; }
         // 数据库失败只输出错误码，不输出 SQL 或路径细节；并明确告知不会因此重新开放首次设置，避免误以为可借故障重置管理员。
-        catch (Microsoft.Data.Sqlite.SqliteException error)
-        { Console.Error.WriteLine($"数据库操作失败（SQLite {error.SqliteErrorCode}）。请检查数据目录权限、文件占用及备份完整性；不会重新开放首次设置。"); return 1; }
+        // 经 EF 写库时 SQLite 异常包在 DbUpdateException 里，取内层的错误码，读句与直接失败时相同。
+        catch (Exception error) when ((error as Microsoft.Data.Sqlite.SqliteException ?? error.InnerException as Microsoft.Data.Sqlite.SqliteException) is { } sqlite)
+        { Console.Error.WriteLine($"数据库操作失败（SQLite {sqlite.SqliteErrorCode}）。请检查数据目录权限、文件占用及备份完整性；不会重新开放首次设置。"); return 1; }
         // 文件、Windows 凭据、端口和加解密失败的原始消息可能带路径或密钥信息，这里只给归类后的排查方向。
         catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Console.Error.WriteLine("文件、Windows 凭据或端口操作失败。请检查路径、当前 Windows 用户及端口占用。"); return 1; }

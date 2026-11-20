@@ -1,6 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <!-- 服务接口、仓储接口、外部来源接口、跨边界数据类型与不依赖具体技术的用例服务；只引用 Core 和抽象包（台账 D-005）。 -->
+  <!--
+    服务接口、外部来源接口、跨边界数据类型与不依赖具体技术的用例服务；只引用 Core 和抽象包（台账 D-005）。
+    数据一律经通用仓储 IRepository<T>（Core 引用的 Repositories.Abstractions）存取；引用 EF Core 只为接住 DbUpdateException 与 DbUpdateConcurrencyException，不使用 DbContext。
+  -->
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.10" />
   </ItemGroup>

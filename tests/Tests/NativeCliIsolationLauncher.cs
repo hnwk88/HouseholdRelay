@@ -11,7 +11,7 @@ namespace Tests;
 sealed class NativeCliIsolationLauncher : IClientLauncher
 {
     private const string Variable = "HOUSEHOLD_NATIVE_CLAUDE";
-    private readonly IClientLauncher original = new ClientLauncher();
+    private readonly IClientLauncher _original = new ClientLauncher();
 
     /// <summary>核对受控环境变量、临时目录形状和规则回执；缺少隔离时在创建进程之前拒绝。</summary>
     public string FindClaude()
@@ -61,7 +61,7 @@ sealed class NativeCliIsolationLauncher : IClientLauncher
     /// <summary>沿用客户端包协议后替换为专用程序，并清除全部代理，防止经本机个人代理绕过非回环规则。</summary>
     public ProcessStartInfo Prepare(string bundleDirectory, IEnumerable<string> arguments)
     {
-        var executable = FindClaude(); var start = original.Prepare(bundleDirectory, arguments); start.FileName = executable;
+        var executable = FindClaude(); var start = _original.Prepare(bundleDirectory, arguments); start.FileName = executable;
         ChildProxyEnvironment.Apply(start, new ProxyRoute(null, "localhost,127.0.0.1,::1", "测试仅回环"));
         return start;
     }

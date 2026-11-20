@@ -8,24 +8,24 @@ namespace Tests;
 sealed class TestProcess
 {
     // 不打开数据库的无状态组件（证书签发、客户端定位）由一个共享容器提供。
-    private static readonly ServiceProvider Shared = new ServiceCollection().AddInfrastructure(options => options.Home = Path.GetTempPath()).BuildServiceProvider();
+    private static readonly ServiceProvider _shared = new ServiceCollection().AddInfrastructure(options => options.Home = Path.GetTempPath()).BuildServiceProvider();
     /// <summary>证书签发与加载。</summary>
-    public static ICertificateFactory CertificateFactory => Shared.GetRequiredService<ICertificateFactory>();
+    public static ICertificateFactory CertificateFactory => _shared.GetRequiredService<ICertificateFactory>();
     /// <summary>本机 Claude Code 定位与启动。</summary>
-    public static IClientLauncher ClientLauncher => Shared.GetRequiredService<IClientLauncher>();
+    public static IClientLauncher ClientLauncher => _shared.GetRequiredService<IClientLauncher>();
     /// <summary>离线真 CLI 用例专用启动器，缺少复制程序和防火墙回执时拒绝启动。</summary>
     public static IClientLauncher IsolatedClientLauncher { get; } = new NativeCliIsolationLauncher();
 
-    private readonly ServiceProvider provider;
+    private readonly ServiceProvider _provider;
     /// <summary>以数据目录、可选的固定时钟和可选的迁移注入点组装一个独立进程的容器。</summary>
     public TestProcess(string home, TimeProvider? clock = null, Action? migrationCheckpoint = null)
     {
         var services = new ServiceCollection().AddHouseholdRelay(options => { options.Home = home; options.MigrationCheckpoint = migrationCheckpoint; });
         if (clock is not null) services.AddSingleton<TimeProvider>(clock);
-        provider = services.BuildServiceProvider();
+        _provider = services.BuildServiceProvider();
     }
     /// <summary>从本进程容器取服务。</summary>
-    public T Get<T>() where T : notnull => provider.GetRequiredService<T>();
+    public T Get<T>() where T : notnull => _provider.GetRequiredService<T>();
     /// <summary>本进程的数据库；首次取用时打开并完成迁移。</summary>
     public RelayDatabase Database => Get<RelayDatabase>();
     /// <summary>配置服务。</summary>
@@ -38,13 +38,20 @@ sealed class TestProcess
     public IUpstreamService Upstreams => Get<IUpstreamService>();
     /// <summary>证书服务（具体类型，以便调用测试专用的内部重载）。</summary>
     public CertificateService Certificates => (CertificateService)Get<ICertificateService>();
+    /// <summary>站点身份服务（具体类型），用它的内部存取方法核对库里的持久身份；取代已删除的站点身份仓储。</summary>
+    public Application.Services.Configuration.SiteIdentityService SiteIdentityStore => (Application.Services.Configuration.SiteIdentityService)Get<ISiteIdentityService>();
     /// <summary>用量服务。</summary>
     public IUsageService Usage => Get<IUsageService>();
     /// <summary>费率服务。</summary>
     public IUsagePricingService Pricing => Get<IUsagePricingService>();
     /// <summary>直接解密活动行里的凭据（不经上游服务，库还没升级完时也能读）；未配置时为 null。</summary>
-    public string? ActiveCredential() => Get<IUpstreamRepository>().ReadActiveCredential() is { } encrypted
-        ? System.Text.Encoding.UTF8.GetString(Get<Application.Interfaces.Security.ISecretProtector>().Unprotect(encrypted)) : null;
+    public string? ActiveCredential()
+    {
+        // 旧上游仓储已删除；与它原来的读法相同，直接读活动行的密文列再解密。
+        using var connection = Database.Open();
+        return RelayDatabase.Scalar(connection, null, "SELECT credential FROM upstream WHERE id=1") is byte[] encrypted
+            ? System.Text.Encoding.UTF8.GetString(Get<Application.Interfaces.Security.ISecretProtector>().Unprotect(encrypted)) : null;
+    }
 
     /// <summary>不连数据库的独立中转容器：固定凭据、可选模拟上游、可选鉴权名单、事件日志与代理解析器（给出时取代按启动配置解析的默认实现）。</summary>
     public static ServiceProvider StandaloneRelay(RelayConfiguration config, string? credential, Uri? testUpstream = null, ClientRegistry? clients = null, IRelayEventLog? log = null, IUpstreamProxy? proxy = null)

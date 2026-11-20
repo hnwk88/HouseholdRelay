@@ -9,7 +9,7 @@ namespace Tests;
 public static class DeviceMetadataTests
 {
     /// <summary>本组测试的站点编号；与所有模拟下游设备编号不同。</summary>
-    private static readonly string Canonical = new('c', 64);
+    private static readonly string _canonical = new('c', 64);
 
     /// <summary>本组官方登录账户目录里的 oauthAccount.accountUuid；与所有模拟下游账户段不同。</summary>
     private const string Account = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
@@ -26,13 +26,13 @@ public static class DeviceMetadataTests
         foreach (var (template, device, account) in Supported())
         {
             var input = Encoding.UTF8.GetBytes(Fill(template, device, account));
-            var expected = Encoding.UTF8.GetBytes(Fill(template, Canonical, Account));
-            var normalized = DeviceMetadata.ForOfficial("/v1/messages", input, Canonical, true, Account);
+            var expected = Encoding.UTF8.GetBytes(Fill(template, _canonical, Account));
+            var normalized = DeviceMetadata.ForOfficial("/v1/messages", input, _canonical, true, Account);
             Check(normalized.SequenceEqual(expected), "Only the device and account value bytes may change, including nested JSON escapes.");
-            Check(ReferenceEquals(normalized, DeviceMetadata.ForOfficial("/v1/messages", normalized, Canonical, true, Account)), "The current device and account identity need no second copy.");
-            var manual = DeviceMetadata.ForOfficial("/v1/messages", input, Canonical, false, null);
-            Check(manual.SequenceEqual(Encoding.UTF8.GetBytes(Fill(template, Canonical, account))), "Without an account directory the account segment stays exactly as the client sent it.");
-            using var request = transport.Request("/v1/messages", "?beta=true", input, "POST", "unused", identity: identity, deviceId: Canonical);
+            Check(ReferenceEquals(normalized, DeviceMetadata.ForOfficial("/v1/messages", normalized, _canonical, true, Account)), "The current device and account identity need no second copy.");
+            var manual = DeviceMetadata.ForOfficial("/v1/messages", input, _canonical, false, null);
+            Check(manual.SequenceEqual(Encoding.UTF8.GetBytes(Fill(template, _canonical, account))), "Without an account directory the account segment stays exactly as the client sent it.");
+            using var request = transport.Request("/v1/messages", "?beta=true", input, "POST", "unused", identity: identity, deviceId: _canonical);
             using var response = await transport.Send(request, CancellationToken.None);
             Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(expected), "The common outbound boundary must apply the same byte-preserving rule.");
         }
@@ -47,8 +47,8 @@ public static class DeviceMetadataTests
         foreach (var missing in new string?[] { null, "", "not-a-uuid", "{" + Account + "}" })
         {
             using var held = new UpstreamConnection(new(1, mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret", accountUuid: missing), Proxy());
-            Reject(() => held.Request("/v1/messages", "", body, "POST", "unused", identity: Identity(), deviceId: Canonical), 503);
-            Reject(() => held.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: Canonical), 503);
+            Reject(() => held.Request("/v1/messages", "", body, "POST", "unused", identity: Identity(), deviceId: _canonical), 503);
+            Reject(() => held.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: _canonical), 503);
             held.CheckState();
             Check(!held.Paused && held.CooldownSeconds == 0, "A missing account identity is a local block, not an upstream pause or cooldown.");
         }
@@ -85,7 +85,7 @@ public static class DeviceMetadataTests
         {
             try
             {
-                using var request = transport.Request("/v1/messages", "", Encoding.UTF8.GetBytes(body), "POST", "unused", identity: Identity(), deviceId: Canonical);
+                using var request = transport.Request("/v1/messages", "", Encoding.UTF8.GetBytes(body), "POST", "unused", identity: Identity(), deviceId: _canonical);
                 using var response = await transport.Send(request, CancellationToken.None);
                 Check(false, "Unsupported metadata must fail locally before dispatch.");
             }
@@ -123,15 +123,15 @@ public static class DeviceMetadataTests
         { api.CheckState(); Check(api.Usable, "Official maintenance does not close independent API admission."); }
         using var official = Connection(mock);
         var count = Encoding.UTF8.GetBytes("{ \"model\":\"fixture-model\", \"messages\":[], \"tools\":[], \"extension\":{\"metadata\":\"nested-business-data\"} }");
-        using (var models = official.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: Canonical))
+        using (var models = official.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: _canonical))
         using (var response = await official.Send(models, CancellationToken.None)) Check(response.IsSuccessStatusCode);
-        using (var request = official.Request("/v1/messages/count_tokens", "", count, "POST", "unused", identity: Identity(), deviceId: Canonical))
+        using (var request = official.Request("/v1/messages/count_tokens", "", count, "POST", "unused", identity: Identity(), deviceId: _canonical))
         using (var response = await official.Send(request, CancellationToken.None))
             Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(count), "Count requests without top-level metadata remain byte-identical.");
-        Reject(() => official.Request("/v1/models", "", "{}"u8.ToArray(), "GET", "unused", identity: Identity(), deviceId: Canonical), 400);
-        Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"metadata\":null}"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: Canonical), 400);
-        Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"meta\\u0064ata\":{}}"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: Canonical), 400);
-        Reject(() => official.Request("/v1/messages/count_tokens", "", "[]"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: Canonical), 400);
+        Reject(() => official.Request("/v1/models", "", "{}"u8.ToArray(), "GET", "unused", identity: Identity(), deviceId: _canonical), 400);
+        Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"metadata\":null}"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: _canonical), 400);
+        Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"meta\\u0064ata\":{}}"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: _canonical), 400);
+        Reject(() => official.Request("/v1/messages/count_tokens", "", "[]"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: _canonical), 400);
         Reject(() => official.Request("/v1/models", "", [], "GET", "unused", identity: Identity()), 503);
         Reject(() => official.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: "invalid"), 503);
         Check(mock.Calls.Count == 2 && !official.Paused && official.CooldownSeconds == 0, "Rejected endpoint variants do not send or change upstream state.");
@@ -181,7 +181,7 @@ public static class DeviceMetadataTests
         var body = Encoding.UTF8.GetBytes(Wrap("\"user_" + new string('a', 64) + "_account_account_session_session\""));
         var headers = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues> { ["Accept-Encoding"] = "gzip, deflate, br, zstd" };
         using var official = Connection(mock);
-        using (var request = official.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, Identity(), Canonical))
+        using (var request = official.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, Identity(), _canonical))
             Check(request.Headers.AcceptEncoding.ToString() == "gzip, deflate, br, zstd", "Official path forwards the client's Accept-Encoding verbatim: " + request.Headers.AcceptEncoding);
         using var api = new UpstreamConnection(new(1, mock.Options(), "fixture-secret"), Proxy());
         using (var request = api.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers))
@@ -195,7 +195,7 @@ public static class DeviceMetadataTests
         var body = Encoding.UTF8.GetBytes(Wrap("\"user_" + new string('a', 64) + "_account_account_session_session\""));
         var headers = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues> { ["anthropic-beta"] = "zeta-2026-01-01,alpha-2026-02-02" };
         using var official = new UpstreamConnection(new(1, mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true, OAuthBeta = true }, "fixture-secret", accountUuid: Account), Proxy());
-        using (var request = official.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, Identity(), Canonical))
+        using (var request = official.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, Identity(), _canonical))
         {
             Check(request.Version == System.Net.HttpVersion.Version11 && request.VersionPolicy == System.Net.Http.HttpVersionPolicy.RequestVersionExact, "Official requests use HTTP/1.1 like the native client");
             Check(request.Headers.Connection.Contains("keep-alive"), "Official requests carry Connection: keep-alive like the native client");

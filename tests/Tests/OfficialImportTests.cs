@@ -27,7 +27,7 @@ static class OfficialImportTests
         var raw = await page.Content.ReadAsStringAsync(); var html = WebUtility.HtmlDecode(raw);
         Check(page.IsSuccessStatusCode && html.Contains($"登录文件已导入，已保存为「{FakeClaude.Email}」。已获取 1 个模型") && html.Contains("<option value=\"fixture-model\""), html);
         Check(!raw.Contains(ImportedToken) && !raw.Contains("fixture-refresh-token"), "Imported tokens must not appear on the page");
-        var candidate = web.Upstreams.LatestCandidate()!;
+        var candidate = (await web.Upstreams.LatestCandidate())!;
         Check(candidate.Name == FakeClaude.Email && candidate.Options is { OfficialLogin: true, Mode: "oauth", Authentication: "bearer" });
         var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate.Uid);
         Check(File.ReadAllBytes(Path.Combine(directory, OfficialCredential.FileName)).SequenceEqual(content), "The imported file must be stored verbatim");
@@ -53,11 +53,11 @@ static class OfficialImportTests
             Check(page.IsSuccessStatusCode && html.Contains("登录文件已导入，已保存为「过期的导入」。已获取 1 个模型"), html);
         }
         Check(mock.Calls.Single(call => call.Path.Contains("/models")).Headers["Authorization"] == "Bearer " + FakeClaude.RefreshedToken, "Model discovery must wait for the refresh");
-        var id = web.Upstreams.LatestCandidate()!.Id;
-        web.Upstreams.ChooseModel(id, "fixture-model");
+        var id = (await web.Upstreams.LatestCandidate())!.Id;
+        await web.Upstreams.ChooseModel(id, "fixture-model");
         var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None);
-        Check(report.CanActivate, report.Message); web.Upstreams.Activate(id);
-        var person = web.Identities.Create("导入测试");
+        Check(report.CanActivate, report.Message); await web.Upstreams.Activate(id);
+        var person = await web.Identities.Create("导入测试");
         using (var relayed = await UpstreamFixture.RelayRequest(web, person.Token)) Check(relayed.StatusCode == HttpStatusCode.OK);
         Check(mock.Calls.Last().Headers["Authorization"] == "Bearer " + FakeClaude.RefreshedToken);
     }
@@ -70,10 +70,10 @@ static class OfficialImportTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var service = web.Upstreams;
-        try { await service.ImportOfficial(service.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, FakeClaude.Credential(ImportedToken, 60), new string('名', 41), CancellationToken.None); Check(false, "Overlong name must be refused"); }
+        try { await service.ImportOfficial((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, FakeClaude.Credential(ImportedToken, 60), new string('名', 41), CancellationToken.None); Check(false, "Overlong name must be refused"); }
         // 预期的拒绝：名称超长在落盘前就读出要求。
         catch (InvalidOperationException error) { Check(error.Message.Contains("供应商名称"), error.Message); }
-        Check(NoAccountDirectories(web) && service.ListCandidates().Count == 0);
+        Check(NoAccountDirectories(web) && (await service.ListCandidates()).Count == 0);
     }
 
     /// <summary>选的文件不是 JSON：读出「不是 JSON」与文件在哪，不复述文件内容。</summary>
@@ -98,14 +98,14 @@ static class OfficialImportTests
         var raw = await page.Content.ReadAsStringAsync(); var html = WebUtility.HtmlDecode(raw);
         Check(page.IsSuccessStatusCode && html.Contains(expected), expected + " / " + html);
         Check(!raw.Contains(ImportedToken), "Refusals must not echo the file");
-        Check(web.Upstreams.ListCandidates().Count == 0 && NoAccountDirectories(web), expected);
+        Check((await web.Upstreams.ListCandidates()).Count == 0 && NoAccountDirectories(web), expected);
     }
 
     /// <summary>「导入登录文件」表单的普通字段：名称、指向模拟上游的地址与私网开关、版本和防伪令牌。</summary>
     private static async Task<Dictionary<string, string>> Form(WebFixture web, UpstreamFixture mock, string name) => new()
     {
         ["Import.Name"] = name, ["Import.BaseUrl"] = mock.Url, ["Import.AllowPrivateNetwork"] = "true",
-        ["Version"] = web.Upstreams.ReadActive().Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+        ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
     };
 
     /// <summary>数据目录下没有任何官方账户目录（目录本身不存在或为空）。</summary>

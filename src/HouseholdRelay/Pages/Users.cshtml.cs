@@ -15,24 +15,24 @@ public sealed class UsersModel(IIdentityService identities) : PageModel
     /// <summary>操作成功后的提示，说明权限变化立即生效。</summary>
     public string? Notice { get; private set; }
     /// <summary>打开使用者管理页（需已登录）：列出全部使用者，只读。</summary>
-    public void OnGet() => Users = identities.List();
+    public async Task OnGetAsync() => Users = await identities.List();
     /// <summary>新增使用者并签发个人令牌（需已登录且通过防 CSRF 校验）；令牌只在本次页面展示一次。</summary>
-    public IActionResult OnPostCreate(string displayName) => Change(() => Issued = identities.Create(displayName ?? ""));
+    public Task<IActionResult> OnPostCreateAsync(string displayName) => Change(async () => Issued = await identities.Create(displayName ?? ""));
     /// <summary>修改使用者显示名（需已登录且通过防 CSRF 校验）；不影响其令牌。</summary>
-    public IActionResult OnPostRename(long userId, string displayName) => Change(() => identities.Rename(userId, displayName ?? ""));
+    public Task<IActionResult> OnPostRenameAsync(long userId, string displayName) => Change(() => identities.Rename(userId, displayName ?? ""));
     /// <summary>启用或停用使用者（需已登录且通过防 CSRF 校验）；停用后新请求立即被拒，已发往上游的请求可以结束。</summary>
-    public IActionResult OnPostEnable(long userId, bool enabled) => Change(() => identities.SetEnabled(userId, enabled));
+    public Task<IActionResult> OnPostEnableAsync(long userId, bool enabled) => Change(() => identities.SetEnabled(userId, enabled));
     /// <summary>轮换个人令牌（需已登录且通过防 CSRF 校验）：旧令牌立即失效，新令牌只在本次页面展示一次。</summary>
-    public IActionResult OnPostRotate(long userId) => Change(() => Issued = identities.Rotate(userId));
+    public Task<IActionResult> OnPostRotateAsync(long userId) => Change(async () => Issued = await identities.Rotate(userId));
     /// <summary>各写操作的公共流程：模型绑定通过才执行，业务拒绝转成表单错误，最后重新读取使用者列表并渲染页面。</summary>
-    private IActionResult Change(Action action)
+    private async Task<IActionResult> Change(Func<Task> action)
     {
         if (ModelState.IsValid)
         {
-            try { action(); Notice = "已保存，新的权限检查立即生效。已发往上游的请求可以结束。"; }
+            try { await action(); Notice = "已保存，新的权限检查立即生效。已发往上游的请求可以结束。"; }
             // 显示名不合法、使用者不存在等业务拒绝只显示为表单错误，身份库保持原样。
             catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         }
-        Users = identities.List(); return Page();
+        Users = await identities.List(); return Page();
     }
 }

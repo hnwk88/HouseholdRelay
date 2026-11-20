@@ -14,11 +14,11 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
 {
     /// <summary>换掉的那一家暂避多久。</summary>
     internal static readonly TimeSpan AvoidFor = TimeSpan.FromMinutes(5);
-    private readonly object sync = new();
-    private readonly int maxConnections = config.MaxConcurrent;
+    private readonly object _sync = new();
+    private readonly int _maxConnections = config.MaxConcurrent;
     private UpstreamConnection? current;
     /// <summary>备用上游的连接，按已保存上游主键；<see cref="order"/> 记最近一次读到的上游页顺序。</summary>
-    private readonly Dictionary<long, UpstreamConnection> standby = [];
+    private readonly Dictionary<long, UpstreamConnection> _standby = [];
     private List<long> order = [];
     /// <summary>每次读快照前领的序号，越大越新；<see cref="installed"/> 与 <see cref="standbyInstalled"/> 是当前在用与备用连接所用快照的序号。</summary>
     private long reads, installed, standbyInstalled;
@@ -29,50 +29,50 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     /// 取得当前活动版本的连接租约；版本不变但凭据换了（官方登录账户的令牌被 CLI 刷新）时也换新连接，新连接不带旧令牌的认证暂停。
     /// 读快照在锁外进行：官方登录令牌过期时读取可能要等刷新（最多 30 秒），不能让其他请求排在锁后面。
     /// </summary>
-    public IUpstreamLease Acquire() => Active(out _);
+    public async Task<IUpstreamLease> Acquire() => (await Active()).Connection;
 
     /// <summary>
     /// 取得这次请求的尝试顺序：先只读在用那一家，备用上游等真要用时才读。开关取这次新读的快照：
     /// 连接只在版本或凭据变化时重建，沿用的连接里记的是旧快照，开关保存后不重建连接也要立即生效。
     /// </summary>
-    public IUpstreamRoute Route() { var active = Active(out var failover); return new UpstreamRoute(this, active, failover, clock); }
+    public async Task<IUpstreamRoute> Route() { var (active, failover) = await Active(); return new UpstreamRoute(this, active, failover, clock); }
 
     /// <summary>此刻的走法：最近一次接住请求的那家，以及在用与备用里暂停、冷却、暂避中的各家（在用的排前，备用按上游页顺序）。</summary>
     public UpstreamRouting Routing()
     {
         var now = clock.GetUtcNow();
         // 读在用与备用连接要和替换它们的 Active、Standby 互斥，否则可能读到刚被释放、正被换下的连接。
-        lock (sync)
+        lock (_sync)
         {
-            var connections = new[] { current }.Concat(order.Select(id => standby.GetValueOrDefault(id)));
+            var connections = new[] { current }.Concat(order.Select(id => _standby.GetValueOrDefault(id)));
             return new(servedId, servedAt, connections.Select(connection => connection?.Held(now)).OfType<UpstreamAvoidance>().ToArray());
         }
     }
 
-    /// <summary>在用那一家的连接，已增加一次引用；<paramref name="failover"/> 是这次读到的自动切换开关。</summary>
-    private UpstreamConnection Active(out bool failover)
+    /// <summary>在用那一家的连接（已增加一次引用）与这次读到的自动切换开关。</summary>
+    private async Task<(UpstreamConnection Connection, bool Failover)> Active()
     {
         var read = Interlocked.Increment(ref reads);
-        var snapshot = source.ReadActive(); failover = snapshot.Failover;
+        var snapshot = await source.ReadActive(); var failover = snapshot.Failover;
         // 比较、替换连接和增加引用必须在同一把锁里完成，否则并发请求可能拿到刚被释放的旧连接或各自建出重复连接。
-        lock (sync)
+        lock (_sync)
         {
             // 比当前连接晚开始读的快照才可能更新；先开始、后读完的慢读不能把已换上的新连接换回去，此时沿用当前连接。
             if (current is not null && snapshot.BlockedByIdentity && current.Snapshot.Version == snapshot.Version
-                && current.Snapshot.CandidateId == snapshot.CandidateId && current.Snapshot.Options == snapshot.Options)
+                && current.Snapshot.UpstreamCandidateId == snapshot.UpstreamCandidateId && current.Snapshot.Options == snapshot.Options)
             {
                 if (read > installed) { installed = read; current.SetIdentityReadBlocked(true, snapshot.BlockedReason); }
-                return current.Retain();
+                return (current.Retain(), failover);
             }
             // 账户编号和凭据一样随账户目录变化（重新登录换了账户）；不比它会让在用连接继续带旧账户段。
             if (current is null || read > installed && (current.Snapshot.Version != snapshot.Version || !string.Equals(current.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
                 || !string.Equals(current.Snapshot.AccountUuid, snapshot.AccountUuid, StringComparison.Ordinal)))
             {
-                var replacement = new UpstreamConnection(snapshot, proxy, maxConnections, () => siteIdentity?.Available ?? true);
+                var replacement = new UpstreamConnection(snapshot, proxy, _maxConnections, () => siteIdentity?.Available ?? true);
                 var previous = current; current = replacement; installed = read; previous?.Dispose();
             }
             else if (read > installed) { installed = read; current.SetIdentityReadBlocked(snapshot.BlockedByIdentity, snapshot.BlockedReason); }
-            return current.Retain();
+            return (current.Retain(), failover);
         }
     }
 
@@ -80,24 +80,24 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     /// 读备用上游并给每家换上与快照相符的连接（版本、配置或凭据变了才重建，重建后暂停、冷却、暂避清零），已不在备用列表里的连接释放；
     /// 返回已各增加一次引用的连接，按上游页顺序。读快照在锁外进行，先开始、后读完的慢读只沿用现有连接，不替换也不删除。
     /// </summary>
-    internal IReadOnlyList<UpstreamConnection> Standby()
+    internal async Task<IReadOnlyList<UpstreamConnection>> Standby()
     {
         var read = Interlocked.Increment(ref reads);
-        var snapshots = source.ReadStandby().Where(snapshot => snapshot.CandidateId is not null).ToArray();
+        var snapshots = (await source.ReadStandby()).Where(snapshot => snapshot.UpstreamCandidateId is not null).ToArray();
         // 与在用连接同一把锁：比较、替换、删除和增加引用一起完成，并发请求不会拿到刚释放的连接或各自建出重复连接。
-        lock (sync)
+        lock (_sync)
         {
             var leases = new List<UpstreamConnection>();
             var stale = read < standbyInstalled;
             foreach (var snapshot in snapshots)
             {
-                var id = snapshot.CandidateId!.Value;
-                standby.TryGetValue(id, out var connection);
+                var id = snapshot.UpstreamCandidateId!.Value;
+                _standby.TryGetValue(id, out var connection);
                 var keepBlocked = snapshot.BlockedByIdentity && connection is not null && connection.Snapshot.Version == snapshot.Version && connection.Snapshot.Options == snapshot.Options;
                 if (!stale && !keepBlocked && (connection is null || connection.Snapshot.Version != snapshot.Version || connection.Snapshot.Options != snapshot.Options
                     || !string.Equals(connection.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
                     || !string.Equals(connection.Snapshot.AccountUuid, snapshot.AccountUuid, StringComparison.Ordinal)))
-                { connection?.Dispose(); connection = new UpstreamConnection(snapshot, proxy, maxConnections, () => siteIdentity?.Available ?? true); standby[id] = connection; }
+                { connection?.Dispose(); connection = new UpstreamConnection(snapshot, proxy, _maxConnections, () => siteIdentity?.Available ?? true); _standby[id] = connection; }
                 if (connection is not null)
                 {
                     if (!stale) connection.SetIdentityReadBlocked(snapshot.BlockedByIdentity, snapshot.BlockedReason);
@@ -105,8 +105,8 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
                 }
             }
             if (stale) return leases;
-            standbyInstalled = read; order = snapshots.Select(snapshot => snapshot.CandidateId!.Value).ToList();
-            foreach (var id in standby.Keys.Except(order).ToArray()) { standby[id].Dispose(); standby.Remove(id); }
+            standbyInstalled = read; order = snapshots.Select(snapshot => snapshot.UpstreamCandidateId!.Value).ToList();
+            foreach (var id in _standby.Keys.Except(order).ToArray()) { _standby[id].Dispose(); _standby.Remove(id); }
             return leases;
         }
     }
@@ -115,28 +115,28 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     internal void Avoid(UpstreamConnection connection, UpstreamAttempt attempt)
     {
         if (!attempt.Avoids) return;
-        connection.Avoid(new(connection.Snapshot.CandidateId, "avoid", clock.GetUtcNow() + AvoidFor, attempt.UpstreamStatus, attempt.ErrorType, attempt.ConnectFailure));
+        connection.Avoid(new(connection.Snapshot.UpstreamCandidateId, "avoid", clock.GetUtcNow() + AvoidFor, attempt.UpstreamStatus, attempt.ErrorType, attempt.ConnectFailure));
     }
 
     /// <summary>记下最近一次把成功响应交给客户端的那一家与时刻。</summary>
     internal void Served(UpstreamConnection connection)
     // 主键与时刻成对写入，页面读出时不会配错。
-    { lock (sync) { servedId = connection.Snapshot.CandidateId; servedAt = clock.GetUtcNow(); } }
+    { lock (_sync) { servedId = connection.Snapshot.UpstreamCandidateId; servedAt = clock.GetUtcNow(); } }
 
     /// <summary>指定版本的暂停与冷却状态。</summary>
     public (bool Paused, int CooldownSeconds) Status(long version)
     // 加锁读取，保证版本比较和状态读取针对的是同一个连接，不会在中途被 Acquire 替换。
-    { lock (sync) return current?.Snapshot.Version == version ? (current.Paused, current.CooldownSeconds) : (false, 0); }
+    { lock (_sync) return current?.Snapshot.Version == version ? (current.Paused, current.CooldownSeconds) : (false, 0); }
 
     /// <summary>释放全部连接；重复调用无副作用。</summary>
     // 与 Acquire 互斥，避免关闭时有请求正好拿到即将释放的连接；在途租约各自持有引用，不受影响。
     public void Dispose()
     {
-        lock (sync)
+        lock (_sync)
         {
             current?.Dispose(); current = null;
-            foreach (var connection in standby.Values) connection.Dispose();
-            standby.Clear(); order = [];
+            foreach (var connection in _standby.Values) connection.Dispose();
+            _standby.Clear(); order = [];
         }
     }
 }

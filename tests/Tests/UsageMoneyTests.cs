@@ -16,9 +16,9 @@ static class UsageMoneyTests
     public static async Task ReportedCosts()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var user = web.Identities.Create("费用"); var service = web.Upstreams; var candidate = await upstream.Activate(service);
+        var user = await web.Identities.Create("费用"); var service = web.Upstreams; var candidate = await upstream.Activate(service);
         var pricing = web.Pricing;
-        pricing.Save(candidate, "fixture-model", "USD", 1, 2, 0, 0);
+        await pricing.Save(candidate, "fixture-model", "USD", 1, 2, 0, 0);
         upstream.Handler = async context =>
         {
             if (context.Request.Query["case"] == "stream")
@@ -50,13 +50,13 @@ static class UsageMoneyTests
         var count = 0;
         foreach (var (scenario, money) in expected)
         { Check((int)await Call(web, user.Token, scenario) == 200); Check((await Settled(web, ++count)).Rows[0].Money == money, scenario + " money source/amount"); }
-        var summary = web.Relay.Usage!.Query(new()).Summary[0];
+        var summary = (await web.Relay.Usage!.Query(new())).Summary[0];
         Check(summary.Money.Single(item => item.Currency == "USD" && item.Source == "reported").Amount == 0.243456789m);
         Check(summary.Money.Count == 3 && summary.UnknownAmounts == 0);
         Check((await Personal(web, user.Token)).Summary[0].Money.Count == 3);
         await web.Login(); var html = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + "/Usage"));
         Check(html.Contains("0.243456789 USD") && html.Contains("1.25 CNY") && html.Contains("估算"));
-        Check(web.Relay.Usage.Query(new()).Periods.Sum(period => period.Summary.Requests) == 5);
+        Check((await web.Relay.Usage.Query(new())).Periods.Sum(period => period.Summary.Requests) == 5);
     }
 
     /// <summary>
@@ -66,42 +66,42 @@ static class UsageMoneyTests
     /// </summary>
     public static async Task PriceSnapshotsAndTimeZones()
     {
-        using var home = new TestHome(); var db = new TestProcess(home.Path); var ids = db.Identities; var user = ids.Create("时区"); var client = ids.Clients.Authenticate(user.Token)!;
+        using var home = new TestHome(); var db = new TestProcess(home.Path); var ids = db.Identities; var user = await ids.Create("时区"); var client = (await ids.Clients.Authenticate(user.Token))!;
         var now = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero); var clock = new UsageClock(now); var clocked = new TestProcess(home.Path, clock); var store = clocked.Usage; var prices = clocked.Pricing;
         // 单价按已保存上游主键挂；这里只计价不转发，直接放一行测试通过的上游给单价挂上。
         var priced = db.Database.Write((connection, transaction) => (long)RelayDatabase.Scalar(connection, transaction, """
             INSERT INTO upstream_candidates(uid,expected_version,options_json,credential,state,report_json,created_at,test_started_at,name)
             VALUES('priced-upstream',1,'{}',x'00','passed',NULL,0,NULL,'计价上游') RETURNING id
             """)!);
-        prices.Save(priced, "priced", "USD", 1, 2, 0, 0);
+        await prices.Save(priced, "priced", "USD", 1, 2, 0, 0);
         var dates = new[] { new DateTimeOffset(2026, 11, 1, 5, 30, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 1, 6, 30, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 2, 5, 5, 0, TimeSpan.Zero) };
         for (var index = 0; index < dates.Length; index++)
         {
             clock.Set(dates[index]); var id = "priced-" + index;
             await store.Start(id, client, "inference"); await store.Dispatch(id, 1, priced, "priced");
-            if (index == 0) prices.Save(priced, "priced", "USD", 100, 200, 0, 0);
+            if (index == 0) await prices.Save(priced, "priced", "USD", 100, 200, 0, 0);
             await store.Finish(id, new("succeeded", true, 200, 200, 1, "complete", new(10000, 10000)));
         }
         clock.Set(now); await store.Start("unknown", client, "inference"); await store.Dispatch("unknown", 1, priced, "no-price");
         await store.Finish("unknown", new("succeeded", true, 200, 200, 1, "complete", new(2, 3)));
-        var hours = store.Query(new(Granularity: "hour", TimeZone: "America/New_York"));
+        var hours = await store.Query(new(Granularity: "hour", TimeZone: "America/New_York"));
         Check(hours.Rows.Single(row => row.RequestId == "priced-0").Money.Amount == 0.03m, "Dispatch must snapshot the old price before later changes");
         Check(hours.Summary[0].Money.Single().Amount == 6.03m && hours.Summary[0].UnknownAmounts == 1);
         var repeatedHour = hours.Periods.Where(period => period.Start.Day == 1).ToArray();
         Check(repeatedHour.Length == 2 && repeatedHour.All(period => period.Start.Hour == 1) && repeatedHour.Select(period => period.Start.Offset).Distinct().Count() == 2);
-        var days = store.Query(new(Granularity: "day", TimeZone: "America/New_York"));
+        var days = await store.Query(new(Granularity: "day", TimeZone: "America/New_York"));
         Check(days.Periods.Count == 2 && days.Periods.Single(period => period.Start.Day == 1).Summary.Requests == 2);
-        var range = store.Query(new(From: dates[0], Until: dates[1], Granularity: "hour", TimeZone: "America/New_York"));
+        var range = await store.Query(new(From: dates[0], Until: dates[1], Granularity: "hour", TimeZone: "America/New_York"));
         Check(range.Total == 1 && range.Periods.Single().Summary.Money.Single().Amount == 0.03m);
-        var reopened = new TestProcess(home.Path, clock).Usage; Check(reopened.Query(new()).Summary[0].Money.Single().Amount == 6.03m);
-        prices.Save(priced, "partial", "CNY", 2, null, null, null);
+        var reopened = new TestProcess(home.Path, clock).Usage; Check((await reopened.Query(new())).Summary[0].Money.Single().Amount == 6.03m);
+        await prices.Save(priced, "partial", "CNY", 2, null, null, null);
         await store.Start("partial", client, "inference"); await store.Dispatch("partial", 1, priced, "partial");
         await store.Finish("partial", new("cancelled", true, 200, 200, 1, "partial", new(1000)));
-        Check(store.Query(new(Model: "partial")).Rows.Single().Money == new UsageMoney(0.002m, "CNY", "estimated", "partial"));
+        Check((await store.Query(new(Model: "partial"))).Rows.Single().Money == new UsageMoney(0.002m, "CNY", "estimated", "partial"));
         await store.Start("no-usage", client, "inference"); await store.Dispatch("no-usage", 1, priced, "priced");
         await store.Finish("no-usage", new("succeeded", true, 200, 200, 1, "not_provided", new()));
-        Check(store.Query(new()).Rows.Single(row => row.RequestId == "no-usage").Money.Amount is null, "Zero-priced cache must not turn entirely unknown consumption into zero cost");
-        var untouched = prices.List(priced).Count; clock.Advance(TimeSpan.FromDays(41)); await store.Cleanup(); Check(prices.List(priced).Count == untouched);
+        Check((await store.Query(new())).Rows.Single(row => row.RequestId == "no-usage").Money.Amount is null, "Zero-priced cache must not turn entirely unknown consumption into zero cost");
+        var untouched = (await prices.List(priced)).Count; clock.Advance(TimeSpan.FromDays(41)); await store.Cleanup(); Check((await prices.List(priced)).Count == untouched);
     }
 
     /// <summary>
@@ -111,19 +111,19 @@ static class UsageMoneyTests
     public static async Task PricingWebSecurity()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var user = web.Identities.Create("个人"); var first = await upstream.Activate(web.Upstreams);
+        var user = await web.Identities.Create("个人"); var first = await upstream.Activate(web.Upstreams);
         using (var personal = new HttpRequestMessage(HttpMethod.Get, web.Url + "/Pricing"))
         { personal.Headers.Authorization = new("Bearer", user.Token); using var result = await web.Http.SendAsync(personal); Check(result.StatusCode == HttpStatusCode.Redirect); }
         await web.Login();
-        var data = new Dictionary<string, string> { ["CandidateId"] = first.ToString(CultureInfo.InvariantCulture), ["ModelName"] = "fixture-model", ["Currency"] = "USD", ["InputPrice"] = "1.2", ["OutputPrice"] = "3.4", ["CacheReadPrice"] = "0", ["CacheWritePrice"] = "0" };
+        var data = new Dictionary<string, string> { ["UpstreamCandidateId"] = first.ToString(CultureInfo.InvariantCulture), ["ModelName"] = "fixture-model", ["Currency"] = "USD", ["InputPrice"] = "1.2", ["OutputPrice"] = "3.4", ["CacheReadPrice"] = "0", ["CacheWritePrice"] = "0" };
         using (var rejected = await web.Post("/Pricing", data)) Check(rejected.StatusCode == HttpStatusCode.BadRequest);
         data["__RequestVerificationToken"] = await web.Csrf("/Pricing");
         using (var saved = await web.Post("/Pricing", data)) Check(saved.IsSuccessStatusCode);
-        var price = web.Pricing.List(first).Single(); Check(price.InputPerMillion == 1.2m && price.OutputPerMillion == 3.4m && price.Model == "fixture-model");
-        var second = await upstream.Activate(web.Upstreams); web.Upstreams.Delete(first);
+        var price = (await web.Pricing.List(first)).Single(); Check(price.InputPerMillion == 1.2m && price.OutputPerMillion == 3.4m && price.Model == "fixture-model");
+        var second = await upstream.Activate(web.Upstreams); await web.Upstreams.Delete(first);
         data["InputPrice"] = "999";
         using (var stale = await web.Post("/Pricing", data))
         { var html = WebUtility.HtmlDecode(await stale.Content.ReadAsStringAsync()); Check(html.Contains("这个上游已不存在")); }
-        Check(web.Pricing.List(first).Single().InputPerMillion == 1.2m && web.Pricing.List(second).Count == 0);
+        Check((await web.Pricing.List(first)).Single().InputPerMillion == 1.2m && (await web.Pricing.List(second)).Count == 0);
     }
 }

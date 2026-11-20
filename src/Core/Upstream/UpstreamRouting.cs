@@ -12,16 +12,16 @@ public sealed record UpstreamRouting(long? ServedId, DateTimeOffset? ServedAt, I
     public string Describe(bool failover, long? activeId, Func<long?, string> name)
     {
         if (!failover) return $"自动切换已关闭：只用在用的「{name(activeId)}」，它失败时把错误直接交给客户端。";
-        bool Blocked(long? id) => Held.Any(item => item.CandidateId == id);
+        bool Blocked(long? id) => Held.Any(item => item.UpstreamCandidateId == id);
         var now = !Blocked(activeId) ? $"此刻走的是在用的「{name(activeId)}」。"
             : ServedId is { } served && served != activeId && !Blocked(served) ? $"此刻走的是「{name(served)}」，{ServedAt?.ToLocalTime():HH:mm:ss} 接住了请求。"
             : "在用的那家暂时用不了，下一个请求按上游页的顺序从备用上游开始。";
         if (Held.Count == 0) return now + "没有上游在暂避。";
         return now + string.Concat(Held.Select(item => item.Kind switch
         {
-            "paused" => $"「{name(item.CandidateId)}」认证失败已暂停，重新测试并切换后恢复。",
-            "cooldown" => $"「{name(item.CandidateId)}」限流冷却到 {item.Until?.ToLocalTime():HH:mm:ss}。",
-            _ => $"「{name(item.CandidateId)}」暂避到 {item.Until?.ToLocalTime():HH:mm:ss}，原因：{Reason(item)}。"
+            "paused" => $"「{name(item.UpstreamCandidateId)}」认证失败已暂停，重新测试并切换后恢复。",
+            "cooldown" => $"「{name(item.UpstreamCandidateId)}」限流冷却到 {item.Until?.ToLocalTime():HH:mm:ss}。",
+            _ => $"「{name(item.UpstreamCandidateId)}」暂避到 {item.Until?.ToLocalTime():HH:mm:ss}，原因：{Reason(item)}。"
         }));
     }
 

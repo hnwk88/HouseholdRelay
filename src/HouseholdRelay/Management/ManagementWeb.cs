@@ -64,11 +64,10 @@ public static class ManagementWeb
             options.Cookie.HttpOnly = true; options.Cookie.SameSite = SameSiteMode.Strict;
             options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
             options.ExpireTimeSpan = TimeSpan.FromHours(8); options.SlidingExpiration = false;
-            options.Events.OnValidatePrincipal = context =>
+            options.Events.OnValidatePrincipal = async context =>
             {
                 var administrators = context.HttpContext.RequestServices.GetRequiredService<IAdministratorService>();
-                if (!administrators.IsSessionValid(context.Principal?.FindFirstValue(SessionClaim))) context.RejectPrincipal();
-                return Task.CompletedTask;
+                if (!await administrators.IsSessionValid(context.Principal?.FindFirstValue(SessionClaim))) context.RejectPrincipal();
             };
         });
         builder.Services.AddOptions<CookieAuthenticationOptions>(Scheme).Configure<IRelayInstance>((options, instance) => options.Cookie.Name = "hr_admin_" + instance.InstanceId);

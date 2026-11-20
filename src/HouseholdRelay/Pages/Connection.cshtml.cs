@@ -34,18 +34,18 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
     /// <summary>运行信任包内安装脚本的 PowerShell 命令，带上期望指纹，让脚本在指纹不符时拒绝安装。</summary>
     public string TrustCommand { get; private set; } = "";
     /// <summary>管理员打开连接说明页时调用（需已登录）：从设置、活动上游和证书信息组装上述展示内容，只读，不修改任何状态。</summary>
-    public void OnGet()
+    public async Task OnGetAsync()
     {
-        RootUrl = settings.Read().Value.PublicUrl.TrimEnd('/');
-        var active = upstreams.ReadOverview();
+        RootUrl = (await settings.Read()).Value.PublicUrl.TrimEnd('/');
+        var active = await upstreams.ReadOverview();
         UpstreamName = !active.Configured ? "尚未选择" : active.Name ?? "未命名";
         ClaudeCodeOnly = active.Options.Diagnostic == "claude-code";
         if (active.Report?.CanActivate == true)
         { VerifiedModel = active.Report.VerifiedModel; RecommendedModel = active.Options.Model; Models = active.Report.Models; }
-        var certificate = certificates.ReadInfo();
+        var certificate = await certificates.ReadInfo();
         HttpsStatus = certificate is null ? "尚未配置 HTTPS。" : certificate.ValidUntil <= DateTimeOffset.UtcNow ? "证书已过期，请管理员更新。"
             : certificate.Mode == "private" ? "私有 CA 已配置；每台电脑完成下方一次性信任后即可使用。" : "已导入可信证书；请确认服务重启并从实际客户端检查信任。";
-        AuthorityFingerprint = certificates.AuthorityFingerprint();
+        AuthorityFingerprint = await certificates.AuthorityFingerprint();
         TrustCommand = $".\\Install-RelayTrust.ps1 -ExpectedSha256 {AuthorityFingerprint}";
         var address = RootUrl.Length == 0 ? "https://YOUR_RELAY_HOST" : RootUrl;
         // 第三行让 Claude Code 把中转当官方地址，自己生成与原生直连一致的请求头和正文字段（订单 133 回环实测：不多连接、不多路由、对话工具流式照常）；
@@ -58,9 +58,9 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
         ApiKeyExample = Example("x-api-key: <你的个人中转令牌>");
     }
     /// <summary>下载客户端信任包（需已登录）：把私有 CA 公共证书 PEM 打成 zip 返回，只含公钥证书不含任何私钥；尚未生成私有 CA 时返回 404。</summary>
-    public IActionResult OnGetTrustPackage()
+    public async Task<IActionResult> OnGetTrustPackageAsync()
     {
-        var pem = certificates.ReadAuthorityPem();
+        var pem = await certificates.ReadAuthorityPem();
         return pem is null ? NotFound() : File(trustPackage.Create(pem), "application/zip", "HouseholdRelay-client-trust.zip");
     }
 }

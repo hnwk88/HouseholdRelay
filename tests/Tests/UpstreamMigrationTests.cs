@@ -14,7 +14,7 @@ static class UpstreamMigrationTests
     /// 启动时升级必须失败，且版本号、upstream 表列和上游凭据都保持原样；去掉冲突后一路升到最新版，旧凭据迁为 OAuth 模式、无诊断报告，
     /// 管理员初始化状态不变，成员按归档里的旧编号对得上新主键，停用的旧令牌仍被拒；再次启动不改变上游版本。
     /// </summary>
-    public static Task UpgradeRollback()
+    public static async Task UpgradeRollback()
     {
         using var home = new TestHome(); home.WriteLegacy();
         var calls = 0;
@@ -42,19 +42,18 @@ static class UpstreamMigrationTests
             Check(Encoding.UTF8.GetString(tools.Get<ISecretProtector>().Unprotect(credential)) == "fixture-legacy-upstream-secret");
             RelayDatabase.Execute(connection, null, "DROP TABLE upstream_candidates");
         }
-        var upgraded = new TestProcess(home.Path); var upstream = upgraded.Upstreams.ReadActive();
+        var upgraded = new TestProcess(home.Path); var upstream = await upgraded.Upstreams.ReadActive();
         // 纯迁移不准备官方目录或触发续期；直接检查已保存密文解密后仍是旧夹具凭据。
         Check(upstream.Options.Mode == "oauth" && upgraded.ActiveCredential() == "fixture-legacy-upstream-secret" && upstream.Report is null);
-        Check(upgraded.Administrators.IsInitialized && upgraded.Administrators.Login(WebFixture.Password) is not null);
+        Check(await upgraded.Administrators.IsInitialized() && await upgraded.Administrators.Login(WebFixture.Password) is not null);
         using (var connection = upgraded.Database.Open())
         {
             var mapped = Convert.ToInt64(RelayDatabase.Scalar(connection, null,
                 "SELECT json_extract(row_json,'$.new_id') FROM migration_archive WHERE source_table='users' AND reason='replaced-id' AND json_extract(row_json,'$.id')=$old", ("$old", originalId)));
-            Check(upgraded.Identities.Clients.Authenticate("legacy-study-token")!.UserId == mapped, "The imported member keeps its identity through the key change");
+            Check((await upgraded.Identities.Clients.Authenticate("legacy-study-token"))!.UserId == mapped, "The imported member keeps its identity through the key change");
         }
-        Check(upgraded.Identities.Clients.Authenticate("legacy-office-token") is null);
+        Check(await upgraded.Identities.Clients.Authenticate("legacy-office-token") is null);
         var repeated = new TestProcess(home.Path);
-        Check(repeated.Upstreams.ReadActive().Version == upstream.Version);
-        return Task.CompletedTask;
+        Check((await repeated.Upstreams.ReadActive()).Version == upstream.Version);
     }
 }

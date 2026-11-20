@@ -14,14 +14,14 @@ static class UsageRestartTests
     public static async Task GracefulRestart()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var user = web.Identities.Create("正常重启"); await upstream.Activate(web.Upstreams);
+        var user = await web.Identities.Create("正常重启"); await upstream.Activate(web.Upstreams);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         upstream.Handler = async context => { entered.TrySetResult(); await release.Task; await Json(context, new { input_tokens = 12, output_tokens = 9 }); };
         var call = Call(web, user.Token); await entered.Task;
         var stopping = web.App.StopAsync(); release.TrySetResult();
         Check((int)await call == 200); await stopping;
-        var original = web.Relay.Usage!.Query(new()).Rows.Single();
+        var original = (await web.Relay.Usage!.Query(new())).Rows.Single();
         Check(original.Outcome == "succeeded" && original.Completeness == "complete");
         await using var app = ManagementWeb.Build(web.Home.Path, 0); await app.StartAsync();
         try

@@ -29,14 +29,14 @@ static class UsageStorageTests
     public static async Task WriteFailures()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var user = web.Identities.Create("存储失败"); await upstream.Activate(web.Upstreams); var calls = upstream.Calls.Count;
+        var user = await web.Identities.Create("存储失败"); await upstream.Activate(web.Upstreams); var calls = upstream.Calls.Count;
         using (var connection = web.Database.Open())
         using (var locked = connection.BeginTransaction())
         {
             Check(await Call(web, user.Token) == HttpStatusCode.ServiceUnavailable);
-            Check(upstream.Calls.Count == calls && web.Relay.Usage!.Query(new()).Total == 0, "Failed start must not send or invent a record");
+            Check(upstream.Calls.Count == calls && (await web.Relay.Usage!.Query(new())).Total == 0, "Failed start must not send or invent a record");
         }
-        var client = web.Identities.Clients.Authenticate(user.Token)!; var usage = web.Relay.Usage!;
+        var client = (await web.Identities.Clients.Authenticate(user.Token))!; var usage = web.Relay.Usage!;
         var completed = new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(12, 9));
         await usage.Start("finish-retry", client, "inference"); await usage.Dispatch("finish-retry", 2, null, "fixture-model");
         Task<bool> finish;
@@ -47,17 +47,17 @@ static class UsageStorageTests
             await Task.Delay(1200); // 首次忙等待失败，下一次独立保存仍应成功。
         }
         Check(await finish.WaitAsync(TimeSpan.FromSeconds(5)));
-        Check(usage.Query(new()).Rows.Single().Completeness == "complete");
+        Check((await usage.Query(new())).Rows.Single().Completeness == "complete");
         await usage.Start("finish-failed", client, "inference");
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             CREATE TRIGGER reject_usage_finish BEFORE UPDATE ON usage_requests BEGIN SELECT RAISE(ABORT,'fixture-write-failure'); END
             """));
         var timer = Stopwatch.StartNew(); Check(!await usage.Finish("finish-failed", completed));
         Check(timer.Elapsed < TimeSpan.FromSeconds(5) && usage.PersistenceFailures == 2);
-        Check(usage.Query(new()).Rows.Single(row => row.RequestId == "finish-failed").Outcome == "started");
+        Check((await usage.Query(new())).Rows.Single(row => row.RequestId == "finish-failed").Outcome == "started");
         await web.Login(); Check((await web.Http.GetStringAsync(web.Url + "/Usage")).Contains("待写入记录不能视为完整统计"));
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TRIGGER reject_usage_finish"));
-        usage.Recover(); var restored = usage.Query(new()).Rows.Single(row => row.RequestId == "finish-failed");
+        await usage.Recover(); var restored = (await usage.Query(new())).Rows.Single(row => row.RequestId == "finish-failed");
         Check(restored.Outcome == "interrupted" && restored.Completeness == "partial" && restored.Tokens.Input is null);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             CREATE TRIGGER reject_usage_start BEFORE INSERT ON usage_requests BEGIN SELECT RAISE(ABORT,'fixture-readonly'); END
@@ -73,15 +73,15 @@ static class UsageStorageTests
     public static async Task RetentionAndRecovery()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities;
-        var token = identities.Create("保留窗口"); var user = identities.Clients.Authenticate(token.Token)!;
+        var token = await identities.Create("保留窗口"); var user = (await identities.Clients.Authenticate(token.Token))!;
         var now = new DateTimeOffset(2026, 11, 2, 6, 30, 0, TimeSpan.Zero); var clock = new UsageClock(now); var usage = new TestProcess(home.Path, clock).Usage;
         var end = new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(2, 3));
         foreach (var (id, time) in new[] { ("expired", now.AddDays(-40).AddTicks(-1)), ("boundary", now.AddDays(-40)), ("inside", now.AddDays(-40).AddTicks(1)), ("recent", now.AddHours(-1)) })
         { clock.Set(time); await usage.Start(id, user, "inference"); await usage.Finish(id, end); }
         clock.Set(now); await usage.Start("unfinished", user, "inference"); await usage.Dispatch("unfinished", 1, null, "fixture-model");
-        Check(usage.Query(new()).Total == 4, "Queries must filter expired data before deletion runs");
+        Check((await usage.Query(new())).Total == 4, "Queries must filter expired data before deletion runs");
         var reopenedProcess = new TestProcess(home.Path, clock); var reopened = reopenedProcess.Database; var resumed = reopenedProcess.Usage;
-        Check(resumed.Query(new()).Rows.Single(row => row.RequestId == "unfinished").Outcome == "started", "Opening for queries must not recover live requests");
+        Check((await resumed.Query(new())).Rows.Single(row => row.RequestId == "unfinished").Outcome == "started", "Opening for queries must not recover live requests");
         using (var maintenance = reopenedProcess.Get<UsageMaintenance>())
         {
             await maintenance.StartAsync(CancellationToken.None);
@@ -91,20 +91,20 @@ static class UsageStorageTests
                 var rejected = false; try { await duplicate.StartAsync(CancellationToken.None); } catch (IOException) { /* 同一数据目录只允许一个维护实例，第二个必须拒绝启动，以免它把第一个实例的进行中记录误判为中断。 */ rejected = true; }
                 Check(rejected, "A second server must not recover the first server's active records");
             }
-            var report = resumed.Query(new()); Check(report.Total == 4);
+            var report = await resumed.Query(new()); Check(report.Total == 4);
             Check(report.Rows.Single(row => row.RequestId == "unfinished").Outcome == "interrupted");
             Check(report.Rows.Single(row => row.RequestId == "boundary").Tokens == new UsageTokens(2, 3));
             using (var connection = reopened.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_requests")) == 4);
             // 模拟跨过小时和夏令时回拨后的运行期；时区表示不改变 UTC 截止点。
             clock.Advance(TimeSpan.FromHours(1));
             await Until(() => { using var connection = reopened.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_requests")) == 2; });
-            Check(resumed.Query(new(From: now.AddDays(-40).ToOffset(TimeSpan.FromHours(-5)))).Total == 2);
+            Check((await resumed.Query(new(From: now.AddDays(-40).ToOffset(TimeSpan.FromHours(-5))))).Total == 2);
             await maintenance.StopAsync(CancellationToken.None);
         }
         clock.Advance(TimeSpan.FromDays(41));
         using (var startup = new TestProcess(home.Path, clock).Get<UsageMaintenance>())
-        { await startup.StartAsync(CancellationToken.None); Check(resumed.Query(new()).Total == 0); await startup.StopAsync(CancellationToken.None); }
-        Check(reopenedProcess.Identities.Clients.Authenticate(token.Token)?.Id == user.Id && reopenedProcess.Settings.Read().Version == 1);
+        { await startup.StartAsync(CancellationToken.None); Check((await resumed.Query(new())).Total == 0); await startup.StopAsync(CancellationToken.None); }
+        Check((await reopenedProcess.Identities.Clients.Authenticate(token.Token))?.Id == user.Id && (await reopenedProcess.Settings.Read()).Version == 1);
     }
 
 }
@@ -113,11 +113,11 @@ static class UsageStorageTests
 sealed class UsageClock(DateTimeOffset initial) : TimeProvider
 {
     private long ticks = initial.UtcTicks;
-    private readonly object sync = new();
-    private readonly List<UsageTimer> timers = [];
+    private readonly object _sync = new();
+    private readonly List<UsageTimer> _timers = [];
     /// <summary>已创建的计时器数量，测试据此确认维护服务已挂上定时清理。</summary>
     // 计时器列表会被维护服务和测试线程同时访问，读取数量也要加锁。
-    public int TimerCount { get { lock (sync) return timers.Count; } }
+    public int TimerCount { get { lock (_sync) return _timers.Count; } }
     /// <summary>返回测试设定的当前 UTC 时间。</summary>
     public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
     /// <summary>直接把时钟拨到指定时刻，不触发计时器，用于在不同时间点写入记录。</summary>
@@ -125,11 +125,11 @@ sealed class UsageClock(DateTimeOffset initial) : TimeProvider
     /// <summary>把时钟向前推进指定时长，并让所有已到期的计时器立即回调，模拟时间流逝后的定时维护。</summary>
     public void Advance(TimeSpan duration)
     // 在锁内只拷贝计时器快照、在锁外回调，避免回调中新建计时器时修改正在遍历的列表或在锁内执行耗时维护。
-    { Interlocked.Add(ref ticks, duration.Ticks); UsageTimer[] snapshot; lock (sync) snapshot = timers.ToArray(); foreach (var timer in snapshot) timer.Tick(GetUtcNow()); }
+    { Interlocked.Add(ref ticks, duration.Ticks); UsageTimer[] snapshot; lock (_sync) snapshot = _timers.ToArray(); foreach (var timer in snapshot) timer.Tick(GetUtcNow()); }
     /// <summary>创建受本时钟驱动的假计时器并登记，供 <see cref="Advance"/> 检查是否到期。</summary>
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     // 登记计时器可能与 Advance 取快照同时发生，用同一把锁保护列表。
-    { var timer = new UsageTimer(this, callback, state, dueTime, period); lock (sync) timers.Add(timer); return timer; }
+    { var timer = new UsageTimer(this, callback, state, dueTime, period); lock (_sync) _timers.Add(timer); return timer; }
     /// <summary>只在 <see cref="Advance"/> 时检查到期的假计时器：到期就回调一次，并按周期排定下一次。</summary>
     private sealed class UsageTimer(UsageClock clock, TimerCallback callback, object? state, TimeSpan due, TimeSpan period) : ITimer
     {

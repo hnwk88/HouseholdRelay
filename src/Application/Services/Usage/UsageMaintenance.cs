@@ -19,7 +19,7 @@ public sealed class UsageMaintenance(IUsageService store, IServingLock servingLo
         {
             serving = servingLock.Acquire();
             await identity.Prepare(cancellationToken);
-            store.Recover(); await store.Cleanup(cancellationToken);
+            await store.Recover(); await store.Cleanup(cancellationToken);
             await base.StartAsync(cancellationToken);
         }
         // 启动任何一步失败都要先释放已取得的服务锁再原样抛出，否则锁会被失败的进程一直占着，后续服务无法启动。

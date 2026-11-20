@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Repositories.Abstractions</AssemblyName>
+    <RootNamespace>Repositories</RootNamespace>
+    <Description>不绑定具体工程名称、数据库上下文或业务表的通用仓储契约与实体审计基类。</Description>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="BaseEntity.cs" />
+    <Compile Include="IRepository.cs" />
+    <Compile Include="IDateTimeProvider.cs" />
+    <Compile Include="DateTimeProvider.cs" />
+    <Compile Include="ICurrentUserService.cs" />
+    <Compile Include="NullCurrentUserService.cs" />
+    <Compile Include="IHardDeleteTracker.cs" />
+    <Compile Include="RepositoryFilterNames.cs" />
+    <!-- 本工程补：IRepository.cs 的多键分页重载用到 RepositorySortKey，中康原版清单漏列，单独构建报 CS0246。 -->
+    <Compile Include="RepositorySortKey.cs" />
+  </ItemGroup>
+
+</Project>

@@ -70,7 +70,24 @@
     ],
     "consistencyRequirement": "外键名随实体改名同步变更；实体根名变更后残留的旧外键名视为同一笔债务，不得分批留存。"
   },
-  "aggregateVocabulary": [],
+  "aggregateVocabulary": [
+    { "technicalRoot": "ActiveUpstream", "userDisplayName": "活动上游", "sourceTable": "upstream" },
+    { "technicalRoot": "Administrator", "userDisplayName": "管理员", "sourceTable": "administrators" },
+    { "technicalRoot": "AdministratorSession", "userDisplayName": "管理会话", "sourceTable": "admin_sessions" },
+    { "technicalRoot": "BootstrapCode", "userDisplayName": "首次设置码", "sourceTable": "bootstrap" },
+    { "technicalRoot": "MetadataEntry", "userDisplayName": "实例元数据", "sourceTable": "metadata" },
+    { "technicalRoot": "ProtectedSecret", "userDisplayName": "加密机密", "sourceTable": "secrets" },
+    { "technicalRoot": "PublicAsset", "userDisplayName": "公共资产", "sourceTable": "public_assets" },
+    { "technicalRoot": "RelaySettings", "userDisplayName": "实例设置", "sourceTable": "settings" },
+    { "technicalRoot": "SiteIdentityOperation", "userDisplayName": "设备维护操作", "sourceTable": "site_identity_operations" },
+    { "technicalRoot": "SiteIdentityState", "userDisplayName": "站点身份状态", "sourceTable": "site_identity" },
+    { "technicalRoot": "Token", "userDisplayName": "个人令牌", "sourceTable": "tokens" },
+    { "technicalRoot": "UpstreamCandidate", "userDisplayName": "已保存上游", "sourceTable": "upstream_candidates" },
+    { "technicalRoot": "UsageAttempt", "userDisplayName": "上游尝试", "sourceTable": "usage_attempts" },
+    { "technicalRoot": "UsagePriceRecord", "userDisplayName": "单价", "sourceTable": "usage_prices" },
+    { "technicalRoot": "UsageRequest", "userDisplayName": "用量记录", "sourceTable": "usage_requests" },
+    { "technicalRoot": "User", "userDisplayName": "使用者", "sourceTable": "users" }
+  ],
   "moduleVocabulary": [],
   "legacyDebtPolicy": {
     "allowNewDebt": false,

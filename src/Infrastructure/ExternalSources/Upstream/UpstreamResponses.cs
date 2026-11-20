@@ -11,7 +11,7 @@ namespace Infrastructure.ExternalSources.Upstream;
 /// <summary>收紧响应头，并在有界 JSON 或完整 SSE 事件内消除已知上游秘密。</summary>
 public static class UpstreamResponses
 {
-    private static readonly HashSet<string> AllowedHeaders = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> _allowedHeaders = new(StringComparer.OrdinalIgnoreCase)
     { "request-id", "x-request-id", "retry-after", "x-should-retry", "anthropic-organization-id" };
 
     /// <summary>把上游响应安全地转给家庭客户端：先按 Content-Encoding 解开压缩（见 <see cref="Decompress"/>），再做脱敏与计量，回给客户端的是解开后的明文；响应头只放行请求编号、重试和限流类白名单且值中不含秘密；附加禁止缓存、禁止代理缓冲和本次中转请求编号；SSE 逐事件脱敏转发，普通 JSON 在大小上限内（成功 16 MB、错误 1 MB）整体脱敏后写出；可选地把内容交给用量累加器统计。</summary>
@@ -20,7 +20,7 @@ public static class UpstreamResponses
         var excluded = upstream.Headers.Connection.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var header in upstream.Headers)
         {
-            if (excluded.Contains(header.Key) || !(AllowedHeaders.Contains(header.Key) || header.Key.StartsWith("anthropic-ratelimit-", StringComparison.OrdinalIgnoreCase))) continue;
+            if (excluded.Contains(header.Key) || !(_allowedHeaders.Contains(header.Key) || header.Key.StartsWith("anthropic-ratelimit-", StringComparison.OrdinalIgnoreCase))) continue;
             var values = header.Value.ToArray();
             if (values.All(value => Redact(value, secret) == value)) response.Headers[header.Key] = values;
         }

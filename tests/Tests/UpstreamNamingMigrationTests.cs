@@ -13,7 +13,7 @@ static class UpstreamNamingMigrationTests
     /// 在提交前注入故障时升级失败，版本仍是 3、没有名称列、设置未变、旧状态仍是 activated；
     /// 去掉故障后一路升到最新版：全局代理为手动并沿用旧地址，名称按主机回填，activated 改回 passed，活动上游指回原候选（旧编号留在对外编号里），任何选项 JSON 都不再含 proxyUrl。
     /// </summary>
-    public static Task ProxyMigrationAndRollback()
+    public static async Task ProxyMigrationAndRollback()
     {
         using var home = DatabaseUpgradeTests.Legacy("v3");
         var secret = new TestProcess(home.Path).Get<ISecretProtector>().Protect(Encoding.UTF8.GetBytes("fixture-migrated-secret"));
@@ -40,41 +40,39 @@ static class UpstreamNamingMigrationTests
             Check((string?)RelayDatabase.Scalar(connection, null, "SELECT state FROM upstream_candidates WHERE id='old-candidate'") == "activated");
         }
         Check(Settings(home) == settingsBefore);
-        var upgraded = new TestProcess(home.Path); var settings = upgraded.Settings.Read().Value;
+        var upgraded = new TestProcess(home.Path); var settings = (await upgraded.Settings.Read()).Value;
         Check(settings.ProxyMode == "manual" && settings.ProxyUrl == "http://127.0.0.1:7897");
-        var saved = upgraded.Upstreams.ListCandidates();
+        var saved = await upgraded.Upstreams.ListCandidates();
         Check(saved.Select(item => (item.Uid, item.Name, item.State)).SequenceEqual([("old-candidate", "aitoll.net", "passed"), ("newer-candidate", "api.sftoken.top", "passed")]));
-        var active = upgraded.Upstreams.ReadActive();
-        Check(active.CandidateId == saved[0].Id && active.Name == "aitoll.net" && active.Credential == "fixture-migrated-secret" && active.Options.Diagnostic == "claude-code");
+        var active = await upgraded.Upstreams.ReadActive();
+        Check(active.UpstreamCandidateId == saved[0].Id && active.Name == "aitoll.net" && active.Credential == "fixture-migrated-secret" && active.Options.Diagnostic == "claude-code");
         using (var connection = upgraded.Database.Open())
         {
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == RelayDatabase.CurrentVersion);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM upstream_candidates WHERE options_json LIKE '%proxyUrl%'")) == 0);
             Check(!((string)RelayDatabase.Scalar(connection, null, "SELECT options_json FROM upstream WHERE id=1")!).Contains("proxyUrl"));
         }
-        upgraded.Upstreams.Activate(saved[1].Id, upgraded.Upstreams.ReadActive().Version); upgraded.Upstreams.Activate(saved[0].Id, upgraded.Upstreams.ReadActive().Version);
-        Check(upgraded.Upstreams.ReadActive().CandidateId == saved[0].Id, "Migrated candidates can be switched back and forth");
-        return Task.CompletedTask;
+        await upgraded.Upstreams.Activate(saved[1].Id, (await upgraded.Upstreams.ReadActive()).Version); await upgraded.Upstreams.Activate(saved[0].Id, (await upgraded.Upstreams.ReadActive()).Version);
+        Check((await upgraded.Upstreams.ReadActive()).UpstreamCandidateId == saved[0].Id, "Migrated candidates can be switched back and forth");
     }
 
     /// <summary>
     /// 验证没有代理的 v3 库：活动上游有凭据却对不上任何候选（旧版迁移来的凭据）时升级为它补建一条按主机命名的候选并关联上；
     /// 全局代理保持不使用，设置版本号不变。
     /// </summary>
-    public static Task OrphanActiveWithoutProxy()
+    public static async Task OrphanActiveWithoutProxy()
     {
         using var home = DatabaseUpgradeTests.Legacy("v3");
         var secret = new TestProcess(home.Path).Get<ISecretProtector>().Protect(Encoding.UTF8.GetBytes("fixture-orphan-secret"));
         Seed(home, connection => RelayDatabase.Execute(connection, null, "UPDATE upstream SET options_json=$json,credential=$secret WHERE id=1",
             ("$json", """{"mode":"oauth","authentication":"bearer","baseUrl":"https://api.anthropic.com","oAuthBeta":true}"""), ("$secret", secret)));
         var version = Settings(home).Split(':')[0];
-        var upgraded = new TestProcess(home.Path); var active = upgraded.Upstreams.ReadActive();
+        var upgraded = new TestProcess(home.Path); var active = await upgraded.Upstreams.ReadActive();
         // 迁移只核对原有加密凭据；未准备官方身份的测试进程不通过活动读取开放转发。
-        Check(active.CandidateId is not null && active.Name == "api.anthropic.com" && upgraded.ActiveCredential() == "fixture-orphan-secret");
-        var created = upgraded.Upstreams.ReadCandidate(active.CandidateId!.Value);
-        Check(created.State == "untested" && created.Options.Mode == "oauth" && created.Uid.Length == 32 && upgraded.Upstreams.ListCandidates().Count == 1);
-        Check(upgraded.Settings.Read().Value.ProxyMode == "none" && upgraded.Settings.Read().Version.ToString(CultureInfo.InvariantCulture) == version);
-        return Task.CompletedTask;
+        Check(active.UpstreamCandidateId is not null && active.Name == "api.anthropic.com" && upgraded.ActiveCredential() == "fixture-orphan-secret");
+        var created = await upgraded.Upstreams.ReadCandidate(active.UpstreamCandidateId!.Value);
+        Check(created.State == "untested" && created.Options.Mode == "oauth" && created.Uid.Length == 32 && (await upgraded.Upstreams.ListCandidates()).Count == 1);
+        Check((await upgraded.Settings.Read()).Value.ProxyMode == "none" && (await upgraded.Settings.Read()).Version.ToString(CultureInfo.InvariantCulture) == version);
     }
 
     /// <summary>在真实 v3 旧库上清掉夹具自带的三家候选（它们带的代理会参与全局代理的选择），再交给 <paramref name="seed"/> 写入用例要的旧数据；只写数据行，不改结构。</summary>

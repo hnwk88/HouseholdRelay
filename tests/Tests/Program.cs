@@ -20,6 +20,8 @@ if (args.FirstOrDefault() == "--real-import-browser") return await RealImportVal
 if (args.FirstOrDefault() == "--real-transfer-browser") return await RealTransferValidation.Run(args);
 if (args.FirstOrDefault() == "--real-cli-client") return await RealCliClientValidation.Run(args);
 if (args.FirstOrDefault() == "--fake-claude") return FakeClaude.Run(args);
+if (args.FirstOrDefault() == "--db-time-benchmark") return await DbTimeBenchmark.Run(args);
+if (args.FirstOrDefault() == "--upgrade-relations") return await EntityStorageTests.UpgradeRelations(args);
 if (Path.GetFileNameWithoutExtension(Environment.ProcessPath)?.Equals("claude", StringComparison.OrdinalIgnoreCase) == true) return FakeClaude.RunAsClaude(args);
 
 var tests = new (string Name, Func<Task> Test)[]
@@ -111,6 +113,19 @@ var tests = new (string Name, Func<Task> Test)[]
     ("integer keys: failure before commit keeps version 9 and its backup", IntegerKeyUpgradeTests.RollbackKeepsVersion9),
     ("integer keys: broken required references roll back, dangling upstreams are archived", IntegerKeyUpgradeTests.BrokenReferences),
     ("integer keys: new rows take database keys, names and uids stay random", IntegerKeyUpgradeTests.NewRowsGetDatabaseKeys),
+    ("entity storage: the EF model matches the version 11 schema, and a renamed column is reported", EntityStorageTests.ModelMatchesSchema),
+    ("entity storage: EF connections keep foreign keys on", EntityStorageTests.ForeignKeysOn),
+    ("entity storage: EF connections use synchronous FULL", EntityStorageTests.SynchronousFull),
+    ("entity storage: the database stays in WAL mode", EntityStorageTests.WriteAheadLog),
+    ("entity storage: EF connections do not pool", EntityStorageTests.PoolingOff),
+    ("entity storage: EF connections wait 10 seconds and never create a database", EntityStorageTests.DefaultTimeout),
+    ("entity storage: a foreign instance marker is refused", EntityStorageTests.MarkerChecked),
+    ("entity storage: a foreign instance_id is refused", EntityStorageTests.InstanceIdChecked),
+    ("entity storage: concurrent edits of one upstream conflict and read in Chinese", EntityStorageTests.ConcurrentUpstreamEdits),
+    ("entity storage: 40-day cleanup deletes physically", EntityStorageTests.CleanupDeletesPhysically),
+    ("entity storage: a deleted upstream is soft-deleted and readable with includeDeleted", EntityStorageTests.DeletedUpstreamIsSoft),
+    ("entity storage: version 11 keeps old values and adds integer keys", EntityStorageTests.Version11KeepsValues),
+    ("entity storage: a failed version 11 upgrade keeps version 10", EntityStorageTests.Version11Rollback),
     ("usage indexed window queries, paging and concurrent management load", UsageConcurrencyTests.WindowQueriesAndLoad),
     ("usage queued rotation and dispatch persistence failures never send", UsageConcurrencyTests.QueueAndDispatchFailures),
     ("usage reported money, cumulative stream costs and currency isolation", UsageMoneyTests.ReportedCosts),
@@ -241,6 +256,12 @@ static class TestSuite
     public static async Task Until(Func<bool> predicate)
     {
         for (var i = 0; i < 200; i++) { if (predicate()) return; await Task.Delay(10); }
+        throw new Exception("Timed out waiting for fixture condition");
+    }
+    /// <summary>与上一个同样的轮询等待，条件本身要读库等异步操作时用：每次都等条件算完再判断，节奏与超时不变。</summary>
+    public static async Task Until(Func<Task<bool>> predicate)
+    {
+        for (var i = 0; i < 200; i++) { if (await predicate()) return; await Task.Delay(10); }
         throw new Exception("Timed out waiting for fixture condition");
     }
     /// <summary>构造带 Claude Code 风格 metadata.user_id 的消息请求体，可指定提示内容、64 位设备号和会话名，供设备号归一化与会话隔离测试使用。</summary>
@@ -418,13 +439,13 @@ static class TestSuite
             Check(!encrypted.AsSpan().SequenceEqual(secret)); Check(WindowsSecrets.Unprotect(encrypted).AsSpan().SequenceEqual(secret));
             var process = new TestProcess(root); var manager = process.Get<ManagementCommands>(); await manager.Initialize("localhost", 5433, 8787);
             var identities = process.Identities;
-            identities.Create("书房", "study"); var issued = identities.Create("卧室", "bedroom"); identities.Create("公司", "office");
-            var config = manager.Read(); Check(config.Clients.Count == 3);
+            await identities.Create("书房", "study"); var issued = await identities.Create("卧室", "bedroom"); await identities.Create("公司", "office");
+            var config = await manager.Read(); Check(config.Clients.Count == 3);
             Check(!Directory.Exists(Path.Combine(root, "clients")), "New installations must not export all plaintext tokens");
-            manager.ManageClient("disable", "office"); Check(!manager.Read().Clients.Single(c => c.Name == "office").Enabled);
-            var changed = identities.Rotate(issued.UserId); Check(issued.Token != changed.Token);
-            Check(identities.Clients.Authenticate(issued.Token) is null && identities.Clients.Authenticate(changed.Token) is not null);
-            var pfx = process.Settings.LoadCertificate()!;
+            await manager.ManageClient("disable", "office"); Check(!(await manager.Read()).Clients.Single(c => c.Name == "office").Enabled);
+            var changed = await identities.Rotate(issued.UserId); Check(issued.Token != changed.Token);
+            Check(await identities.Clients.Authenticate(issued.Token) is null && await identities.Clients.Authenticate(changed.Token) is not null);
+            var pfx = (await process.Settings.LoadCertificate())!;
             using var certificate = X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.EphemeralKeySet);
             Check(certificate.HasPrivateKey); CryptographicOperations.ZeroMemory(pfx);
         }
@@ -590,21 +611,21 @@ sealed class Fixture : IAsyncDisposable
 // Models a raw TCP port mapping, preserving TLS from the native client to the relay.
 sealed class Tunnel : IAsyncDisposable
 {
-    private readonly TcpListener listener = new(IPAddress.Loopback, 0);
-    private readonly CancellationTokenSource stop = new();
-    private readonly ConcurrentBag<Task> connections = [];
-    private readonly Task loop;
+    private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+    private readonly CancellationTokenSource _stop = new();
+    private readonly ConcurrentBag<Task> _connections = [];
+    private readonly Task _loop;
     private int accepted;
     /// <summary>隧道已接受的 TCP 连接数，超时诊断时用来判断客户端是否连上了隧道。</summary>
     public int Accepted => Volatile.Read(ref accepted);
     /// <summary>隧道在本机回环地址上实际监听的端口。</summary>
-    public int Port => ((IPEndPoint)listener.LocalEndpoint).Port;
+    public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
     /// <summary>开始在随机端口监听，并启动后台接受循环，把连接转发到本机的目标端口。</summary>
-    public Tunnel(int destination) { listener.Start(); loop = Accept(destination); }
+    public Tunnel(int destination) { _listener.Start(); _loop = Accept(destination); }
     /// <summary>循环接受客户端连接，计数后交给 <see cref="Forward"/> 转发，直到隧道停止。</summary>
     private async Task Accept(int destination)
     {
-        try { while (!stop.IsCancellationRequested) { var client = await listener.AcceptTcpClientAsync(stop.Token); Interlocked.Increment(ref accepted); connections.Add(Forward(client, destination)); } }
+        try { while (!_stop.IsCancellationRequested) { var client = await _listener.AcceptTcpClientAsync(_stop.Token); Interlocked.Increment(ref accepted); _connections.Add(Forward(client, destination)); } }
         // 释放隧道时取消接受循环属于正常退出，不视为错误。
         catch (OperationCanceledException) { }
     }
@@ -614,7 +635,7 @@ sealed class Tunnel : IAsyncDisposable
         using (client)
         using (var upstream = new TcpClient())
         // 每条连接用关联取消源：隧道停止或任一方向结束时都能同时关闭两个方向的复制。
-        using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(stop.Token))
+        using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token))
         {
             try
             {
@@ -631,6 +652,6 @@ sealed class Tunnel : IAsyncDisposable
     }
     /// <summary>先取消并停止监听，再等待接受循环和全部转发任务结束，最后释放取消源，保证不遗留后台连接。</summary>
     // 先取消再等待：取消会同时终止接受循环和每条连接的复制，等全部任务结束后才释放取消源，避免任务仍在使用已释放的令牌。
-    public async ValueTask DisposeAsync() { stop.Cancel(); listener.Stop(); await loop; await Task.WhenAll(connections); stop.Dispose(); }
+    public async ValueTask DisposeAsync() { _stop.Cancel(); _listener.Stop(); await _loop; await Task.WhenAll(_connections); _stop.Dispose(); }
 }
 }

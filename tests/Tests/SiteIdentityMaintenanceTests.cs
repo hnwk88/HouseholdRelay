@@ -16,7 +16,7 @@ static class SiteIdentityMaintenanceTests
         var before = fixture.Service.Current; var permit = fixture.Service.Enter();
         var operation = Guid.NewGuid().ToString("N");
         var changing = fixture.Service.Refresh(operation, before.Version, default);
-        Check(!changing.IsCompleted && !fixture.Service.Available && fixture.Repository.Read() == before);
+        Check(!changing.IsCompleted && !fixture.Service.Available && await fixture.Repository.Read() == before);
         for (var index = 0; index < 8; index++) Denied(fixture.Service);
         // 其余并发维护等同一互斥；模拟完整 SSE 释放许可之前任何一项都不能提交。
         var duplicates = Enumerable.Range(0, 7).Select(_ => fixture.Service.Refresh(operation, before.Version, default)).ToArray();
@@ -42,10 +42,10 @@ static class SiteIdentityMaintenanceTests
         var first = fixture.Service.Refresh(Guid.NewGuid().ToString("N"), before.Version, default);
         var second = fixture.Service.Refresh(Guid.NewGuid().ToString("N"), before.Version, default);
         fixture.Clock.Advance(TimeSpan.FromSeconds(59));
-        Check(!first.IsCompleted && !second.IsCompleted && fixture.Repository.Read() == before);
+        Check(!first.IsCompleted && !second.IsCompleted && await fixture.Repository.Read() == before);
         fixture.Clock.Advance(TimeSpan.FromSeconds(1));
         await Refused(first); await Refused(second);
-        Check(fixture.Repository.Read() == before && fixture.Generator.Count == 1 && fixture.Service.Available);
+        Check(await fixture.Repository.Read() == before && fixture.Generator.Count == 1 && fixture.Service.Available);
         using var restored = fixture.Service.Enter();
         Check(fixture.Service.Status.Contains("未更换", StringComparison.Ordinal), "Precommit timeout reports that the identity was not changed");
     }
@@ -57,7 +57,7 @@ static class SiteIdentityMaintenanceTests
         fixture.Preparation.Action = _ => throw new IOException("fixture-secret-path-must-not-escape");
         var operation = Guid.NewGuid().ToString("N");
         var error = await Refused(fixture.Service.Refresh(operation, 1, default));
-        var pending = fixture.Repository.Read();
+        var pending = await fixture.Repository.Read();
         Check(pending.Pending && pending.Version == 2 && fixture.Generator.Count == 2 && !fixture.Service.Available);
         Check(!error.Message.Contains("fixture-secret", StringComparison.Ordinal) && !fixture.Service.Status.Contains(pending.DeviceId, StringComparison.Ordinal));
         Denied(fixture.Service); fixture.Preparation.Action = null;
@@ -73,10 +73,10 @@ static class SiteIdentityMaintenanceTests
         live.Dispose();
         fixture.Preparation.Action = _ => throw new IOException("fixture later alignment failure");
         var laterOperation = Guid.NewGuid().ToString("N"); await Refused(fixture.Service.Refresh(laterOperation, 3, default));
-        var laterPending = fixture.Repository.Read();
+        var laterPending = await fixture.Repository.Read();
         var oldResult = await fixture.Service.Refresh(operation, 1, default);
         Check(oldResult.Version == 2 && !oldResult.Pending && oldResult.Current == laterPending && laterPending.Pending
-            && fixture.Repository.Read() == laterPending && !fixture.Service.Available, "Historical retry cannot complete or disturb a newer pending operation");
+            && await fixture.Repository.Read() == laterPending && !fixture.Service.Available, "Historical retry cannot complete or disturb a newer pending operation");
         fixture.Preparation.Action = null; await fixture.Service.Resume(laterOperation, default);
     }
 
@@ -90,7 +90,7 @@ static class SiteIdentityMaintenanceTests
         var operation = Guid.NewGuid().ToString("N");
         var refresh = fixture.Service.Refresh(operation, 1, default); await started.Task;
         fixture.Clock.Advance(TimeSpan.FromSeconds(30)); await Refused(refresh);
-        var pending = fixture.Repository.Read();
+        var pending = await fixture.Repository.Read();
         Check(pending.Pending && !fixture.Service.Available && fixture.Generator.Count == 2);
         var oldCalls = fixture.Preparation.Calls; fixture.Preparation.Action = null;
         var resume = fixture.Service.Resume(operation, default);
@@ -105,7 +105,7 @@ static class SiteIdentityMaintenanceTests
     {
         using var fixture = new MaintenanceFixture(); fixture.Preparation.Action = _ => throw new IOException("fixture preparation failure");
         await fixture.Service.Prepare(default);
-        Check(!fixture.Service.Available && fixture.Generator.Count == 1 && !fixture.Repository.Read().Pending);
+        Check(!fixture.Service.Available && fixture.Generator.Count == 1 && !(await fixture.Repository.Read()).Pending);
         fixture.Preparation.Action = null; await fixture.Service.Prepare(default);
         Check(fixture.Service.Available && fixture.Generator.Count == 1);
         using var release = new ManualResetEventSlim(); var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -129,7 +129,7 @@ static class SiteIdentityMaintenanceTests
         try
         {
             await Refused(fixture.Service.Refresh(operation, 1, default)); elapsed.Stop();
-            pending = fixture.Repository.Read();
+            pending = await fixture.Repository.Read();
             Check(transaction is not null && elapsed.Elapsed < TimeSpan.FromSeconds(3) && pending.Pending && !fixture.Service.Available && fixture.Generator.Count == 2,
                 "Ready commit must fail promptly and retain pending when another connection owns the writer lock");
         }
@@ -162,8 +162,8 @@ static class SiteIdentityMaintenanceTests
     /// <summary>每例拥有独立站点，使用真实SQLite与应用协调器，只有文件准备和时钟受控。</summary>
     private sealed class MaintenanceFixture : IDisposable
     {
-        private readonly TestHome home = new();
-        private readonly ServiceProvider provider;
+        private readonly TestHome _home = new();
+        private readonly ServiceProvider _provider;
         /// <summary>可直接推进到截止时间的测试时钟。</summary>
         public UsageClock Clock { get; } = new(DateTimeOffset.Parse("2026-11-12T00:00:00Z"));
         /// <summary>统计所有站点编号生成调用。</summary>
@@ -173,20 +173,20 @@ static class SiteIdentityMaintenanceTests
         /// <summary>真实协调器。</summary>
         public ISiteIdentityService Service { get; }
         /// <summary>真实持久身份仓储。</summary>
-        public ISiteIdentityRepository Repository { get; }
+        public Application.Services.Configuration.SiteIdentityService Repository { get; }
         /// <summary>制造实际外部写锁竞争的测试数据库。</summary>
-        public RelayDatabase Database => provider.GetRequiredService<RelayDatabase>();
+        public RelayDatabase Database => _provider.GetRequiredService<RelayDatabase>();
         /// <summary>按正式组合根登记，随后只替换受控的外部依赖。</summary>
         public MaintenanceFixture()
         {
-            var services = new ServiceCollection().AddHouseholdRelay(options => options.Home = home.Path);
+            var services = new ServiceCollection().AddHouseholdRelay(options => options.Home = _home.Path);
             services.AddSingleton<TimeProvider>(Clock); services.AddSingleton<IDeviceIdGenerator>(Generator);
             services.AddSingleton<IClaudeConfigurationPreparation>(Preparation);
-            provider = services.BuildServiceProvider(); Service = provider.GetRequiredService<ISiteIdentityService>();
-            Repository = provider.GetRequiredService<ISiteIdentityRepository>();
+            _provider = services.BuildServiceProvider(); Service = _provider.GetRequiredService<ISiteIdentityService>();
+            Repository = _provider.SiteIdentityStore();
         }
         /// <summary>先释放容器的数据库资源，再删除测试专属临时目录。</summary>
-        public void Dispose() { provider.Dispose(); home.Dispose(); }
+        public void Dispose() { _provider.Dispose(); _home.Dispose(); }
     }
 
     /// <summary>测试专用编号生成器，便于检查重试是否额外换号。</summary>

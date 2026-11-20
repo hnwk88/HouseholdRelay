@@ -23,7 +23,7 @@ public sealed partial record ClaudeCodeIdentity(IReadOnlyList<KeyValuePair<strin
     public const string Missing = "没有取到中转所在电脑 Claude Code 的请求身份，这次没有发往官方账户。请稍后重试；一直这样请在中转所在电脑重新安装 Claude Code。";
 
     /// <summary>不算身份的头：认证、传输与逐跳头，以及跟着这一次请求走的协议版本、beta、内容类型和会话编号（会话编号与正文 <c>metadata.user_id</c> 里的会话一致，按客户端原样保留）。</summary>
-    private static readonly HashSet<string> NotIdentity = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> _notIdentity = new(StringComparer.OrdinalIgnoreCase)
     { "Authorization", "X-Api-Key", "Cookie", "Host", "Content-Length", "Accept-Encoding", "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
         "TE", "Trailer", "Transfer-Encoding", "Upgrade", "Expect", "anthropic-version", "anthropic-beta", "Content-Type", "X-Claude-Code-Session-Id" };
 
@@ -56,7 +56,7 @@ public sealed partial record ClaudeCodeIdentity(IReadOnlyList<KeyValuePair<strin
     /// </summary>
     public static ClaudeCodeIdentity From(IEnumerable<KeyValuePair<string, string>> captured, string? fileVersion, string entrypoint, DateTimeOffset capturedAt)
     {
-        var candidates = captured.Where(header => !NotIdentity.Contains(header.Key) && !RequestHeaders.Contains(header.Key) && !header.Value.Any(char.IsControl)).ToArray();
+        var candidates = captured.Where(header => !_notIdentity.Contains(header.Key) && !RequestHeaders.Contains(header.Key) && !header.Value.Any(char.IsControl)).ToArray();
         var headers = candidates.Where(header => StableHeaders.Contains(header.Key)).ToArray();
         var unclassified = candidates.Where(header => !StableHeaders.Contains(header.Key)).Select(header => header.Key).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         string? Value(string name) => headers.FirstOrDefault(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;

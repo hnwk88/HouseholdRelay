@@ -585,17 +585,6 @@
   "棘轮登记": {
     "方向": "只许减",
     "按": "路径",
-    "登记": [
-      {
-        "路径": "src/Application/DependencyInjection/ApplicationServiceCollectionExtensions.cs",
-        "数": 8,
-        "理由": "2026-11-19 装标准门禁时的存量（依赖注入登记缺中文职责与生命周期说明），整改计划第五批补，只许减少，补一处减一。"
-      },
-      {
-        "路径": "src/Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs",
-        "数": 33,
-        "理由": "2026-11-19 装标准门禁时的存量（依赖注入登记缺中文职责与生命周期说明），整改计划第五批补，只许减少，补一处减一。"
-      }
-    ]
+    "登记": []
   }
 }

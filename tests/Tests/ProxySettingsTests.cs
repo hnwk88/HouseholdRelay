@@ -53,11 +53,11 @@ static class ProxySettingsTests
         await using (var web = await WebFixture.Create(overrides: services => services.AddSingleton<IUpstreamProxy>(
             new SystemUpstreamProxy(() => switchable, new FakeProxy("http://127.0.0.1:7897") { Bypass = true }))))
         {
-            await target.Activate(web.Upstreams); var calls = target.Calls.Count; var person = web.Identities.Create("代理用量");
+            await target.Activate(web.Upstreams); var calls = target.Calls.Count; var person = await web.Identities.Create("代理用量");
             switchable.ProxyMode = "auto";
             using (var refused = await UpstreamFixture.RelayRequest(web, person.Token)) Check((int)refused.StatusCode == 502 && target.Calls.Count == calls);
             var usage = web.App.Services.GetRequiredService<IUsageService>(); UsageRow? row = null;
-            await Until(() => (row = usage.Query(new()).Rows.SingleOrDefault()) is { Outcome: not "started" });
+            await Until(async () => (row = (await usage.Query(new())).Rows.SingleOrDefault()) is { Outcome: not "started" });
             Check(row is { Outcome: "failed", Dispatched: false, UpstreamStatus: null, StatusCode: 502 } && row.Money.Source == "not_applicable", JsonSerializer.Serialize(row));
         }
 

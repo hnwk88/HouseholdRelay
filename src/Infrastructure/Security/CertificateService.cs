@@ -1,42 +1,49 @@
 ﻿using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
+using Application.DependencyInjection;
 using Application.Interfaces.Certificates;
-using Application.Interfaces.Configuration;
 using Application.Interfaces.Security;
+using Application.Services.Configuration;
 using Core.Certificates;
+using Core.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Repositories;
 
 namespace Infrastructure.Security;
 
-/// <summary>导入系统信任的服务器证书或在设置事务内签发私有证书，复用 DPAPI 机密；只向客户端提供公共信任材料。</summary>
-internal sealed class CertificateService(IConfigurationRepository settings, ICertificateRepository repository, ISecretProtector protector, ICertificateFactory factory) : ICertificateService
+/// <summary>
+/// 导入系统信任的服务器证书或在设置事务内签发私有证书，复用 DPAPI 机密；只向客户端提供公共信任材料。
+/// 证书密文（secrets 的 tls）、展示信息与私有 CA 公共 PEM（public_assets 的 tls_info、legacy_ca）和设置经通用仓储存取，保存时与设置在同一个事务里。
+/// </summary>
+internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretProtector protector, ICertificateFactory factory) : ICertificateService
 {
     /// <summary>读取证书展示信息；迁移来的私有证书按当前对外地址补出展示信息。</summary>
-    public CertificateInfo? ReadInfo()
+    public async Task<CertificateInfo?> ReadInfo()
     {
-        if (repository.ReadStoredInfo() is { } stored) return stored;
+        if (await Asset(PublicAsset.CertificateInfoName) is { } stored) return JsonSerializer.Deserialize<CertificateInfo>(stored, ConfigurationFiles.Json);
         // 迁移来的私有证书沿用原根与私钥，仅补充展示信息，不改变客户端信任。
-        if (repository.ReadAuthorityPem() is null) return null;
-        var pfx = LoadCertificate();
+        if (await ReadAuthorityPem() is null) return null;
+        var pfx = await LoadCertificate();
         if (pfx is null) return null;
         try
         {
             using var leaf = X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.EphemeralKeySet);
-            return new("private", PublicAddress(settings.Read().Value.PublicUrl).DnsSafeHost,
-                leaf.NotAfter.ToUniversalTime(), leaf.Thumbprint, DateTimeOffset.MinValue);
+            return new("private", PublicAddress((await Settings()).PublicUrl).DnsSafeHost, leaf.NotAfter.ToUniversalTime(), leaf.Thumbprint, DateTimeOffset.MinValue);
         }
         // 解密出的 PFX 含服务器私钥，读完展示信息无论成败都立即清零。
         finally { CryptographicOperations.ZeroMemory(pfx); }
     }
 
     /// <summary>按系统信任和吊销检查导入 PFX。</summary>
-    public void Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password)
+    public Task Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password)
         => Import(settingsVersion, publicUrl, listenPort, pfx, password, null);
 
     /// <summary>导入 PFX 的实际实现：限制 1 MB 以内，校验对外地址与端口，要求恰好一个带私钥的服务器证书并通过链校验，再把整套证书导出、经 DPAPI 加密后与设置一起按 <paramref name="settingsVersion"/> 乐观并发保存。<paramref name="testRoots"/> 仅供测试，用自定义根代替系统信任。明文 PFX 和加载的证书对象在方法内清零或释放。</summary>
-    internal void Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password, X509Certificate2Collection? testRoots)
+    internal async Task Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password, X509Certificate2Collection? testRoots)
     {
         if (pfx.Length is 0 or > 1024 * 1024) throw new InvalidOperationException("PFX 文件必须小于 1 MB，且包含服务器私钥和证书链。");
-        var config = settings.Read().Value;
+        var config = await Settings();
         config.PublicUrl = publicUrl.Trim(); config.ListenPort = listenPort; config.Validate();
         var url = PublicAddress(config.PublicUrl);
         X509Certificate2Collection certificates;
@@ -53,7 +60,7 @@ internal sealed class CertificateService(IConfigurationRepository settings, ICer
             try
             {
                 var encrypted = protector.Protect(plain);
-                repository.SaveImported(settingsVersion, config, encrypted, info);
+                await Save(settingsVersion, config, encrypted, info, null);
             }
             // 导出的明文 PFX 只用于加密，保存成功或失败都立即清零，库里只留 DPAPI 密文。
             finally { CryptographicOperations.ZeroMemory(plain); }
@@ -94,9 +101,9 @@ internal sealed class CertificateService(IConfigurationRepository settings, ICer
     }
 
     /// <summary>加载并重新校验当前证书及其链。</summary>
-    public ServerCertificates? LoadForServing()
+    public async Task<ServerCertificates?> LoadForServing()
     {
-        var pfx = LoadCertificate();
+        var pfx = await LoadCertificate();
         if (pfx is null) return null;
         X509Certificate2Collection certificates;
         try { certificates = X509CertificateLoader.LoadPkcs12Collection(pfx, null, X509KeyStorageFlags.UserKeySet); }
@@ -105,14 +112,14 @@ internal sealed class CertificateService(IConfigurationRepository settings, ICer
         try
         {
             var certificate = certificates.Cast<X509Certificate2>().Single(item => item.HasPrivateKey);
-            if (ReadInfo()?.Mode == "trusted") Validate(certificate, certificates, PublicAddress(settings.Read().Value.PublicUrl).DnsSafeHost);
+            var host = PublicAddress((await Settings()).PublicUrl).DnsSafeHost;
+            if ((await ReadInfo())?.Mode == "trusted") Validate(certificate, certificates, host);
             else
             {
                 // 私有 CA 使用本实例确切的根验证，仍检查名称、有效期和服务器用途。
-                var pem = ReadAuthorityPem() ?? throw new InvalidOperationException("私有 CA 公共证书缺失，请恢复完整备份。");
+                var pem = await ReadAuthorityPem() ?? throw new InvalidOperationException("私有 CA 公共证书缺失，请恢复完整备份。");
                 var authority = X509Certificate2.CreateFromPem(pem); certificates.Add(authority);
-                Validate(certificate, certificates, PublicAddress(settings.Read().Value.PublicUrl).DnsSafeHost,
-                    new X509Certificate2Collection(authority));
+                Validate(certificate, certificates, host, new X509Certificate2Collection(authority));
             }
             return new ServerCertificates(certificate, certificates);
         }
@@ -121,23 +128,23 @@ internal sealed class CertificateService(IConfigurationRepository settings, ICer
     }
 
     /// <summary>私有 CA 公共 PEM。</summary>
-    public string? ReadAuthorityPem() => repository.ReadAuthorityPem();
+    public Task<string?> ReadAuthorityPem() => Asset(PublicAsset.AuthorityName);
 
     /// <summary>私有 CA 的 SHA-256 指纹。</summary>
-    public string? AuthorityFingerprint()
+    public async Task<string?> AuthorityFingerprint()
     {
-        var pem = ReadAuthorityPem();
+        var pem = await ReadAuthorityPem();
         if (pem is null) return null;
         using var authority = X509Certificate2.CreateFromPem(pem);
         return authority.GetCertHashString(HashAlgorithmName.SHA256);
     }
 
     /// <summary>签发新的私有 CA 与服务器证书并与设置同事务保存。</summary>
-    public void CreatePrivate(long settingsVersion, string publicUrl, int listenPort, bool replaceExisting = false)
+    public async Task CreatePrivate(long settingsVersion, string publicUrl, int listenPort, bool replaceExisting = false)
     {
-        if (repository.ReadProtectedCertificate() is not null && !replaceExisting)
+        if (await ProtectedCertificate() is not null && !replaceExisting)
             throw new InvalidOperationException("已有证书。更换将生成新的信任根，须确认每台客户端重新安装信任。");
-        var config = settings.Read().Value;
+        var config = await Settings();
         config.PublicUrl = publicUrl.Trim(); config.ListenPort = listenPort; config.Validate();
         var address = PublicAddress(config.PublicUrl);
         using var leaf = factory.CreateCertificate(address.DnsSafeHost, out var pem);
@@ -148,12 +155,62 @@ internal sealed class CertificateService(IConfigurationRepository settings, ICer
         {
             var encrypted = protector.Protect(plain);
             var info = new CertificateInfo("private", address.DnsSafeHost, leaf.NotAfter.ToUniversalTime(), leaf.Thumbprint, DateTimeOffset.UtcNow);
-            repository.SavePrivate(settingsVersion, config, encrypted, info, pem);
+            await Save(settingsVersion, config, encrypted, info, pem);
         }
         // 新签发证书的明文 PFX 只用于加密，保存成败都立即清零。
         finally { CryptographicOperations.ZeroMemory(plain); }
     }
 
     /// <summary>读取库中受 DPAPI 保护的服务器证书并解密为 PFX 字节，没有证书时返回 null；返回的明文含私钥，调用方用完必须清零。</summary>
-    private byte[]? LoadCertificate() => repository.ReadProtectedCertificate() is byte[] encrypted ? protector.Unprotect(encrypted) : null;
+    private async Task<byte[]?> LoadCertificate() => await ProtectedCertificate() is byte[] encrypted ? protector.Unprotect(encrypted) : null;
+
+    /// <summary>读取库中服务器证书的 DPAPI 密文；未配置时为空。</summary>
+    private async Task<byte[]?> ProtectedCertificate()
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        return (await scope.Repository<ProtectedSecret>().FirstOrDefaultAsync(item => item.Name == ProtectedSecret.ServerCertificate))?.Protected;
+    }
+
+    /// <summary>按名字读取一段公共资产；没有时为空。</summary>
+    private async Task<string?> Asset(string name)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        return (await scope.Repository<PublicAsset>().FirstOrDefaultAsync(item => item.Name == name))?.Value;
+    }
+
+    /// <summary>读取并校验当前设置。</summary>
+    private async Task<RelayConfiguration> Settings()
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        return (await scope.Repository<RelaySettings>().LoadSettings()).Snapshot().Value;
+    }
+
+    /// <summary>
+    /// 在一个事务里保存证书：设置按 <paramref name="settingsVersion"/> 乐观并发写入（设备编号不许变），写入或覆盖证书密文与展示信息；
+    /// 给了 <paramref name="authorityPem"/>（私有证书）就写入私有 CA 公共 PEM，没给（导入的可信证书）就物理删除旧私有 CA。
+    /// </summary>
+    private async Task Save(long settingsVersion, RelayConfiguration config, byte[] protectedPfx, CertificateInfo info, string? authorityPem)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var settings = scope.Repository<RelaySettings>(); var secrets = scope.Repository<ProtectedSecret>(); var assets = scope.Repository<PublicAsset>();
+        await settings.ExecuteInTransactionAsync(async () =>
+        {
+            (await settings.LoadSettings()).Replace(settingsVersion, config);
+            var secret = await secrets.FirstOrDefaultAsync(item => item.Name == ProtectedSecret.ServerCertificate);
+            if (secret is null) await secrets.AddAsync(secret = new ProtectedSecret { Name = ProtectedSecret.ServerCertificate });
+            secret.Protected = protectedPfx;
+            await Put(assets, PublicAsset.CertificateInfoName, JsonSerializer.Serialize(info, ConfigurationFiles.Json));
+            if (authorityPem is not null) await Put(assets, PublicAsset.AuthorityName, authorityPem);
+            else if (await assets.FirstOrDefaultAsync(item => item.Name == PublicAsset.AuthorityName) is { } authority) await assets.DeleteAsync(authority, isHardDelete: true);
+            return await settings.SaveChangesAsync();
+        });
+    }
+
+    /// <summary>写入或覆盖一段公共资产（只登记，不提交）。</summary>
+    private static async Task Put(IRepository<PublicAsset> assets, string name, string value)
+    {
+        var asset = await assets.FirstOrDefaultAsync(item => item.Name == name);
+        if (asset is null) await assets.AddAsync(asset = new PublicAsset { Name = name });
+        asset.Value = value;
+    }
 }

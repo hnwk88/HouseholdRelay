@@ -18,40 +18,40 @@ static class UpstreamProxyTests
     {
         await using var mock = await UpstreamFixture.Create(); await using var proxy = new ProxyFixture(new Uri(mock.Url).Port);
         using var home = new TestHome(); var process = new TestProcess(home.Path); var service = process.Upstreams;
-        UseProxy(process, "manual", proxy.Url);
-        var id = service.SaveCandidate(service.ReadActive().Version, mock.Options("/prefix"), "fixture-proxy-secret");
+        await UseProxy(process, "manual", proxy.Url);
+        var id = await service.SaveCandidate((await service.ReadActive()).Version, mock.Options("/prefix"), "fixture-proxy-secret");
         var report = await service.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate && proxy.Requests.Count > 0 && mock.Calls.Count == 2);
         Check(proxy.Requests.All(value => value.StartsWith("CONNECT 127.0.0.1:", StringComparison.Ordinal) && !value.Contains("fixture-proxy-secret")));
         Check(mock.Calls.All(call => call.Path.StartsWith("/prefix/v1/", StringComparison.Ordinal) && call.Headers["x-api-key"] == "fixture-proxy-secret"));
-        UseProxy(process, "manual", "http://169.254.169.254:8080");
+        await UseProxy(process, "manual", "http://169.254.169.254:8080");
         Check(!(await service.TestCandidate(id, true, CancellationToken.None)).CanActivate);
     }
 
     /// <summary>经配置服务按版本保存全局代理方式与地址，与项目设置页走同一条写入路径。</summary>
-    public static void UseProxy(TestProcess process, string mode, string? url)
+    public static async Task UseProxy(TestProcess process, string mode, string? url)
     {
-        var snapshot = process.Settings.Read(); snapshot.Value.ProxyMode = mode; snapshot.Value.ProxyUrl = url;
-        process.Settings.Save(snapshot.Version, snapshot.Value);
+        var snapshot = await process.Settings.Read(); snapshot.Value.ProxyMode = mode; snapshot.Value.ProxyUrl = url;
+        await process.Settings.Save(snapshot.Version, snapshot.Value);
     }
 }
 
 sealed class ProxyFixture : IAsyncDisposable
 {
-    private readonly TcpListener listener = new(IPAddress.Loopback, 0);
-    private readonly CancellationTokenSource stop = new();
-    private readonly ConcurrentBag<Task> connections = [];
-    private readonly Task accept;
+    private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+    private readonly CancellationTokenSource _stop = new();
+    private readonly ConcurrentBag<Task> _connections = [];
+    private readonly Task _accept;
     /// <summary>代理收到的每条 CONNECT 请求头原文，用于断言目标写法和不含密钥。</summary>
     public ConcurrentQueue<string> Requests { get; } = new();
     /// <summary>代理在本机回环地址上的访问地址，作为候选上游的 ProxyUrl。</summary>
-    public string Url => $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}";
+    public string Url => $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}";
     /// <summary>开始在随机端口监听，并启动后台接受循环，把隧道接到本机的目标端口。</summary>
-    public ProxyFixture(int destination) { listener.Start(); accept = Accept(destination); }
+    public ProxyFixture(int destination) { _listener.Start(); _accept = Accept(destination); }
     /// <summary>循环接受连接并交给 <see cref="Serve"/> 处理，直到代理停止。</summary>
     private async Task Accept(int destination)
     {
-        try { while (!stop.IsCancellationRequested) connections.Add(Serve(await listener.AcceptTcpClientAsync(stop.Token), destination)); }
+        try { while (!_stop.IsCancellationRequested) _connections.Add(Serve(await _listener.AcceptTcpClientAsync(_stop.Token), destination)); }
         // 释放代理时取消接受循环属于正常退出，不视为错误。
         catch (OperationCanceledException) { }
     }
@@ -64,7 +64,7 @@ sealed class ProxyFixture : IAsyncDisposable
         using (incoming)
         using (var outgoing = new TcpClient())
         // 每条连接用关联取消源：代理停止或任一方向结束时都能同时关闭两个方向的复制。
-        using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(stop.Token))
+        using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token))
         {
             try
             {
@@ -90,5 +90,5 @@ sealed class ProxyFixture : IAsyncDisposable
     }
     /// <summary>先取消并停止监听，再等待接受循环和全部隧道任务结束，最后释放取消源，保证不遗留后台连接。</summary>
     // 先取消再等待：取消会同时终止接受循环和每条隧道的复制，等全部任务结束后才释放取消源，避免任务仍在使用已释放的令牌。
-    public async ValueTask DisposeAsync() { stop.Cancel(); listener.Stop(); await accept; await Task.WhenAll(connections); stop.Dispose(); }
+    public async ValueTask DisposeAsync() { _stop.Cancel(); _listener.Stop(); await _accept; await Task.WhenAll(_connections); _stop.Dispose(); }
 }

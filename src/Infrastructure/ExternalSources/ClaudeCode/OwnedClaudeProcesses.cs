@@ -11,13 +11,13 @@ namespace Infrastructure.ExternalSources.ClaudeCode;
 /// <summary>受保护目录里的最小进程登记；只保存随机操作号、PID 和启动时刻，不保存账户、路径或凭据。</summary>
 internal sealed class OwnedClaudeProcesses(IRelayInstance instance, ISecretProtector protector) : IOwnedClaudeProcesses
 {
-    private readonly string root = Path.Combine(Path.GetFullPath(instance.State), "owned-claude-processes");
+    private readonly string _root = Path.Combine(Path.GetFullPath(instance.State), "owned-claude-processes");
 
     /// <summary>创建并强制落盘 starting 标记，之后才允许调用方启动子进程。</summary>
     public IOwnedClaudeProcess Starting()
     {
-        CheckRoot(); protector.ProtectDirectory(root); CheckRoot();
-        var path = Path.Combine(root, Guid.NewGuid().ToString("N") + ".json");
+        CheckRoot(); protector.ProtectDirectory(_root); CheckRoot();
+        var path = Path.Combine(_root, Guid.NewGuid().ToString("N") + ".json");
         WriteNew(path, new("starting", null, null));
         return new Registration(path);
     }
@@ -26,8 +26,8 @@ internal sealed class OwnedClaudeProcesses(IRelayInstance instance, ISecretProte
     public void EnsureExited()
     {
         CheckRoot();
-        if (!Directory.Exists(root)) return;
-        foreach (var path in Directory.EnumerateFileSystemEntries(root))
+        if (!Directory.Exists(_root)) return;
+        foreach (var path in Directory.EnumerateFileSystemEntries(_root))
         {
             if (!Path.GetExtension(path).Equals(".json", StringComparison.Ordinal) || !Guid.TryParseExact(Path.GetFileNameWithoutExtension(path), "N", out _))
                 throw Unavailable();
@@ -42,7 +42,7 @@ internal sealed class OwnedClaudeProcesses(IRelayInstance instance, ISecretProte
     /// <summary>拒绝登记目录及其上级被重解析到工程之外，避免恢复流程跟随不可信链接。</summary>
     private void CheckRoot()
     {
-        for (string? path = root; path is not null; path = Path.GetDirectoryName(path))
+        for (string? path = _root; path is not null; path = Path.GetDirectoryName(path))
         {
             try { CheckFile(path); }
             // 首次创建时目录尚不存在，仍继续检查它的已有父目录。

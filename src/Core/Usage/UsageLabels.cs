@@ -45,7 +45,7 @@ public static class UsageLabels
         return string.Join("；", attempts.Select(attempt =>
         {
             var name = attempt.Name is { Length: > 0 } named ? attempt.Deleted ? named + "（已删除）" : named
-                : attempt.Name is not null || attempt.CandidateId is null ? "未命名上游" : "已删除的上游";
+                : attempt.Name is not null || attempt.UpstreamCandidateId is null ? "未命名上游" : "已删除的上游";
             var parts = new List<string> { name, attempt.UpstreamStatus?.ToString() ?? "无响应" };
             if (attempt.ErrorType is { } type) parts.Add(attempt.ConnectFailure is { } failure ? ErrorType(type) + "：" + ConnectFailure(failure) : ErrorType(type));
             if (attempt.ErrorMessage is { } message) parts.Add(message);

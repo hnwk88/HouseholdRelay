@@ -15,12 +15,12 @@ public sealed class UpstreamAttempt(int number, long? candidateId, long version,
 {
     /// <summary>错误说明落库的最大字符数（含截断时补的省略号）。</summary>
     public const int MessageLimit = 300;
-    private readonly long started = Stopwatch.GetTimestamp();
+    private readonly long _started = Stopwatch.GetTimestamp();
 
     /// <summary>本请求里的第几次尝试，从 1 开始。</summary>
     public int Number { get; } = number;
     /// <summary>这次尝试所用已保存上游的主键；活动上游不是从已保存上游切换来的（新实例、独立中转）时为 null。</summary>
-    public long? CandidateId { get; } = candidateId;
+    public long? UpstreamCandidateId { get; } = candidateId;
     /// <summary>这次尝试所用的活动上游版本。</summary>
     public long Version { get; } = version;
     /// <summary>开始尝试的 UTC 时刻，取自用量时钟。</summary>
@@ -124,5 +124,5 @@ public sealed class UpstreamAttempt(int number, long? candidateId, long version,
     }
 
     /// <summary>从开始尝试到此刻的毫秒数。</summary>
-    private long Elapsed => (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+    private long Elapsed => (long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds;
 }

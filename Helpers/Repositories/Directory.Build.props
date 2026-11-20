@@ -1,0 +1,26 @@
+﻿<Project>
+  <!--
+    在主工程中优先继承集中版本和产品元数据；复制到可移植规则包或其它工程后，
+    上级配置可能不存在，因此导入必须带存在性判断，避免独立构建直接报 MSB4019。
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)..\..\Directory.Build.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\..\Directory.Build.props')" />
+
+  <PropertyGroup>
+    <!-- 以下值只在宿主工程没有集中配置时生效，保证仓储模块可以单独恢复和构建。 -->
+    <Authors Condition="'$(Authors)' == ''">Repositories Maintainers</Authors>
+    <Company Condition="'$(Company)' == ''">Repositories</Company>
+    <Product Condition="'$(Product)' == ''">通用数据仓储模块</Product>
+    <Version Condition="'$(Version)' == ''">1.0.0</Version>
+    <FileVersion Condition="'$(FileVersion)' == ''">1.0.0.0</FileVersion>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">1.0.0</InformationalVersion>
+    <EnforceCodeStyleInBuild Condition="'$(EnforceCodeStyleInBuild)' == ''">true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile Condition="'$(GenerateDocumentationFile)' == ''">true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <BaseOutputPath>bin\$(MSBuildProjectName)\</BaseOutputPath>
+    <BaseIntermediateOutputPath>obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>obj\$(MSBuildProjectName)\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

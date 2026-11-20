@@ -23,7 +23,7 @@ static class ClaudeCodeAlignmentTests
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         var sent = new List<UpstreamCall>();
         foreach (var (entrypoint, agent) in new[] { ("cli", "sdk-cli"), ("sdk-cli", "cli"), ("claude-vscode", "cli") })
         {
@@ -47,7 +47,7 @@ static class ClaudeCodeAlignmentTests
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         var downstreamDevice = new string('a', 64);
         var body = JsonSerializer.Serialize(new
         {
@@ -60,7 +60,7 @@ static class ClaudeCodeAlignmentTests
         });
         using (var response = await Send(web, person.Token, body, null)) Check(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         // 设备段换成站点编号、账户段换成测试时向官方取回的账户编号，其余字节原样。
-        var expected = body.Replace(downstreamDevice, web.Settings.Read().Value.DeviceId, StringComparison.Ordinal)
+        var expected = body.Replace(downstreamDevice, (await web.Settings.Read()).Value.DeviceId, StringComparison.Ordinal)
             .Replace("_account_account_", "_account_" + FakeClaude.AccountUuid + "_", StringComparison.Ordinal);
         Check(mock.Calls.Last().Body == expected, "The environment section, tools, billing content and every byte outside the device and account values must reach the upstream unchanged");
     }
@@ -74,7 +74,7 @@ static class ClaudeCodeAlignmentTests
         using var claude = new FakeClaudeLauncher("success") { UpdateTo = "1.0.1" };
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         // 三个请求同时发：它们会同时看到「客户端更新」，用来证明升级只起一次。
         var calls = Enumerable.Range(0, 3).Select(async _ =>
         {
@@ -100,7 +100,7 @@ static class ClaudeCodeAlignmentTests
         using var claude = new FakeClaudeLauncher("update-fail");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
-        var person = web.Identities.Create("书房");
+        var person = await web.Identities.Create("书房");
         using (var first = await Send(web, person.Token, Body("2.0.0", "sdk-cli"), null)) Check(first.StatusCode == HttpStatusCode.OK, "A failing upgrade must not affect forwarding");
         await Until(async () => (await Upstream(web)).Contains("升级失败", StringComparison.Ordinal));
         var page = await Upstream(web);
@@ -125,7 +125,7 @@ static class ClaudeCodeAlignmentTests
         using var claude = new FakeClaudeLauncher("success") { UpdateTo = "1.0.1" };
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Official(claude, mock);
-        var person = web.Identities.Create("卧室");
+        var person = await web.Identities.Create("卧室");
         using (var response = await Send(web, person.Token, Body("0.9.0", "cli"), null)) Check(response.StatusCode == HttpStatusCode.OK);
         await Task.Delay(500);
         var page = await Upstream(web);
@@ -138,10 +138,10 @@ static class ClaudeCodeAlignmentTests
     private static async Task<WebFixture> Official(FakeClaudeLauncher claude, UpstreamFixture mock)
     {
         var web = await WebFixture.Create(overrides: claude.Register);
-        var id = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model" },
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model" },
             FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
         var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None);
-        Check(report.CanActivate, report.Message); web.Upstreams.Activate(id);
+        Check(report.CanActivate, report.Message); await web.Upstreams.Activate(id);
         await web.Login(); return web;
     }
 

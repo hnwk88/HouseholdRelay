@@ -20,7 +20,7 @@ static class IntegerKeyUpgradeTests
     /// 会话（凭据哈希、管理员）、活动上游（来源），升级前直接读旧文本主键，升级后经整数外键连回对外编号或归档里的旧编号再读，两份集合完全相同；
     /// 整库外键检查 0 条；四张不留旧编号的表逐条另存且读句报数；升级前的个人令牌、管理员会话与密码照常可用，导入登录文件的官方账户仍读得出凭据，停用的上游仍是停用。
     /// </summary>
-    public static Task RealVersion9()
+    public static async Task RealVersion9()
     {
         using var home = DatabaseUpgradeTests.Legacy("v9"); var path = DatabaseUpgradeTests.Database(home.Path); var plain = Plain();
         // 会话 8 小时到期：在旧表上只把到期时刻推后（数据行，不改结构），用来证明凭据哈希原样搬了过去。
@@ -29,7 +29,7 @@ static class IntegerKeyUpgradeTests
         var before = Relations(path); var rows = Rows(path);
         Check(Version(path) == 9 && rows["usage_requests"] == 7 && rows["usage_attempts"] == 7 && rows["tokens"] == 4 && rows["upstream_candidates"] == 4, "Fixture shape changed");
         var process = new TestProcess(home.Path); _ = process.Database;
-        Check(Version(path) == RelayDatabase.CurrentVersion && RelayDatabase.CurrentVersion == 10);
+        Check(Version(path) == RelayDatabase.CurrentVersion && RelayDatabase.CurrentVersion == 11);
         var after = Relations(path);
         foreach (var (kind, set) in before)
         {
@@ -49,21 +49,20 @@ static class IntegerKeyUpgradeTests
             && archived.GetValueOrDefault("administrators/replaced-id") == 1 && archived.GetValueOrDefault("usage_prices/replaced-id") == 4
             && !archived.Keys.Any(key => key.EndsWith("/orphan-reference", StringComparison.Ordinal)), string.Join(",", archived));
         var sentence = process.Get<IRelayInstance>().LastUpgrade!.Sentence();
-        Check(sentence.Contains("从版本 9 升到 10") && sentence.Contains("版本 10：使用者的旧文本编号 2 个") && sentence.Contains("个人令牌的旧文本编号 4 个"), sentence);
+        Check(sentence.Contains($"从版本 9 升到 {RelayDatabase.CurrentVersion}") && sentence.Contains("版本 10：使用者的旧文本编号 2 个") && sentence.Contains("个人令牌的旧文本编号 4 个"), sentence);
         // 升级前发出的东西照常可用：个人令牌、管理员会话、管理密码（旧哈希按旧主键算过，算法不读它）。
         foreach (var (name, token) in plain.Tokens)
         {
-            var access = process.Identities.Clients.Authenticate(token);
-            Check(access?.UserId is { } id && process.Identities.List().Single(user => user.Id == id).DisplayName == name, name + " token must still work");
+            var access = await process.Identities.Clients.Authenticate(token);
+            Check(access?.UserId is { } id && (await process.Identities.List()).Single(user => user.Id == id).DisplayName == name, name + " token must still work");
         }
-        Check(process.Administrators.IsSessionValid(plain.Session), "The administrator session issued before the upgrade stays valid");
-        Check(process.Administrators.Login("fixture-v9-admin-password") is not null, "The old password hash still verifies");
-        var saved = process.Upstreams.ListCandidates();
+        Check(await process.Administrators.IsSessionValid(plain.Session), "The administrator session issued before the upgrade stays valid");
+        Check(await process.Administrators.Login("fixture-v9-admin-password") is not null, "The old password hash still verifies");
+        var saved = await process.Upstreams.ListCandidates();
         Check(saved.Select(item => item.Uid).SequenceEqual([plain.Upstreams["kept"], plain.Upstreams["standby"], plain.Upstreams["official"]]), "Order and uids survive; the deleted one stays deleted");
         var official = saved.Single(item => item.Uid == plain.Upstreams["official"]);
         Check(official.Options.OfficialLogin && process.Get<IOfficialAccountLogin>().HasCredential(official.Uid), "The imported official account still reads its credential");
         Check(Directory.Exists(Path.Combine(home.Path, ".state", "official-accounts", official.Uid)));
-        return Task.CompletedTask;
     }
 
     /// <summary>网页走一遍：建站即把真实 v9 库升到 10；用升级前发出的个人令牌经中转真实转发一次（本机模拟上游），用量记在原来那个使用者名下，个人用量接口只读出自己的。</summary>
@@ -72,9 +71,9 @@ static class IntegerKeyUpgradeTests
         var plain = Plain();
         await using var mock = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(prepare: home => DatabaseUpgradeTests.CopyLegacy("v9", home));
-        Check(web.App.Services.GetRequiredService<IRelayInstance>().LastUpgrade is { FromVersion: 9, ToVersion: 10 });
+        Check(web.App.Services.GetRequiredService<IRelayInstance>().LastUpgrade is { FromVersion: 9, ToVersion: RelayDatabase.CurrentVersion });
         await mock.Activate(web.Upstreams);
-        var token = plain.Tokens["夹具甲"]; var self = web.Identities.Clients.Authenticate(token)!.UserId!.Value;
+        var token = plain.Tokens["夹具甲"]; var self = (await web.Identities.Clients.Authenticate(token))!.UserId!.Value;
         using (var relayed = await UpstreamFixture.RelayRequest(web, token)) Check(relayed.StatusCode == HttpStatusCode.OK, "Relay with a pre-upgrade token: " + relayed.StatusCode);
         var personal = await UsageFixture.Personal(web, token);
         Check(personal.Rows.Count > 0 && personal.Rows.All(row => row.UserId == self && row.DisplayName == "夹具甲"), "Personal usage reads only the token owner");
@@ -88,11 +87,11 @@ static class IntegerKeyUpgradeTests
         var plain = Plain();
         var file = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "LegacyDatabases", "v9", "upstreams.export"));
         await using var web = await WebFixture.Create();
-        var outcomes = await web.Upstreams.Import(web.Upstreams.ReadActive().Version, file, plain.ExportPassword, CancellationToken.None);
+        var outcomes = await web.Upstreams.Import((await web.Upstreams.ReadActive()).Version, file, plain.ExportPassword, CancellationToken.None);
         Check(outcomes.Select(item => (item.Name, item.Error)).SequenceEqual([("夹具甲供应商", (string?)null), ("夹具乙供应商", null)]), string.Join(" | ", outcomes));
-        var saved = web.Upstreams.ListCandidates();
+        var saved = await web.Upstreams.ListCandidates();
         Check(saved.Select(item => (item.Name, item.Options.BaseUrl)).SequenceEqual([("夹具甲供应商", "https://relay-a.example.com"), ("夹具乙供应商", "https://relay-b.example.com")]));
-        Check(saved.Select(item => item.Id).SequenceEqual(outcomes.Select(item => item.CandidateId!.Value)) && saved.All(item => item.Id > 0 && Regex.IsMatch(item.Uid, "^[0-9a-f]{32}$")));
+        Check(saved.Select(item => item.Id).SequenceEqual(outcomes.Select(item => item.UpstreamCandidateId!.Value)) && saved.All(item => item.Id > 0 && Regex.IsMatch(item.Uid, "^[0-9a-f]{32}$")));
         Check(!saved.Any(item => plain.Upstreams.ContainsValue(item.Uid)), "Imported upstreams get new uids, not the source instance's");
     }
 
@@ -110,7 +109,7 @@ static class IntegerKeyUpgradeTests
                 && Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%_v10'")) == 0, "Nothing of version 10 may remain");
         Check(Directory.GetFiles(Path.Combine(home.Path, ".state", "upgrade-backups"), "relay.db", SearchOption.AllDirectories).Length == 1);
         _ = new TestProcess(home.Path).Database;
-        Check(Version(path) == 10 && Rows(path).SequenceEqual(rows));
+        Check(Version(path) == RelayDatabase.CurrentVersion && Rows(path).SequenceEqual(rows));
         return Task.CompletedTask;
     }
 
@@ -139,7 +138,7 @@ static class IntegerKeyUpgradeTests
                 RelayDatabase.Execute(connection, null, "PRAGMA foreign_keys=OFF; UPDATE usage_attempts SET candidate_id='ghost-upstream' WHERE attempt=2");
             }
             _ = new TestProcess(home.Path).Database;
-            Check(Version(path) == 10 && Archived(path).GetValueOrDefault("usage_attempts/orphan-reference") == 1);
+            Check(Version(path) == RelayDatabase.CurrentVersion && Archived(path).GetValueOrDefault("usage_attempts/orphan-reference") == 1);
             using var check = DatabaseUpgradeTests.Connect(path);
             Check(((string)RelayDatabase.Scalar(check, null, "SELECT row_json FROM migration_archive WHERE reason='orphan-reference'")!).Contains("ghost-upstream"));
             Check(RelayDatabase.Scalar(check, null, "SELECT a.candidate_id FROM usage_attempts a JOIN usage_requests r ON r.id=a.usage_request_id WHERE r.request_id=$id AND a.attempt=2", ("$id", request)) is null
@@ -155,24 +154,24 @@ static class IntegerKeyUpgradeTests
     public static async Task NewRowsGetDatabaseKeys()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path);
-        var first = process.Identities.Create("甲"); var second = process.Identities.Create("乙");
+        var first = await process.Identities.Create("甲"); var second = await process.Identities.Create("乙");
         Check(first.UserId == 1 && second.UserId == 2);
-        Check(process.Identities.List().All(user => Regex.IsMatch(user.Name, "^u_[0-9a-f]{24}$")) && process.Identities.List()[0].Name != process.Identities.List()[1].Name);
-        var version = process.Upstreams.ReadActive().Version;
-        var a = process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://key-a.example.com" }, "sk-key-a-0001", "甲家");
-        var b = process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://key-b.example.com" }, "sk-key-b-0002", "乙家");
+        Check((await process.Identities.List()).All(user => Regex.IsMatch(user.Name, "^u_[0-9a-f]{24}$")) && (await process.Identities.List())[0].Name != (await process.Identities.List())[1].Name);
+        var version = (await process.Upstreams.ReadActive()).Version;
+        var a = await process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://key-a.example.com" }, "sk-key-a-0001", "甲家");
+        var b = await process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://key-b.example.com" }, "sk-key-b-0002", "乙家");
         Check(a == 1 && b == 2);
-        var saved = process.Upstreams.ListCandidates();
+        var saved = await process.Upstreams.ListCandidates();
         Check(saved.All(item => Regex.IsMatch(item.Uid, "^[0-9a-f]{32}$")) && saved[0].Uid != saved[1].Uid);
-        process.Pricing.Save(a, "key-model", "USD", 1m, 2m, null, null);
+        await process.Pricing.Save(a, "key-model", "USD", 1m, 2m, null, null);
         long PriceId() { using var connection = process.Database.Open(); return Convert.ToInt64(RelayDatabase.Scalar(connection, null, "SELECT id FROM usage_prices WHERE candidate_id=$a", ("$a", a))); }
-        var priceId = PriceId(); process.Pricing.Save(a, "key-model", "USD", 5m, 6m, null, null);
-        Check(PriceId() == priceId && process.Pricing.List(a) is [{ InputPerMillion: 5 }], "Overwriting a price keeps its key");
-        process.Administrators.Initialize(process.Administrators.BootstrapCode()!, WebFixture.Password);
-        var session = process.Administrators.Login(WebFixture.Password)!;
+        var priceId = PriceId(); await process.Pricing.Save(a, "key-model", "USD", 5m, 6m, null, null);
+        Check(PriceId() == priceId && await process.Pricing.List(a) is [{ InputPerMillion: 5 }], "Overwriting a price keeps its key");
+        await process.Administrators.Initialize((await process.Administrators.BootstrapCode())!, WebFixture.Password);
+        var session = (await process.Administrators.Login(WebFixture.Password))!;
         using (var connection = process.Database.Open())
             Check((string?)RelayDatabase.Scalar(connection, null, "SELECT token_hash FROM admin_sessions WHERE admin_id=(SELECT id FROM administrators)") == ConfigurationFiles.Hash(session));
-        var user = process.Identities.Clients.Authenticate(first.Token)!;
+        var user = (await process.Identities.Clients.Authenticate(first.Token))!;
         await process.Usage.Start("key-request", user, "inference"); await process.Usage.Dispatch("key-request", version, a, "key-model");
         Check(await process.Usage.Finish("key-request", new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(1, 2)) { Attempts = [new UpstreamAttempt(1, a, version, DateTimeOffset.UtcNow)] }));
         using (var connection = process.Database.Open())
@@ -180,7 +179,7 @@ static class IntegerKeyUpgradeTests
             Check(Convert.ToInt64(RelayDatabase.Scalar(connection, null, "SELECT a.usage_request_id FROM usage_attempts a")) == Convert.ToInt64(RelayDatabase.Scalar(connection, null, "SELECT id FROM usage_requests WHERE request_id='key-request'")));
             Check(Convert.ToInt64(RelayDatabase.Scalar(connection, null, "SELECT user_id FROM usage_requests")) == first.UserId && Convert.ToInt64(RelayDatabase.Scalar(connection, null, "SELECT candidate_id FROM usage_requests")) == a);
         }
-        Check(process.Usage.Query(new() { UserId = first.UserId }).Rows.Single().RequestId == "key-request" && process.Usage.Query(new() { UserId = second.UserId }).Total == 0);
+        Check((await process.Usage.Query(new() { UserId = first.UserId })).Rows.Single().RequestId == "key-request" && (await process.Usage.Query(new() { UserId = second.UserId })).Total == 0);
         // 尝试记录随用量一起删（40 天清理按用量删）：经程序自己的连接（外键开着）删掉这条用量，它的尝试不能留下，也不能因外键拦住删除。
         using (var connection = process.Database.Open())
         {
@@ -200,7 +199,7 @@ static class IntegerKeyUpgradeTests
     /// 量一份库里的六类关系，每条都写成一律用旧文本编号的元组：版本 9 直接读主键与外键列；版本 10 经整数外键连回上游的 uid、用量的 request_id、会话的 token_hash，
     /// 不留属性列的使用者、令牌、管理员按归档里 replaced-id 的旧编号与新号对回去。
     /// </summary>
-    private static Dictionary<string, HashSet<string>> Relations(string path)
+    internal static Dictionary<string, HashSet<string>> Relations(string path)
     {
         using var connection = DatabaseUpgradeTests.Connect(path);
         var keyed = Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) >= 10;
@@ -234,7 +233,7 @@ static class IntegerKeyUpgradeTests
     }
 
     /// <summary>各表行数。</summary>
-    private static Dictionary<string, long> Rows(string path)
+    internal static Dictionary<string, long> Rows(string path)
     {
         using var connection = DatabaseUpgradeTests.Connect(path);
         return _tables.ToDictionary(table => table, table => Convert.ToInt64(RelayDatabase.Scalar(connection, null, $"SELECT COUNT(*) FROM {table}")));

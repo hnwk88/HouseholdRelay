@@ -19,45 +19,45 @@ public static class UpstreamIdentityRaceTests
             services.AddSingleton<SiteIdentityService>();
             services.AddSingleton<ISiteIdentityService>(provider => controlled = new(provider.GetRequiredService<SiteIdentityService>()));
         });
-        var official = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), "模拟官方", default);
+        var official = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), "模拟官方", default);
         Check((await web.Upstreams.TestCandidate(official, true, default)).CanActivate);
-        web.Upstreams.Activate(official);
+        await web.Upstreams.Activate(official);
         var api = await AddApi(web, mock, "备用 API");
-        web.Upstreams.SetFailover(true);
-        using (var original = web.Relay.Upstreams.Acquire())
+        await web.Upstreams.SetFailover(true);
+        using (var original = await web.Relay.Upstreams.Acquire())
         {
             PauseAndCool(original);
             controlled!.RejectSecondEntry();
-            using var raced = web.Relay.Upstreams.Acquire();
+            using var raced = await web.Relay.Upstreams.Acquire();
             Check(controlled.EntryCalls == 2, "The injected refusal must be inside ReadAccessToken after the first permit succeeds.");
             Check(ReferenceEquals(original, raced) && raced.Paused && raced.CooldownSeconds > 0 && ((UpstreamConnection)raced).IdentityReadBlocked,
                 "A blocked read must retain the old active connection and close it even when availability has already recovered.");
         }
         controlled!.RejectSecondEntry();
-        var blocked = web.Upstreams.ReadActive();
+        var blocked = await web.Upstreams.ReadActive();
         Check(blocked.BlockedByIdentity && blocked.Credential is null && controlled.Available, "A blocked snapshot records the observed race, independently of current availability.");
         controlled.RejectSecondEntry();
-        using (var route = web.Relay.Upstreams.Route())
+        using (var route = await web.Relay.Upstreams.Route())
         {
-            route.CheckState();
-            Check(route.Next("fixture-model")?.Snapshot.CandidateId == api, "Independent API fallback must survive the official credential read race.");
+            await route.CheckState();
+            Check((await route.Next("fixture-model"))?.Snapshot.UpstreamCandidateId == api, "Independent API fallback must survive the official credential read race.");
         }
-        web.Upstreams.Activate(api);
+        await web.Upstreams.Activate(api);
         var anotherApi = await AddApi(web, mock, "另一个 API");
         var pool = (UpstreamPool)web.Relay.Upstreams;
-        var before = pool.Standby();
+        var before = await pool.Standby();
         try
         {
-            var originalOfficial = before.Single(connection => connection.Snapshot.CandidateId == official);
+            var originalOfficial = before.Single(connection => connection.Snapshot.UpstreamCandidateId == official);
             PauseAndCool(originalOfficial);
             controlled.RejectSecondEntry();
-            var after = pool.Standby();
+            var after = await pool.Standby();
             try
             {
-                var kept = after.Single(connection => connection.Snapshot.CandidateId == official);
+                var kept = after.Single(connection => connection.Snapshot.UpstreamCandidateId == official);
                 Check(controlled.EntryCalls == 2 && ReferenceEquals(originalOfficial, kept) && kept.Paused && kept.CooldownSeconds > 0 && kept.IdentityReadBlocked,
                     "Blocked standby reads preserve the exact connection and its prior pause/cooldown.");
-                Check(after.Any(connection => connection.Snapshot.CandidateId == anotherApi && connection.Usable), "Enumeration must continue to the API after the refused official candidate.");
+                Check(after.Any(connection => connection.Snapshot.UpstreamCandidateId == anotherApi && connection.Usable), "Enumeration must continue to the API after the refused official candidate.");
             }
             // 每份备用列表都持有独立租约，失败断言也必须逐个归还。
             finally { foreach (var connection in after) connection.Dispose(); }
@@ -78,10 +78,10 @@ public static class UpstreamIdentityRaceTests
             services.AddSingleton<ISiteIdentityService>(provider => controlled = new(provider.GetRequiredService<SiteIdentityService>()));
         });
         var official = await AddOfficial(web, mock, "主要官方");
-        web.Upstreams.Activate(official);
+        await web.Upstreams.Activate(official);
         await AddOfficial(web, mock, "备用官方");
-        var api = await AddApi(web, mock, "独立 API"); web.Upstreams.SetFailover(true);
-        var token = web.Identities.Create("竞争客户端").Token;
+        var api = await AddApi(web, mock, "独立 API"); await web.Upstreams.SetFailover(true);
+        var token = (await web.Identities.Create("竞争客户端")).Token;
         var body = DeviceMetadataPathTests.Sample(false, new string('a', 64), "fixture-model", claude.Version, "sdk-cli");
         var before = mock.Calls.Count;
         controlled!.RejectEntry(3);
@@ -89,43 +89,43 @@ public static class UpstreamIdentityRaceTests
         using (var response = await web.Http.SendAsync(request)) Check(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         Check(mock.Calls.Count == before + 1 && mock.Calls.Last().Headers.ContainsKey("x-api-key") && !mock.Calls.Last().Headers.ContainsKey("Authorization"),
             "The post-selection refusal must skip the other official account and send only to the independent API.");
-        using var original = web.Relay.Upstreams.Acquire();
-        var path = Path.Combine(web.Home.Path, ".state", "official-accounts", web.Upstreams.ReadCandidate(official).Uid, ".claude.json");
+        using var original = await web.Relay.Upstreams.Acquire();
+        var path = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(official)).Uid, ".claude.json");
         var originalBytes = File.ReadAllBytes(path);
         File.WriteAllText(path, "{broken-identity-configuration");
         // 普通转发按身份代次缓存核对结果、不再每次打开私有配置；损坏在下一次受控准备（或续期启动前重读）时发现。
         // 这里走一次受控准备：它拒绝损坏文件、不改原字节，并让本代缓存失效，下一次读取据实阻断。
         var refused = false;
-        try { web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>().PrepareAccount(web.Upstreams.ReadCandidate(official).Uid); }
+        try { web.App.Services.GetRequiredService<IClaudeConfigurationPreparation>().PrepareAccount((await web.Upstreams.ReadCandidate(official)).Uid); }
         // 损坏配置的固定拒绝是本步预期结果。
         catch (ClaudeConfigurationUnavailableException) { refused = true; }
         Check(refused && File.ReadAllText(path) == "{broken-identity-configuration", "Controlled preparation refuses the damaged file without rewriting it.");
-        using (var blocked = web.Relay.Upstreams.Acquire())
+        using (var blocked = await web.Relay.Upstreams.Acquire())
             Check(ReferenceEquals(original, blocked) && ((UpstreamConnection)blocked).IdentityReadBlocked && !blocked.Paused && blocked.CooldownSeconds == 0,
                 "A known configuration refusal preserves credentials and upstream states, but closes the existing connection.");
-        using (var route = web.Relay.Upstreams.Route())
+        using (var route = await web.Relay.Upstreams.Route())
         {
-            route.CheckState();
-            var selected = route.Next("fixture-model");
-            Check(selected?.Snapshot.CandidateId != official, "The broken official account is excluded even though the site is otherwise available.");
+            await route.CheckState();
+            var selected = await route.Next("fixture-model");
+            Check(selected?.Snapshot.UpstreamCandidateId != official, "The broken official account is excluded even though the site is otherwise available.");
         }
-        web.Upstreams.Delete(web.Upstreams.ListCandidates().Single(candidate => candidate.Name == "备用官方").Id);
+        await web.Upstreams.Delete((await web.Upstreams.ListCandidates()).Single(candidate => candidate.Name == "备用官方").Id);
         before = mock.Calls.Count;
         using (var request = UsageFixture.Request(web, token, "damaged-configuration", body: body))
         using (var response = await web.Http.SendAsync(request)) Check(response.IsSuccessStatusCode);
         Check(mock.Calls.Count == before + 1 && mock.Calls.Last().Headers.ContainsKey("x-api-key"), "A damaged official configuration cannot block the API candidate.");
         Check(File.ReadAllText(path) == "{broken-identity-configuration", "Ordinary forwarding must not repair damaged private configuration.");
         File.WriteAllBytes(path, originalBytes);
-        using var restored = web.Relay.Upstreams.Acquire();
+        using var restored = await web.Relay.Upstreams.Acquire();
         Check(ReferenceEquals(original, restored) && !((UpstreamConnection)restored).IdentityReadBlocked && !restored.Paused && restored.CooldownSeconds == 0,
             "A successful credential reread clears only the local block without replacing the connection.");
-        Check(web.Upstreams.ReadCandidate(api).State == "passed");
+        Check((await web.Upstreams.ReadCandidate(api)).State == "passed");
     }
 
     /// <summary>导入并测试独立假官方账户；不改变当前活动上游。</summary>
     private static async Task<long> AddOfficial(WebFixture web, UpstreamFixture mock, string name)
     {
-        var id = await web.Upstreams.ImportOfficial(web.Upstreams.ReadActive().Version, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), name, default);
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), name, default);
         Check((await web.Upstreams.TestCandidate(id, true, default)).CanActivate);
         return id;
     }
@@ -133,7 +133,7 @@ public static class UpstreamIdentityRaceTests
     /// <summary>创建并测试一个独立 API 候选，但不切换当前活动上游。</summary>
     private static async Task<long> AddApi(WebFixture web, UpstreamFixture mock, string name)
     {
-        var id = web.Upstreams.SaveCandidate(web.Upstreams.ReadActive().Version, mock.Options(), "fixture-race-api", name);
+        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).Version, mock.Options(), "fixture-race-api", name);
         Check((await web.Upstreams.TestCandidate(id, true, default)).CanActivate);
         return id;
     }

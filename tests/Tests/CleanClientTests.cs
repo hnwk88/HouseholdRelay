@@ -18,7 +18,7 @@ static class CleanClientTests
     {
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
         var upstreams = web.Upstreams; await mock.Activate(upstreams);
-        var user = web.Identities.Create("干净客户端");
+        var user = await web.Identities.Create("干净客户端");
         using var temporary = new TestHome(); var inputPath = Path.Combine(temporary.Path, "fixture.txt");
         await File.WriteAllTextAsync(inputPath, "CLEAN_CLIENT_FILE_MARKER");
         mock.Handler = async context =>

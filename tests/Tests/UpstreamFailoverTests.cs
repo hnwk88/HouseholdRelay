@@ -30,8 +30,8 @@ static class UpstreamFailoverTests
             Check(response.StatusCode == HttpStatusCode.OK && (await response.Content.ReadAsStringAsync()).Contains("msg_fixture"), $"{status} must be caught by the standby upstream");
         var report = await Settled(scene.Web, 1); var row = report.Rows.Single(); var tries = report.AttemptsOf(row.RequestId);
         Check(row.Outcome == "succeeded" && tries.Count == 2, $"{status}: two attempts");
-        Check(tries[0].Number == 1 && tries[0].CandidateId == scene.IdA && tries[0].UpstreamStatus == status && tries[0].Disposition == "next" && tries[0].ErrorType == ErrorType(status), $"{status}: first attempt {tries[0]}");
-        Check(tries[1].Number == 2 && tries[1].CandidateId == scene.IdB && tries[1].UpstreamStatus == 200 && tries[1].Disposition == "client" && tries[1].ErrorType is null, $"{status}: second attempt {tries[1]}");
+        Check(tries[0].Number == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].UpstreamStatus == status && tries[0].Disposition == "next" && tries[0].ErrorType == ErrorType(status), $"{status}: first attempt {tries[0]}");
+        Check(tries[1].Number == 2 && tries[1].UpstreamCandidateId == scene.IdB && tries[1].UpstreamStatus == 200 && tries[1].Disposition == "client" && tries[1].ErrorType is null, $"{status}: second attempt {tries[1]}");
         Check(scene.A.Calls.Count == 1 && scene.B.Calls.Count == 1);
         Check(scene.Served(row.RequestId) == scene.IdB, "Usage belongs to the upstream that actually served");
         var line = scene.Events().Last();
@@ -46,13 +46,13 @@ static class UpstreamFailoverTests
     {
         await using var scene = await Scene.Create();
         using var silent = new TcpListener(IPAddress.Loopback, 0); silent.Start();
-        var dead = scene.ForceActive(scene.A.Options() with { BaseUrl = "https://127.0.0.1:" + ((IPEndPoint)silent.LocalEndpoint).Port }, "沉默上游");
+        var dead = await scene.ForceActive(scene.A.Options() with { BaseUrl = "https://127.0.0.1:" + ((IPEndPoint)silent.LocalEndpoint).Port }, "沉默上游");
         using (var request = Request(scene.Web, scene.Token))
         using (var response = await scene.Web.Http.SendAsync(request))
             Check(response.StatusCode == HttpStatusCode.OK, "Connect timeout must be caught by a standby upstream");
         var report = await Settled(scene.Web, 1); var tries = report.AttemptsOf(report.Rows.Single().RequestId);
-        Check(tries.Count == 2 && tries[0].CandidateId == dead && tries[0].ErrorType == "connection_failed" && tries[0].ConnectFailure == "connect_timeout"
-            && tries[0].Disposition == "next" && tries[1].CandidateId == scene.IdA && tries[1].Disposition == "client", string.Join(" | ", tries));
+        Check(tries.Count == 2 && tries[0].UpstreamCandidateId == dead && tries[0].ErrorType == "connection_failed" && tries[0].ConnectFailure == "connect_timeout"
+            && tries[0].Disposition == "next" && tries[1].UpstreamCandidateId == scene.IdA && tries[1].Disposition == "client", string.Join(" | ", tries));
         Check(scene.A.Calls.Count == 1 && scene.B.Calls.IsEmpty, "Standby upstreams are tried in page order");
     }
 
@@ -66,7 +66,7 @@ static class UpstreamFailoverTests
         using (var response = await scene.Web.Http.SendAsync(request))
             Check((int)response.StatusCode == status && await response.Content.ReadAsStringAsync() == body, $"{status} must reach the client verbatim");
         var report = await Settled(scene.Web, 1); var tries = report.AttemptsOf(report.Rows.Single().RequestId);
-        Check(tries.Count == 1 && tries[0].CandidateId == scene.IdA && tries[0].Disposition == "client" && scene.B.Calls.IsEmpty, $"{status} must not switch");
+        Check(tries.Count == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].Disposition == "client" && scene.B.Calls.IsEmpty, $"{status} must not switch");
     }
 
     /// <summary>甲流式回传到一半断开：已经向客户端写出字节，不换；乙收到 0 次，库里只有甲一条、结果为中断或失败。</summary>
@@ -89,7 +89,7 @@ static class UpstreamFailoverTests
             catch (Exception error) when (error is HttpRequestException or IOException) { }
         }
         var report = await Settled(scene.Web, 1); var row = report.Rows.Single(); var tries = report.AttemptsOf(row.RequestId);
-        Check(tries.Count == 1 && tries[0].CandidateId == scene.IdA && tries[0].Disposition == "client" && row.Outcome is "interrupted" or "failed", $"{row.Outcome}: {string.Join(" | ", tries)}");
+        Check(tries.Count == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].Disposition == "client" && row.Outcome is "interrupted" or "failed", $"{row.Outcome}: {string.Join(" | ", tries)}");
         Check(scene.B.Calls.IsEmpty, "A stream broken midway must never be continued by another upstream");
     }
 
@@ -107,7 +107,7 @@ static class UpstreamFailoverTests
         Check(await Call(scene.Web, scene.Token) == HttpStatusCode.OK && await Call(scene.Web, scene.Token) == HttpStatusCode.OK);
         Check(scene.A.Calls.Count == 1 && scene.B.Calls.Count == 3, $"A={scene.A.Calls.Count}, B={scene.B.Calls.Count}: avoided A must receive nothing");
         var report = await Settled(scene.Web, 3);
-        Check(report.Rows.Count(row => report.AttemptsOf(row.RequestId) is [{ CandidateId: var only }] && only == scene.IdB) == 2, "Avoided requests start directly from B");
+        Check(report.Rows.Count(row => report.AttemptsOf(row.RequestId) is [{ UpstreamCandidateId: var only }] && only == scene.IdB) == 2, "Avoided requests start directly from B");
         await scene.Web.Login();
         var until = (failedAt + TimeSpan.FromMinutes(5)).ToLocalTime().ToString("HH:mm:ss");
         var expected = $"「甲」暂避到 {until}，原因：503，上游过载。";
@@ -121,7 +121,7 @@ static class UpstreamFailoverTests
         scene.Clock.Advance(TimeSpan.FromMinutes(5));
         Check(await Call(scene.Web, scene.Token) == HttpStatusCode.OK && scene.A.Calls.Count == 2 && scene.B.Calls.Count == 3, "After five minutes the active upstream is preferred again");
         var back = await Settled(scene.Web, 4);
-        Check(back.AttemptsOf(back.Rows[0].RequestId) is [{ CandidateId: var first }] && first == scene.IdA);
+        Check(back.AttemptsOf(back.Rows[0].RequestId) is [{ UpstreamCandidateId: var first }] && first == scene.IdA);
         var page = WebUtility.HtmlDecode(await scene.Web.Http.GetStringAsync(scene.Web.Url + "/Upstream"));
         Check(page.Contains("此刻走的是在用的「甲」。没有上游在暂避。"), "Avoidance ends after five minutes");
     }
@@ -132,7 +132,7 @@ static class UpstreamFailoverTests
         await using var scene = await Scene.Create();
         scene.Web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction,
             "UPDATE upstream_candidates SET report_json=json_set(report_json,'$.models',json('[\"other-model\"]')) WHERE id=$id", ("$id", scene.IdB)));
-        Check(scene.Web.Upstreams.ReadCandidate(scene.IdB).Report!.Models.SequenceEqual(["other-model"]), "Fixture must change B's model list");
+        Check((await scene.Web.Upstreams.ReadCandidate(scene.IdB)).Report!.Models.SequenceEqual(["other-model"]), "Fixture must change B's model list");
         var body = Body(503, "fixture failure");
         scene.A.Handler = context => Raw(context, 503, body);
         using (var request = Request(scene.Web, scene.Token))
@@ -156,7 +156,7 @@ static class UpstreamFailoverTests
             using var saved = await scene.Web.Post("/Upstream?handler=Failover", values);
             Check(saved.IsSuccessStatusCode); return WebUtility.HtmlDecode(await saved.Content.ReadAsStringAsync());
         }
-        Check((await Save(false)).Contains("自动切换已关闭：只用在用的「甲」") && !scene.Web.Upstreams.ReadOverview().Failover);
+        Check((await Save(false)).Contains("自动切换已关闭：只用在用的「甲」") && !(await scene.Web.Upstreams.ReadOverview()).Failover);
         var body = Body(503, "fixture failure");
         scene.A.Handler = context => Raw(context, 503, body);
         using (var request = Request(scene.Web, scene.Token))
@@ -164,8 +164,8 @@ static class UpstreamFailoverTests
             Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && await response.Content.ReadAsStringAsync() == body, "Switch off: client gets A's 503 verbatim");
         Check(scene.B.Calls.IsEmpty, "Switch off: B must receive nothing");
         var report = await Settled(scene.Web, 1); var row = report.Rows.Single();
-        Check(report.AttemptsOf(row.RequestId) is [{ Disposition: "client" } only] && only.CandidateId == scene.IdA && scene.Served(row.RequestId) == scene.IdA);
-        Check((await Save(true)).Contains("自动切换已打开") && scene.Web.Upstreams.ReadOverview().Failover);
+        Check(report.AttemptsOf(row.RequestId) is [{ Disposition: "client" } only] && only.UpstreamCandidateId == scene.IdA && scene.Served(row.RequestId) == scene.IdA);
+        Check((await Save(true)).Contains("自动切换已打开") && (await scene.Web.Upstreams.ReadOverview()).Failover);
         Check(await Call(scene.Web, scene.Token) == HttpStatusCode.OK && scene.B.Calls.Count == 1, "Switch on takes effect for the next request");
     }
 
@@ -213,8 +213,8 @@ static class UpstreamFailoverTests
     public static async Task PricesTheServingUpstream()
     {
         await using var scene = await Scene.Create();
-        scene.Web.Pricing.Save(scene.IdA, "fixture-model", "USD", 100, 200, 0, 0);
-        scene.Web.Pricing.Save(scene.IdB, "fixture-model", "USD", 1, 2, 0, 0);
+        await scene.Web.Pricing.Save(scene.IdA, "fixture-model", "USD", 100, 200, 0, 0);
+        await scene.Web.Pricing.Save(scene.IdB, "fixture-model", "USD", 1, 2, 0, 0);
         scene.A.Handler = context => Fail(context, 503);
         scene.B.Handler = context => Json(context, new { input_tokens = 10, output_tokens = 20 });
         Check(await Call(scene.Web, scene.Token) == HttpStatusCode.OK);
@@ -226,7 +226,7 @@ static class UpstreamFailoverTests
     /// 架构升级 v5 → v6（起点是程序从真实 v3 旧库自己升到的版本 5，只在旧表上写数据行）：失败整体回滚（版本号仍为 5、没有开关列、旧单价原样）；
     /// 去掉故障后一路升到最新版：开关默认开，属于当前活动版本的旧单价改挂在用那一家，更早版本的单价另存，已有用量按尝试记录回填实际服务的那一家，一条不少。
     /// </summary>
-    public static Task SchemaUpgrade()
+    public static async Task SchemaUpgrade()
     {
         using var home = DatabaseUpgradeTests.LegacyAt("v3", 5);
         string active, served;
@@ -252,9 +252,9 @@ static class UpstreamFailoverTests
         Check(Count("SELECT COUNT(*) FROM usage_prices WHERE upstream_version IS NOT NULL") == 2, "Old prices stay untouched after rollback");
         var upgraded = new TestProcess(home.Path); _ = upgraded.Database;
         Check(Count("PRAGMA user_version") == RelayDatabase.CurrentVersion && Count("SELECT failover FROM upstream WHERE id=1") == 1);
-        var saved = upgraded.Upstreams.ListCandidates();
+        var saved = await upgraded.Upstreams.ListCandidates();
         var activeId = saved.Single(item => item.Uid == active).Id; var servedId = saved.Single(item => item.Uid == served).Id;
-        var prices = upgraded.Pricing.List(activeId);
+        var prices = await upgraded.Pricing.List(activeId);
         Check(prices is [{ Model: "claude-fixture", InputPerMillion: 3 }] && Count("SELECT COUNT(*) FROM usage_prices") == 1, "Current-version prices move to the active upstream");
         Check(Count("SELECT COUNT(*) FROM migration_archive WHERE reason='price-not-migrated' AND json_extract(row_json,'$.model')='claude-other'") == 1, "The older-version price is archived, not dropped");
         // 不经用量查询的 40 天窗口直接数：夹具的用量时间是生成那天，过了窗口查询就读不到了。
@@ -263,7 +263,6 @@ static class UpstreamFailoverTests
             Check((long?)RelayDatabase.Scalar(connection, null, "SELECT a.candidate_id FROM usage_attempts a JOIN usage_requests r ON r.id=a.usage_request_id WHERE r.request_id='fixture-v3-0'") == servedId);
         using (var connection = upgraded.Database.Open())
             Check((long?)RelayDatabase.Scalar(connection, null, "SELECT candidate_id FROM usage_requests WHERE request_id='fixture-v3-0'") == servedId, "Usage is backfilled to the upstream that served it");
-        return Task.CompletedTask;
     }
 
     /// <summary>甲某个状态码对应的 Anthropic 错误类型，与 <see cref="Fail"/> 写出的一致。</summary>
@@ -316,20 +315,20 @@ static class UpstreamFailoverTests
             var a = await UpstreamFixture.Create(); var b = await UpstreamFixture.Create();
             var clock = new UsageClock(DateTimeOffset.UtcNow); var logs = new ConcurrentQueue<string>();
             var web = await WebFixture.Create(overrides: services => { services.AddSingleton<TimeProvider>(clock); services.AddSingleton<IRelayEventLog>(new FixtureLog(logs)); });
-            var token = web.Identities.Create("切换").Token;
+            var token = (await web.Identities.Create("切换")).Token;
             var idA = await Passed(web, a, SecretA, "甲"); var idB = await Passed(web, b, SecretB, "乙");
-            web.Upstreams.Activate(idA); a.Calls.Clear(); b.Calls.Clear();
+            await web.Upstreams.Activate(idA); a.Calls.Clear(); b.Calls.Clear();
             return new() { A = a, B = b, Web = web, Clock = clock, Logs = logs, Token = token, IdA = idA, IdB = idB };
         }
 
         /// <summary>模拟「测过之后变坏」：保存一个指向 <paramref name="options"/> 的候选，抄甲的通过报告后切换过去，返回它的主键；甲、乙都成了备用。</summary>
-        public long ForceActive(UpstreamOptions options, string name)
+        public async Task<long> ForceActive(UpstreamOptions options, string name)
         {
-            var id = Web.Upstreams.SaveCandidate(Web.Upstreams.ReadActive().Version, options, SecretA, name);
+            var id = await Web.Upstreams.SaveCandidate((await Web.Upstreams.ReadActive()).Version, options, SecretA, name);
             Web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
                 UPDATE upstream_candidates SET state='passed',report_json=(SELECT report_json FROM upstream WHERE id=1) WHERE id=$id
                 """, ("$id", id)));
-            Web.Upstreams.Activate(id); return id;
+            await Web.Upstreams.Activate(id); return id;
         }
 
         /// <summary>用量记录里实际服务那一家的主键。</summary>
@@ -349,7 +348,7 @@ static class UpstreamFailoverTests
         /// <summary>以给定名称和凭据保存指向模拟上游的候选并测试通过，返回主键。</summary>
         private static async Task<long> Passed(WebFixture web, UpstreamFixture upstream, string credential, string name)
         {
-            var id = web.Upstreams.SaveCandidate(web.Upstreams.ReadActive().Version, upstream.Options(), credential, name);
+            var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).Version, upstream.Options(), credential, name);
             var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None); Check(report.CanActivate, report.Message); return id;
         }
     }

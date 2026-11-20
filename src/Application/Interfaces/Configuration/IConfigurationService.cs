@@ -6,23 +6,23 @@ namespace Application.Interfaces.Configuration;
 public interface IConfigurationService
 {
     /// <summary>读取当前设置及版本号。</summary>
-    SettingsSnapshot Read();
+    Task<SettingsSnapshot> Read();
 
     /// <summary>校验对外地址与已导入证书的域名一致后，按版本号保存设置。</summary>
-    void Save(long version, RelayConfiguration config);
+    Task Save(long version, RelayConfiguration config);
 
     /// <summary>活动上游是否已保存凭据。</summary>
-    bool HasCredential { get; }
+    Task<bool> HasCredential();
 
     /// <summary>是否已保存服务器证书。</summary>
-    bool HasCertificate { get; }
+    Task<bool> HasCertificate();
 
     /// <summary>解密并返回服务器证书 PFX 字节；调用方用完后须清零。</summary>
-    byte[]? LoadCertificate();
+    Task<byte[]?> LoadCertificate();
 
     /// <summary>以当前活动配置加新凭据保存为待测试候选，不直接改变活动上游。</summary>
-    void SaveCredential(string credential);
+    Task SaveCredential(string credential);
 
     /// <summary>命令行 init：按主机名与端口创建私有 CA 及服务器证书。</summary>
-    void ConfigureLegacyTls(string host, int publicPort, int listenPort);
+    Task ConfigureLegacyTls(string host, int publicPort, int listenPort);
 }

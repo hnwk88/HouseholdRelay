@@ -28,20 +28,20 @@ public sealed class IndexModel(IConfigurationService settings, IIdentityService 
     /// <summary>证书状态文字：未配置、已过期、私有 CA 需客户端信任或已导入可信证书。</summary>
     public string CertificateStatus { get; private set; } = "尚未配置 HTTPS";
     /// <summary>打开管理首页（需已登录）：汇总使用者数、上游池运行状态和证书状态，只读。</summary>
-    public void OnGet()
+    public async Task OnGetAsync()
     {
-        UserCount = identities.List().Count; CredentialConfigured = settings.HasCredential;
-        CertificateConfigured = settings.HasCertificate; PublicUrl = settings.Read().Value.PublicUrl;
-        var active = upstreams.ReadOverview(); var state = upstreamPool.Status(active.Version); var saved = upstreams.ListCandidates();
+        UserCount = (await identities.List()).Count; CredentialConfigured = await settings.HasCredential();
+        CertificateConfigured = await settings.HasCertificate(); PublicUrl = (await settings.Read()).Value.PublicUrl;
+        var active = await upstreams.ReadOverview(); var state = upstreamPool.Status(active.Version); var saved = await upstreams.ListCandidates();
         // 在用的那家已导出搬走：照上游页同一句读出请求此刻怎么走和下一步，不读成「尚未配置」。
-        var moved = saved.FirstOrDefault(item => item.Id == active.CandidateId) is { ExportedAt: not null } current ? current : null;
+        var moved = saved.FirstOrDefault(item => item.Id == active.UpstreamCandidateId) is { ExportedAt: not null } current ? current : null;
         UpstreamName = moved?.Name ?? (!active.Configured ? "尚未选择" : active.Name ?? "未命名");
         UpstreamStatus = moved is not null ? "已导出搬走" : !active.Configured ? "尚未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0 ? "上游冷却中"
             : active.Report?.CanActivate == true ? "最小模型调用已验证" : "已有凭据 · 调用未检测";
         RoutingText = moved is not null ? UpstreamModel.MovedSentence(moved.Name, active.Failover)
             : active.Configured ? UpstreamModel.RoutingSentence(upstreamPool, active, saved) : "";
         UpgradeText = instance.LastUpgrade is { } upgrade ? $"{upgrade.At.ToLocalTime():yyyy-MM-dd HH:mm}：{upgrade.Sentence()}" : "";
-        var certificate = certificates.ReadInfo(); CertificateStatus = certificate is not null
+        var certificate = await certificates.ReadInfo(); CertificateStatus = certificate is not null
             ? certificate.ValidUntil > DateTimeOffset.UtcNow ? certificate.Mode == "private" ? "私有 CA · 客户端安装一次信任" : "已导入可信证书" : "证书已过期"
             : "尚未配置 HTTPS";
     }

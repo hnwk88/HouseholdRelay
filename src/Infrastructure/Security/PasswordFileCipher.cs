@@ -11,24 +11,24 @@ namespace Infrastructure.Security;
 /// </summary>
 internal sealed class PasswordFileCipher : IPasswordCipher
 {
-    private static readonly byte[] Magic = "HRUPSTREAM"u8.ToArray();
+    private static readonly byte[] _magic = "HRUPSTREAM"u8.ToArray();
     private const byte Version = 1;
     private const int SaltBytes = 16, NonceBytes = 12, CheckBytes = 32, TagBytes = 16, KeyBytes = 32, Iterations = 600_000;
     /// <summary>文件头长度：魔数、版本号、盐、随机数、校验值；标签紧跟其后。</summary>
-    private static readonly int HeaderBytes = Magic.Length + 1 + SaltBytes + NonceBytes + CheckBytes;
+    private static readonly int _headerBytes = _magic.Length + 1 + SaltBytes + NonceBytes + CheckBytes;
 
     /// <summary>生成随机盐与随机数，派生密钥后加密；派生出的密钥与密码字节用完清零。</summary>
     public byte[] Seal(byte[] plain, string password)
     {
-        var file = new byte[HeaderBytes + TagBytes + plain.Length];
-        Magic.CopyTo(file, 0); file[Magic.Length] = Version;
-        RandomNumberGenerator.Fill(file.AsSpan(Magic.Length + 1, SaltBytes + NonceBytes));
-        var keys = Derive(password, file.AsSpan(Magic.Length + 1, SaltBytes));
+        var file = new byte[_headerBytes + TagBytes + plain.Length];
+        _magic.CopyTo(file, 0); file[_magic.Length] = Version;
+        RandomNumberGenerator.Fill(file.AsSpan(_magic.Length + 1, SaltBytes + NonceBytes));
+        var keys = Derive(password, file.AsSpan(_magic.Length + 1, SaltBytes));
         try
         {
-            keys.AsSpan(KeyBytes).CopyTo(file.AsSpan(HeaderBytes - CheckBytes, CheckBytes));
+            keys.AsSpan(KeyBytes).CopyTo(file.AsSpan(_headerBytes - CheckBytes, CheckBytes));
             using var aes = new AesGcm(keys.AsSpan(0, KeyBytes), TagBytes);
-            aes.Encrypt(file.AsSpan(Magic.Length + 1 + SaltBytes, NonceBytes), plain, file.AsSpan(HeaderBytes + TagBytes), file.AsSpan(HeaderBytes, TagBytes), file.AsSpan(0, HeaderBytes));
+            aes.Encrypt(file.AsSpan(_magic.Length + 1 + SaltBytes, NonceBytes), plain, file.AsSpan(_headerBytes + TagBytes), file.AsSpan(_headerBytes, TagBytes), file.AsSpan(0, _headerBytes));
             return file;
         }
         // 派生出的密钥无论加密成败都清零。
@@ -38,20 +38,20 @@ internal sealed class PasswordFileCipher : IPasswordCipher
     /// <summary>依次核对魔数、版本号、长度、密码校验值，最后解密并验标签；任何一步不过都只读出原因，验不过时已写出的明文清零、不交出去。</summary>
     public byte[] Open(byte[] file, string password)
     {
-        if (file.Length < Magic.Length + 1 || !file.AsSpan(0, Magic.Length).SequenceEqual(Magic))
+        if (file.Length < _magic.Length + 1 || !file.AsSpan(0, _magic.Length).SequenceEqual(_magic))
             throw new InvalidOperationException("选的文件不是上游导出文件。请选旧电脑上按「导出加密文件」下载的那个文件。");
-        if (file[Magic.Length] != Version)
-            throw new InvalidOperationException($"这个导出文件的格式版本是 {file[Magic.Length]}，本程序只认版本 {Version}。请把两边的中转升级到同一版本，再导出、导入一次。");
-        if (file.Length < HeaderBytes + TagBytes)
+        if (file[_magic.Length] != Version)
+            throw new InvalidOperationException($"这个导出文件的格式版本是 {file[_magic.Length]}，本程序只认版本 {Version}。请把两边的中转升级到同一版本，再导出、导入一次。");
+        if (file.Length < _headerBytes + TagBytes)
             throw new InvalidOperationException("导出文件不完整，可能没有拷完。请回旧电脑重新导出一份，再导入。");
-        var keys = Derive(password, file.AsSpan(Magic.Length + 1, SaltBytes));
+        var keys = Derive(password, file.AsSpan(_magic.Length + 1, SaltBytes));
         try
         {
-            if (!CryptographicOperations.FixedTimeEquals(keys.AsSpan(KeyBytes), file.AsSpan(HeaderBytes - CheckBytes, CheckBytes)))
+            if (!CryptographicOperations.FixedTimeEquals(keys.AsSpan(KeyBytes), file.AsSpan(_headerBytes - CheckBytes, CheckBytes)))
                 throw new InvalidOperationException("导出密码不对。请输入导出时设的那个密码再试；确认密码没错的话，这个文件可能被改过，请回旧电脑重新导出一份。");
-            var plain = new byte[file.Length - HeaderBytes - TagBytes];
+            var plain = new byte[file.Length - _headerBytes - TagBytes];
             using var aes = new AesGcm(keys.AsSpan(0, KeyBytes), TagBytes);
-            try { aes.Decrypt(file.AsSpan(Magic.Length + 1 + SaltBytes, NonceBytes), file.AsSpan(HeaderBytes + TagBytes), file.AsSpan(HeaderBytes, TagBytes), plain, file.AsSpan(0, HeaderBytes)); }
+            try { aes.Decrypt(file.AsSpan(_magic.Length + 1 + SaltBytes, NonceBytes), file.AsSpan(_headerBytes + TagBytes), file.AsSpan(_headerBytes, TagBytes), plain, file.AsSpan(0, _headerBytes)); }
             // 密码对、内容却验不过：文件被改过或没拷完整；已写出的半截明文清零，不交给调用方。
             catch (AuthenticationTagMismatchException)
             {
