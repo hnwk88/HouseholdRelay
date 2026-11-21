@@ -130,6 +130,14 @@ static class LayeringTests
                 null!, null!, null!, null!, null!, null!, null!, null!, null!);
             Check(false, "Null dependencies were accepted");
         }
+        // 判空是这条用例要的结果：漏传依赖当场抛出。
+        catch (ArgumentNullException) { }
+        try
+        {
+            var config = new RelayConfiguration { DeviceId = new string('e', 64) };
+            _ = RelayForwarder.Standalone(config, new Core.Identity.ClientRegistry([]), new Admission(config), null!, new Application.Services.Relay.NullRelayEventLog(), new UpstreamResponses());
+            Check(false, "A standalone relay without an upstream pool was accepted");
+        }
         // 这里是用例期望的拒绝：接住后核对读句或类型，别的异常照常让用例失败。
         catch (ArgumentNullException) { }
         return Task.CompletedTask;
@@ -215,7 +223,7 @@ static class LayeringTests
     {
         var now = DateTimeOffset.UtcNow;
         Check(UsageRetention.Cutoff(now) == now.AddDays(-UsageRetention.Days) && UsageRetention.Days == 40);
-        var clients = Enumerable.Range(0, Core.Identity.User.MaxUsers + 1).Select(index => new Core.Identity.ClientAccess("c" + index, new string((char)('a' + index % 6), 64))).ToArray();
+        var clients = Enumerable.Range(0, Core.Identity.User.MaxUsers + 1).Select(index => new Core.Identity.ClientAccess("c" + index, index.ToString("x").PadLeft(64, '0'))).ToArray();
         try { RelayConfiguration.ValidateClients(clients); Check(false, "Nine clients accepted"); }
         // 这里是用例期望的拒绝：接住后核对读句或类型，别的异常照常让用例失败。
         catch (InvalidOperationException error) { Check(error.Message.Contains("最多允许 " + Core.Identity.User.MaxUsers + " 个", StringComparison.Ordinal), error.Message); }
