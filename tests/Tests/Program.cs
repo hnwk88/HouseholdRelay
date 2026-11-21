@@ -215,6 +215,20 @@ var tests = new (string Name, Func<Task> Test)[]
     ("site identity accounts: login, upgrade, export and both import destinations preserve canonical", DeviceIdentityAccountLifecycleTests.AccountsAndImportsPreserveCanonical),
     ("private certificate lifecycle, version conflicts and expired startup rejection", PrivateCertificateTests.Lifecycle),
     ("private certificate web creation, CSRF and public-only trust download", PrivateCertificateTests.WebJourney),
+    ("layering: closed values keep their stored strings and refuse unknown ones", LayeringTests.ClosedValuesKeepWireNames),
+    ("layering: an unknown stored outcome is refused, not read as a state", LayeringTests.UnknownStoredValueIsRefused),
+    ("layering: an unknown proxy mode is refused instead of going direct", LayeringTests.UnknownProxyModeIsRefused),
+    ("layering: model catalog status code has its own field", LayeringTests.CatalogStatusCodeHasItsOwnField),
+    ("layering: a missing relay dependency fails when the host is built", LayeringTests.MissingDependencyFailsAtBuild),
+    ("layering: the host binds HTTP and never reaches into infrastructure", LayeringTests.HostDoesNotReachIntoInfrastructure),
+    ("layering: one model name rule for options, pricing, filter and usage", LayeringTests.ModelNameHasOneRule),
+    ("layering: one HTTPS root rule for the public address", LayeringTests.PublicAddressHasOneRule),
+    ("layering: usable and CheckState read one conclusion", LayeringTests.ConnectionUsableMatchesCheckState),
+    ("layering: 40 days, 8 users and settings defaults are defined once", LayeringTests.LimitsAreDefinedOnce),
+    ("layering: settings ranges and exposed routes have one registry", LayeringTests.SettingsAndRoutesHaveOneRegistry),
+    ("layering: usage report carries labels and paging", LayeringTests.ReportCarriesLabelsAndPaging),
+    ("layering: activate overloads check versions explicitly", LayeringTests.ActivateOverloadsCheckVersions),
+    ("layering: command exit codes are fixed by category", LayeringTests.ExitCodesByCategory),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

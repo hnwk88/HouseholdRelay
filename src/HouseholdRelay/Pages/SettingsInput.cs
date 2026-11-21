@@ -6,30 +6,33 @@ namespace HouseholdRelay.Pages;
 /// <summary>设置页表单字段，与实例设置之间双向复制。</summary>
 public sealed class SettingsInput
 {
+    /// <summary>设置项的默认值只在 <see cref="RelayConfiguration"/> 定义一次，表单的初值都取自这一份。</summary>
+    private static readonly RelayConfiguration _defaults = new();
+
     /// <summary>家人访问用的对外 HTTPS 根地址；表单可留空，写回时去掉首尾空白，空值表示尚未配置。与证书域名的一致性在保存时校验。</summary>
     public string? PublicUrl { get; set; }
     /// <summary>对外 HTTPS 监听端口（1024–65535）；重启服务后生效。</summary>
-    public int ListenPort { get; set; } = 8787;
+    public int ListenPort { get; set; } = _defaults.ListenPort;
     /// <summary>全家同时进行中的上游请求上限（1–8）；重启服务后生效。</summary>
-    public int MaxConcurrent { get; set; } = 2;
+    public int MaxConcurrent { get; set; } = _defaults.MaxConcurrent;
     /// <summary>单个客户端同时进行中的请求上限（1–8），防止一人占满全局并发；重启服务后生效。</summary>
-    public int MaxPerClient { get; set; } = 1;
+    public int MaxPerClient { get; set; } = _defaults.MaxPerClient;
     /// <summary>同时排队的请求上限（1–64），超出立即返回 429；重启服务后生效。</summary>
-    public int MaxQueued { get; set; } = 16;
+    public int MaxQueued { get; set; } = _defaults.MaxQueued;
     /// <summary>每个客户端每个 UTC 整分钟允许的请求数（1–10000），超出返回 429；重启服务后生效。</summary>
-    public int RequestsPerMinute { get; set; } = 120;
+    public int RequestsPerMinute { get; set; } = _defaults.RequestsPerMinute;
     /// <summary>排队等待并发名额的最长秒数（1–120），超时返回 429；重启服务后生效。</summary>
-    public int QueueTimeoutSeconds { get; set; } = 30;
+    public int QueueTimeoutSeconds { get; set; } = _defaults.QueueTimeoutSeconds;
     /// <summary>读取客户端请求体的最长秒数（1–120），防止慢速上传长期占用连接；重启服务后生效。</summary>
-    public int UploadTimeoutSeconds { get; set; } = 30;
+    public int UploadTimeoutSeconds { get; set; } = _defaults.UploadTimeoutSeconds;
     /// <summary>单个中转请求的总超时秒数（1–3600），默认 10 分钟以容纳长流式回复；重启服务后生效。</summary>
-    public int RequestTimeoutSeconds { get; set; } = 600;
+    public int RequestTimeoutSeconds { get; set; } = _defaults.RequestTimeoutSeconds;
     /// <summary>为真时，OAuth 模式下把请求体中的设备元数据统一改写为本实例的设备标识；API 密钥模式不改写。</summary>
-    public bool NormalizeDeviceMetadata { get; set; } = true;
+    public bool NormalizeDeviceMetadata { get; set; } = _defaults.NormalizeDeviceMetadata;
     /// <summary>发往上游时使用的 User-Agent；不能为空白、不超过 256 字符且不含控制字符。</summary>
-    public string UpstreamUserAgent { get; set; } = "HouseholdRelay/1.0";
+    public string UpstreamUserAgent { get; set; } = _defaults.UpstreamUserAgent;
     /// <summary>全局代理方式：<c>none</c>、<c>auto</c> 或 <c>manual</c>；保存后新建立的上游连接立即按新方式走，不用重启。</summary>
-    public string ProxyMode { get; set; } = "none";
+    public string ProxyMode { get; set; } = Wire<Core.Configuration.ProxyMode>.Name(_defaults.ProxyMode);
     /// <summary>手动指定的代理地址；可以省略 http://，写回时补齐；其余方式下原样保存。</summary>
     public string? ProxyUrl { get; set; }
     /// <summary>由当前实例设置生成表单初值，只复制设置页可编辑的字段。</summary>

@@ -123,7 +123,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 凭据长度不少于 8 时，若出现在配置 JSON、名称或（转义后）出现在地址中则拒绝，防止秘密被写进会明文展示的字段。
     /// <paramref name="name"/> 为空时用地址主机名；活动版本已不是 <paramref name="expectedVersion"/> 时拒绝并提示重新加载。
     /// </summary>
-    public async Task<long> SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name = null)
+    public async Task<long> SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name)
     {
         options = options.Validated();
         using var operation = options.OfficialAccount ? siteIdentity.Enter() : null;
@@ -252,7 +252,13 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// <summary>
     /// 把检测通过的上游原子地切换为新的活动版本：在一个事务里读出它与活动上游，由 <see cref="ActiveUpstream.Activate"/> 核对检测结果、没有导出搬走与活动版本后改写。
     /// </summary>
-    public async Task Activate(long id, long? expectedVersion = null)
+    public Task Activate(long id, long expectedVersion) => Activate(id, (long?)expectedVersion);
+
+    /// <summary>切换过去，活动版本按这家保存时基于的那个版本核对。</summary>
+    public Task Activate(long id) => Activate(id, (long?)null);
+
+    /// <summary>两个切换入口的汇合处：<paramref name="expectedVersion"/> 为空时由 <see cref="ActiveUpstream.Activate"/> 按候选保存时的版本核对。</summary>
+    private async Task Activate(long id, long? expectedVersion)
     {
         using var operation = (await ReadCandidate(id)).Options.OfficialAccount ? siteIdentity.Enter() : null;
         await using var scope = scopes.CreateAsyncScope();

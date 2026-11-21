@@ -1,4 +1,5 @@
 ﻿using System.Security.Cryptography;
+using Core.Relay;
 using System.Text;
 using Application.Interfaces.Relay;
 
@@ -49,7 +50,7 @@ public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) 
             {
                 diagnostic = "site_identity", correlation = Hash(correlation), at = clock.GetUtcNow(),
                 stage = stage is "assembled" or "dispatch" or "response" or "local_rejection" or "cli_completed" or "cli_failed" ? stage : "unknown",
-                route = route is "/v1/messages" or "/v1/models" or "/v1/messages/count_tokens" or "cli" ? route : "unknown",
+                route = RelayRoutes.IsExposed(route) || route == "cli" ? route : "unknown",
                 generation, deviceHash = Hash(deviceId), version = Version(version),
                 entrypoint = entrypoint is "cli" or "sdk-cli" ? entrypoint : "unknown",
                 status, error = error is "local_rejection" or "authentication" or "forbidden" or "rate_limit" or "model_limit" or "verification" or "renewal_failed" ? error : "unknown",

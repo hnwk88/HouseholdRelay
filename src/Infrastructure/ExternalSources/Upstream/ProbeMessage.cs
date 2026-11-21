@@ -48,9 +48,8 @@ internal static class ProbeMessage
         return Event() && stopped ? model : null;
     }
 
-    /// <summary>判断上游返回的模型名能否安全保存和展示：长度 1 到 200、只含字母数字和 <c>-_./:</c>，且不含上游凭据片段，防止把秘密或注入内容写进记录。</summary>
-    internal static bool SafeModel(string model, string secret) => model.Length is > 0 and <= 200
-        && model.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' or '/' or ':') && UpstreamResponses.Redact(model, secret) == model;
+    /// <summary>判断上游返回的模型名能否安全保存和展示：合乎 <see cref="Core.Upstream.ModelName"/>，且不含上游凭据片段，防止把秘密或注入内容写进记录。</summary>
+    internal static bool SafeModel(string model, string secret) => Core.Upstream.ModelName.IsValid(model) && UpstreamResponses.Redact(model, secret) == model;
     /// <summary>读取对象上某个字符串属性；对象类型不符、属性缺失或不是字符串时返回 null，不抛异常。</summary>
     private static string? Text(JsonElement root, string property) => root.ValueKind == JsonValueKind.Object && root.TryGetProperty(property, out var value)
         && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

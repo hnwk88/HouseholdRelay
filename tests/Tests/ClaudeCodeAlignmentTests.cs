@@ -138,7 +138,7 @@ static class ClaudeCodeAlignmentTests
     private static async Task<WebFixture> Official(FakeClaudeLauncher claude, UpstreamFixture mock)
     {
         var web = await WebFixture.Create(overrides: claude.Register);
-        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model" },
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model" },
             FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
         var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate, report.Message); await web.Upstreams.Activate(id);

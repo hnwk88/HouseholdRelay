@@ -14,7 +14,7 @@ public static class DeviceIdentityAccountLifecycleTests
         await using var mock = await UpstreamFixture.Create();
         await using var source = await WebFixture.Create(overrides: claude.Register);
         var original = await Current(source);
-        var first = await source.Upstreams.LoginOfficial((await source.Upstreams.ReadActive()).Version, mock.Options(), "首个账户", default); var firstUid = await Uid(source, first);
+        var first = await source.Upstreams.LoginOfficial((await source.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "首个账户", default); var firstUid = await Uid(source, first);
         await AssertUnchanged(source, original, firstUid);
         var accountDirectory = AccountDirectory(source, firstUid);
         var calls = Path.Combine(accountDirectory, "fake-calls.log");
@@ -24,7 +24,7 @@ public static class DeviceIdentityAccountLifecycleTests
         Check(File.ReadAllLines(calls).Count(line => line == "auth login") == loginCount + 1, "Relogin must actually execute auth login in the same isolated account directory.");
         Evidence(6, "relogin-same-private-account");
 
-        var added = await source.Upstreams.LoginOfficial((await source.Upstreams.ReadActive()).Version, mock.Options(), "新增账户", default); var addedUid = await Uid(source, added);
+        var added = await source.Upstreams.LoginOfficial((await source.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "新增账户", default); var addedUid = await Uid(source, added);
         Check((await source.Upstreams.ListCandidates()).Count == 2 && added != first);
         await AssertUnchanged(source, original, firstUid, addedUid); Evidence(7, "add-official-account");
         await source.Upstreams.Delete(added);
@@ -59,9 +59,9 @@ public static class DeviceIdentityAccountLifecycleTests
 
         await using var existing = await WebFixture.Create(overrides: claude.Register);
         var existingIdentity = await Current(existing);
-        await existing.Upstreams.SaveCandidate((await existing.Upstreams.ReadActive()).Version, mock.Options(), "fixture-existing-api-key", "原有 API");
+        await existing.Upstreams.SaveCandidate((await existing.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-existing-api-key", "原有 API");
         Check((await existing.Upstreams.ListCandidates()).Count == 1 && existingIdentity.DeviceId != original.DeviceId);
-        var imported = await existing.Upstreams.Import((await existing.Upstreams.ReadActive()).Version, archive, password, default);
+        var imported = await existing.Upstreams.Import((await existing.Upstreams.ReadActive()).ActiveVersion, archive, password, default);
         Check(imported.Count == 1 && imported[0].UpstreamCandidateId is not null && imported[0].Error is null);
         await AssertUnchanged(existing, existingIdentity, await Uid(existing, imported[0].UpstreamCandidateId!.Value));
         Check(File.ReadAllBytes(Path.Combine(AccountDirectory(existing, await Uid(existing, imported[0].UpstreamCandidateId!.Value)), OfficialCredential.FileName)).SequenceEqual(originalCredential));
@@ -70,7 +70,7 @@ public static class DeviceIdentityAccountLifecycleTests
         await using var fresh = await WebFixture.Create(overrides: claude.Register);
         var freshIdentity = await Current(fresh);
         Check((await fresh.Upstreams.ListCandidates()).Count == 0 && freshIdentity.Version == 1 && freshIdentity.DeviceId != original.DeviceId && freshIdentity.DeviceId != existingIdentity.DeviceId);
-        var freshImport = await fresh.Upstreams.Import((await fresh.Upstreams.ReadActive()).Version, archive, password, default);
+        var freshImport = await fresh.Upstreams.Import((await fresh.Upstreams.ReadActive()).ActiveVersion, archive, password, default);
         Check(freshImport.Count == 1 && freshImport[0].UpstreamCandidateId is not null && freshImport[0].Error is null);
         await AssertUnchanged(fresh, freshIdentity, await Uid(fresh, freshImport[0].UpstreamCandidateId!.Value));
         Check(File.ReadAllBytes(Path.Combine(AccountDirectory(fresh, await Uid(fresh, freshImport[0].UpstreamCandidateId!.Value)), OfficialCredential.FileName)).SequenceEqual(originalCredential));

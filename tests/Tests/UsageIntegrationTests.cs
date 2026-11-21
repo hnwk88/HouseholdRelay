@@ -24,7 +24,7 @@ static class UsageIntegrationTests
         {
             upstream.Handler = null;
             await upstream.Activate(service, options: upstream.Options(mode: mode, authentication: mode == "oauth" ? "bearer" : "x-api-key"));
-            var version = (await service.ReadActive()).Version;
+            var version = (await service.ReadActive()).ActiveVersion;
             var both = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); var arrivals = 0;
             upstream.Handler = async context =>
             {

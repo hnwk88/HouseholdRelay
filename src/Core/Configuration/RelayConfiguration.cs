@@ -64,11 +64,11 @@ public sealed class RelayConfiguration
     /// <summary>校验全部字段的格式与取值范围，并校验 <see cref="Clients"/>；任一不合法即抛出 <see cref="InvalidOperationException"/>，不做自动修正。</summary>
     public void Validate()
     {
-        if (ListenPort is < 1024 or > 65535
-            || MaxConcurrent is < 1 or > 8 || MaxPerClient is < 1 or > 8 || MaxQueued is < 1 or > 64
-            || QueueTimeoutSeconds is < 1 or > 120 || UploadTimeoutSeconds is < 1 or > 120
-            || RequestTimeoutSeconds is < 1 or > 3600 || MaxBodyBytes is < 1 or > 67108864
-            || RequestsPerMinute is < 1 or > 10000
+        if (!SettingLimits.ListenPort.Contains(ListenPort)
+            || !SettingLimits.MaxConcurrent.Contains(MaxConcurrent) || !SettingLimits.MaxPerClient.Contains(MaxPerClient) || !SettingLimits.MaxQueued.Contains(MaxQueued)
+            || !SettingLimits.QueueTimeoutSeconds.Contains(QueueTimeoutSeconds) || !SettingLimits.UploadTimeoutSeconds.Contains(UploadTimeoutSeconds)
+            || !SettingLimits.RequestTimeoutSeconds.Contains(RequestTimeoutSeconds) || !SettingLimits.MaxBodyBytes.Contains(MaxBodyBytes)
+            || !SettingLimits.RequestsPerMinute.Contains(RequestsPerMinute)
             || !SiteDeviceIdentity.IsValid(DeviceId) || string.IsNullOrWhiteSpace(UpstreamUserAgent)
             || UpstreamUserAgent.Length > 256 || UpstreamUserAgent.Any(char.IsControl))
             throw new InvalidOperationException("中转配置格式或范围错误。");
@@ -89,10 +89,10 @@ public sealed class RelayConfiguration
     /// <summary>校验客户端名单：最多 8 个，名称合法，令牌哈希为 64 位十六进制，且名称、编号、令牌哈希（不区分大小写）都不重复；否则抛出 <see cref="InvalidOperationException"/>。</summary>
     public static void ValidateClients(IReadOnlyList<ClientAccess> clients)
     {
-        if (clients.Count > 8 || clients.Any(c => !IsClientName(c.Name) || !IsHex(c.TokenHash, 64))
+        if (clients.Count > User.MaxUsers || clients.Any(c => !IsClientName(c.Name) || !IsHex(c.TokenHash, 64))
             || clients.Select(c => c.Name).Distinct().Count() != clients.Count
             || clients.Select(c => c.Id).Distinct().Count() != clients.Count
             || clients.Select(c => c.TokenHash).Distinct(StringComparer.OrdinalIgnoreCase).Count() != clients.Count)
-            throw new InvalidOperationException("客户端配置错误，最多允许 8 个独立令牌。");
+            throw new InvalidOperationException($"客户端配置错误，最多允许 {User.MaxUsers} 个独立令牌。");
     }
 }

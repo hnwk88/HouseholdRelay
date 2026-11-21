@@ -54,6 +54,6 @@ static class UpstreamMigrationTests
         }
         Check(await upgraded.Identities.Clients.Authenticate("legacy-office-token") is null);
         var repeated = new TestProcess(home.Path);
-        Check((await repeated.Upstreams.ReadActive()).Version == upstream.Version);
+        Check((await repeated.Upstreams.ReadActive()).ActiveVersion == upstream.ActiveVersion);
     }
 }

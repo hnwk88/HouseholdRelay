@@ -31,7 +31,10 @@ public interface IUsageService
     Task Recover();
 
     /// <summary>分批删除超出 40 天窗口的记录，返回删除总数。</summary>
-    Task<int> Cleanup(CancellationToken cancellation = default);
+    Task<int> Cleanup(CancellationToken cancellation);
+
+    /// <summary>同上，不可取消。</summary>
+    Task<int> Cleanup() => Cleanup(CancellationToken.None);
 
     /// <summary>校验筛选条件后查询用量报告。</summary>
     Task<UsageReport> Query(UsageFilter filter);

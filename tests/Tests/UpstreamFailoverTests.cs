@@ -324,7 +324,7 @@ static class UpstreamFailoverTests
         /// <summary>模拟「测过之后变坏」：保存一个指向 <paramref name="options"/> 的候选，抄甲的通过报告后切换过去，返回它的主键；甲、乙都成了备用。</summary>
         public async Task<long> ForceActive(UpstreamOptions options, string name)
         {
-            var id = await Web.Upstreams.SaveCandidate((await Web.Upstreams.ReadActive()).Version, options, SecretA, name);
+            var id = await Web.Upstreams.SaveCandidate((await Web.Upstreams.ReadActive()).ActiveVersion, options, SecretA, name);
             Web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
                 UPDATE upstream_candidates SET state='passed',report_json=(SELECT report_json FROM upstream WHERE id=1) WHERE id=$id
                 """, ("$id", id)));
@@ -348,7 +348,7 @@ static class UpstreamFailoverTests
         /// <summary>以给定名称和凭据保存指向模拟上游的候选并测试通过，返回主键。</summary>
         private static async Task<long> Passed(WebFixture web, UpstreamFixture upstream, string credential, string name)
         {
-            var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).Version, upstream.Options(), credential, name);
+            var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, upstream.Options(), credential, name);
             var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None); Check(report.CanActivate, report.Message); return id;
         }
     }

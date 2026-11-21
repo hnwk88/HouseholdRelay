@@ -39,7 +39,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     public DateTimeOffset Now => Clock.GetUtcNow();
 
     /// <summary>40 天保留窗口的截止时间：早于此刻的记录会被清理。</summary>
-    public DateTimeOffset Cutoff => Now.AddDays(-40);
+    public DateTimeOffset Cutoff => UsageRetention.Cutoff(Now);
 
     /// <summary>
     /// 在发往上游之前写入请求开始记录（归属取自已鉴权的使用者与令牌，版本记此刻的活动版本）。写入串行进行，最多等待 2 秒；
@@ -145,7 +145,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// 以调用时刻计算一次截止点，分批（每批最多 500 行，最早的先删）物理删除超出 40 天保留窗口的记录，它们的上游尝试由外键级联一并删除；返回删除的用量记录总数。
     /// 每批之前检查取消；满批时让出线程再继续，避免长时间占用。
     /// </summary>
-    public async Task<int> Cleanup(CancellationToken cancellation = default)
+    public async Task<int> Cleanup(CancellationToken cancellation)
     {
         var cutoff = Cutoff.UtcTicks; var removed = 0; int batch;
         do
@@ -165,7 +165,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     public async Task<UsageReport> Query(UsageFilter filter)
     {
         filter.Validate();
-        var now = Now; var cutoff = now.AddDays(-40);
+        var now = Now; var cutoff = UsageRetention.Cutoff(now);
         var from = (filter.From is { } since && since > cutoff ? since : cutoff).UtcTicks; var until = filter.Until?.UtcTicks; var end = now.UtcTicks;
         var kind = filter.Kind;
         var model = string.IsNullOrEmpty(filter.Model) ? null : filter.Model;

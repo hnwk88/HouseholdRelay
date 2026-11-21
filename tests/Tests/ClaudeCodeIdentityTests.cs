@@ -285,7 +285,7 @@ static class ClaudeCodeIdentityTests
             context.Response.StatusCode = 429;
             await context.Response.WriteAsJsonAsync(new { type = "error", error = new { type = "rate_limit_error", message = "Rejected for " + Token + ". " + new string('x', 400) } });
         };
-        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, Options(mock), FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, Options(mock), FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
         var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None);
         var quote = report.Message[report.Message.IndexOf("上游原话：", StringComparison.Ordinal)..];
         Check(report.Call == Core.Upstream.CheckStatus.Cooldown && report.Message.StartsWith("最小模型调用受到上游限流，请稍后重新测试。上游原话：rate_limit_error：Rejected for [redacted].", StringComparison.Ordinal), report.Message);
@@ -390,7 +390,7 @@ static class ClaudeCodeIdentityTests
     private static async Task<WebFixture> Official(FakeClaudeLauncher claude, UpstreamFixture mock, Action<IServiceCollection>? extra = null)
     {
         var web = await WebFixture.Create(overrides: services => { claude.Register(services); extra?.Invoke(services); });
-        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, Options(mock), FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, Options(mock), FakeClaude.Credential(Token, 60), "官方", CancellationToken.None);
         var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate, report.Message); await web.Upstreams.Activate(id);
         return web;
@@ -430,7 +430,7 @@ static class ClaudeCodeIdentityTests
     /// </summary>
     private static async Task Same(WebFixture web, string sentence)
     {
-        var state = web.Pool.Status((await web.Upstreams.ReadActive()).Version);
+        var state = web.Pool.Status((await web.Upstreams.ReadActive()).ActiveVersion);
         Check(!state.Paused && state.CooldownSeconds == 0, "Refusing to send is not the official upstream's fault");
         var report = await Settled(web, 1); var row = report.Rows.Single(); var attempt = report.AttemptsOf(row.RequestId).Single();
         Check(row is { Outcome: Core.Usage.UsageOutcome.Failed, Dispatched: false } && attempt.ErrorType == "identity_unavailable" && attempt.ErrorMessage == sentence, JsonSerializer.Serialize(attempt));

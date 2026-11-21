@@ -23,8 +23,11 @@ public sealed class UpstreamSnapshot(long version, UpstreamOptions options, stri
     /// <summary>自动切换开关：在用的那一家失败时是否按顺序换到其他测试通过的上游；只在活动上游的快照上有意义，备用上游的快照恒为 false。</summary>
     public bool Failover { get; } = failover;
 
-    /// <summary>活动上游版本的编号，用于区分新旧活动版本、按版本回收连接；备用上游的快照记的是读取时的活动版本，哪一家靠 <see cref="UpstreamCandidateId"/> 区分。</summary>
-    public long Version { get; } = version;
+    /// <summary>
+    /// 读这份快照时的活动上游版本：在用那一家和备用的各家记的都是它（备用上游没有自己的版本），连接池按它判断活动配置换没换、换了就重建连接，
+    /// 用量与尝试记录也记它。哪一家靠 <see cref="UpstreamCandidateId"/> 区分，不靠这个数。
+    /// </summary>
+    public long ActiveVersion { get; } = version;
 
     /// <summary>该版本的非秘密连接配置。</summary>
     public UpstreamOptions Options { get; } = options;

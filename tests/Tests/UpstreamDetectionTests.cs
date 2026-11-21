@@ -31,7 +31,7 @@ static class UpstreamDetectionTests
         };
         async Task<(ModelCatalog Catalog, UpstreamReport Report, UpstreamCandidateView Candidate)> Detect(string name)
         {
-            var id = await service.SaveCandidate((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "fixture-detect-secret", name);
+            var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "fixture-detect-secret", name);
             var found = await service.DiscoverModels(id, CancellationToken.None);
             await service.ChooseModel(id, "fixture-model");
             var report = await service.TestCandidate(id, true, CancellationToken.None);
@@ -73,14 +73,14 @@ static class UpstreamDetectionTests
         mock.Handler = context => mock.Calls.Last().Headers.GetValueOrDefault("Authorization") == "Bearer fixture-manual-secret"
             ? UpstreamFixture.Success(context) : Status(context, 401);
         var options = new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model", Authentication = Core.Upstream.AuthenticationScheme.XApiKey, AuthenticationManual = true };
-        var forced = await service.SaveCandidate((await service.ReadActive()).Version, options, "fixture-manual-secret", "手动密钥头");
+        var forced = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, options, "fixture-manual-secret", "手动密钥头");
         var catalog = await service.DiscoverModels(forced, CancellationToken.None);
         Check(catalog.Status == Core.Upstream.CatalogStatus.Rejected && catalog.Message.Contains("手动指定为 x-api-key"), catalog.Message);
         var report = await service.TestCandidate(forced, true, CancellationToken.None);
         var kept = (await service.ReadCandidate(forced)).Options;
         Check(!report.CanActivate && kept.Authentication == Core.Upstream.AuthenticationScheme.XApiKey && kept.AuthenticationManual, "Detection must never overwrite a manual choice");
         Check(mock.Calls.All(call => !call.Headers.ContainsKey("Authorization")), "A manual x-api-key choice must not silently try Bearer");
-        var chosen = await service.SaveCandidate((await service.ReadActive()).Version, options with { Authentication = Core.Upstream.AuthenticationScheme.Bearer }, "fixture-manual-secret", "手动 Bearer");
+        var chosen = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, options with { Authentication = Core.Upstream.AuthenticationScheme.Bearer }, "fixture-manual-secret", "手动 Bearer");
         var passed = await service.TestCandidate(chosen, true, CancellationToken.None);
         Check(passed.CanActivate && passed.Message.StartsWith("认证用 Bearer（手动指定），按标准 Messages 方式通过", StringComparison.Ordinal), passed.Message);
     }
@@ -95,7 +95,7 @@ static class UpstreamDetectionTests
         var service = web.Upstreams; var person = await web.Identities.Create("切换测试");
         var a = await Passed(service, first, "甲家"); var b = await Passed(service, second, "乙家");
         await Switch(web, a, "甲家"); using (var call = await UpstreamFixture.RelayRequest(web, person.Token)) Check(call.IsSuccessStatusCode);
-        var stale = (await service.ReadActive()).Version;
+        var stale = (await service.ReadActive()).ActiveVersion;
         await Switch(web, b, "乙家"); Check(second.Calls.Count(call => call.Path.Contains("/messages")) == 1);
         var expired = new Dictionary<string, string> { ["candidateId"] = a.ToString(CultureInfo.InvariantCulture), ["Version"] = stale.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var refused = await web.Post("/Upstream?handler=Activate", expired))
@@ -106,7 +106,7 @@ static class UpstreamDetectionTests
         var rename = new Dictionary<string, string> { ["candidateId"] = a.ToString(CultureInfo.InvariantCulture), ["newName"] = "公司甲家", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var renamed = await web.Post("/Upstream?handler=Rename", rename)) Check(WebUtility.HtmlDecode(await renamed.Content.ReadAsStringAsync()).Contains("已改名为「公司甲家」"));
         var after = await service.ReadActive();
-        Check(after.Version == active.Version && after.UpstreamCandidateId == a && after.Name == "公司甲家");
+        Check(after.ActiveVersion == active.ActiveVersion && after.UpstreamCandidateId == a && after.Name == "公司甲家");
         Check((await web.App.Services.GetRequiredService<IUsageService>().Query(new())).Rows.Select(row => (row.RequestId, row.UpstreamVersion)).SequenceEqual(history), "Renaming must not touch usage history");
         foreach (var path in new[] { "/", "/Connection" })
         {
@@ -132,7 +132,7 @@ static class UpstreamDetectionTests
         var values = new Dictionary<string, string>
         {
             ["Api.Name"] = "顺丰中转", ["Api.BaseUrl"] = mock.Url, ["Api.Credential"] = "fixture-region-secret", ["Api.AllowPrivateNetwork"] = "true",
-            ["Version"] = (await service.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+            ["Version"] = (await service.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
         };
         string blocked;
         using (var discovered = await web.Post("/Upstream?handler=DiscoverApi", values)) blocked = WebUtility.HtmlDecode(await discovered.Content.ReadAsStringAsync());
@@ -141,7 +141,7 @@ static class UpstreamDetectionTests
         var failed = (await service.ListCandidates()).Single(item => item.Name == "顺丰中转").Id; var count = (await service.ListCandidates()).Count;
 
         mock.Handler = context => context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal) ? UpstreamFixture.Success(context) : Status(context, 503);
-        var manual = await service.SaveCandidate((await service.ReadActive()).Version, mock.Options(), "fixture-manual-region-secret", "手动标准");
+        var manual = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mock.Options(), "fixture-manual-region-secret", "手动标准");
         var refused = await service.TestCandidate(manual, true, CancellationToken.None);
         Check(!refused.CanActivate && refused.Message.StartsWith("最小模型调用返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口", StringComparison.Ordinal) && refused.Message.Contains("当前代理设置："), refused.Message);
         count++;
@@ -183,7 +183,7 @@ static class UpstreamDetectionTests
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
         var service = web.Upstreams;
         var active = await Passed(service, mock, "在用的"); await Switch(web, active, "在用的");
-        var stuck = await service.SaveCandidate((await service.ReadActive()).Version, mock.Options(), "fixture-stuck-secret", "卡住的");
+        var stuck = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mock.Options(), "fixture-stuck-secret", "卡住的");
         BeginCandidateTest(web, stuck);
         Check(!(await service.ReadCandidate(stuck)).Deletable && !(await service.ReadCandidate(active)).Deletable);
         string listing;
@@ -257,7 +257,7 @@ static class UpstreamDetectionTests
         var values = new Dictionary<string, string>
         {
             ["Api.Name"] = "回显测试", ["Api.BaseUrl"] = mock.Url, ["Api.Credential"] = secret, ["Api.AllowPrivateNetwork"] = "true",
-            ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+            ["Version"] = (await web.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
         };
         using var discovered = await web.Post("/Upstream?handler=DiscoverApi", values);
         var html = await discovered.Content.ReadAsStringAsync();
@@ -296,7 +296,7 @@ static class UpstreamDetectionTests
     /// <summary>保存一个指向模拟上游的具名上游（自动探测），获取模型、选模型、测试通过后返回主键。</summary>
     private static async Task<long> Passed(IUpstreamService service, UpstreamFixture mock, string name)
     {
-        var id = await service.SaveCandidate((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "fixture-" + mock.Url.Length + "-secret", name);
+        var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "fixture-" + mock.Url.Length + "-secret", name);
         await service.DiscoverModels(id, CancellationToken.None); await service.ChooseModel(id, "fixture-model");
         Check((await service.TestCandidate(id, true, CancellationToken.None)).CanActivate);
         return id;
@@ -305,7 +305,7 @@ static class UpstreamDetectionTests
     /// <summary>经网页的「切换到」按钮切换，带上页面看到的活动版本，并核对读句与活动上游。</summary>
     private static async Task Switch(WebFixture web, long id, string name)
     {
-        var values = new Dictionary<string, string> { ["candidateId"] = id.ToString(CultureInfo.InvariantCulture), ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        var values = new Dictionary<string, string> { ["candidateId"] = id.ToString(CultureInfo.InvariantCulture), ["Version"] = (await web.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using var response = await web.Post("/Upstream?handler=Activate", values);
         Check(WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync()).Contains($"已切换到「{name}」") && (await web.Upstreams.ReadActive()).UpstreamCandidateId == id);
     }

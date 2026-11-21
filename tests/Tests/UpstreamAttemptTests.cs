@@ -42,7 +42,7 @@ static class UpstreamAttemptTests
         Check(success.UpstreamCandidateId == candidate && success.Name == "顺丰中转" && success.UpstreamStatus == 200 && success.ErrorType is null && success.HeadersMs is not null);
         Check(failure.UpstreamCandidateId == candidate && failure.Number == 1 && failure.UpstreamStatus == 503 && failure.ErrorType == "overloaded_error"
             && failure.ErrorMessage == "Overloaded" && failure.ConnectFailure is null && failure.Disposition == Core.Usage.AttemptDisposition.Client && failure.UpstreamRequestId == "req_fixture_503"
-            && failure.Version == (await web.Upstreams.ReadActive()).Version && failure.HeadersMs <= failure.DurationMs, "503 attempt fields");
+            && failure.Version == (await web.Upstreams.ReadActive()).ActiveVersion && failure.HeadersMs <= failure.DurationMs, "503 attempt fields");
         var events = Events(logs);
         Check(events.Last().EnumerateObject().Select(item => item.Name).SequenceEqual(["time", "requestId", "client", "route", "status", "outcome", "durationMs", "upstream", "attempts", "error"]),
             "Event line keeps its original fields in order and appends upstream, attempts and error");
@@ -230,14 +230,14 @@ static class UpstreamAttemptTests
     /// <summary>以给定供应商名称保存、测试并激活指向模拟上游的候选，返回候选主键。</summary>
     private static async Task<long> Activate(WebFixture web, UpstreamFixture upstream, string name)
     {
-        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).Version, upstream.Options(), Secret, name);
+        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, upstream.Options(), Secret, name);
         Check((await web.Upstreams.TestCandidate(id, true, CancellationToken.None)).CanActivate); await web.Upstreams.Activate(id); return id;
     }
 
     /// <summary>模拟「测过之后上游变坏」：保存一个连不上的候选，把当前在用那家的通过报告抄给它，再切换过去，返回它的主键。</summary>
     private static async Task<long> ForceActive(WebFixture web, UpstreamOptions options, string name)
     {
-        var active = await web.Upstreams.ReadActive(); var id = await web.Upstreams.SaveCandidate(active.Version, options, Secret, name);
+        var active = await web.Upstreams.ReadActive(); var id = await web.Upstreams.SaveCandidate(active.ActiveVersion, options, Secret, name);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             UPDATE upstream_candidates SET state='passed',report_json=(SELECT report_json FROM upstream WHERE id=1) WHERE id=$id
             """, ("$id", id)));

@@ -19,7 +19,7 @@ public static class DeviceMetadataPathTests
         { claude.Register(services); services.AddSingleton<IRelayEventLog>(new FixtureLog(logs)); });
         var settings = await web.Settings.Read(); settings.Value.NormalizeDeviceMetadata = false; await web.Settings.Save(settings.Version, settings.Value);
         var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
-        var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, options, FakeClaude.Credential("fixture-protocol-token", 60), "模拟官方", CancellationToken.None);
+        var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, options, FakeClaude.Credential("fixture-protocol-token", 60), "模拟官方", CancellationToken.None);
         var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);
         Check(report.CanActivate, report.Message); await web.Upstreams.Activate(candidate);
         var token = (await web.Identities.Create("矩阵客户端")).Token;
@@ -99,7 +99,7 @@ public static class DeviceMetadataPathTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
-        var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, options, FakeClaude.Credential("fixture-account-token", 60), "模拟官方", CancellationToken.None);
+        var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, options, FakeClaude.Credential("fixture-account-token", 60), "模拟官方", CancellationToken.None);
         var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(candidate)).Uid, ".claude.json");
         using (var imported = JsonDocument.Parse(File.ReadAllBytes(configuration))) Check(!imported.RootElement.TryGetProperty("oauthAccount", out _), "An imported login file has no oauthAccount, like a real one");
         await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
@@ -170,7 +170,7 @@ public static class DeviceMetadataPathTests
                 : streaming ? Reply(context, "text/event-stream", Encoding.UTF8.GetBytes(events))
                 : Reply(context, "application/json", JsonSerializer.SerializeToUtf8Bytes(new { id = "msg_fixture", type = "message", role = "assistant", model = "fixture-model",
                     content = new[] { new { type = "text", text = "OK" } }, stop_reason = "end_turn" }));
-            var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, options, FakeClaude.Credential("fixture-compressed-" + encoding + (streaming ? "-sse" : "-json"), 60), "模拟官方", CancellationToken.None);
+            var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, options, FakeClaude.Credential("fixture-compressed-" + encoding + (streaming ? "-sse" : "-json"), 60), "模拟官方", CancellationToken.None);
             var catalog = await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
             Check(catalog.Status == Core.Upstream.CatalogStatus.Passed && catalog.Models.SequenceEqual(["fixture-model"]), label + " catalog decoded: " + catalog.Message);
             var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(candidate)).Uid, ".claude.json");

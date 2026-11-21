@@ -96,7 +96,7 @@ internal sealed class UpstreamProbe : IUpstreamProbe
             foreach (var method in catalog.Authentication is { } accepted ? UpstreamDetection.StartingFrom(order, accepted) : order)
             {
                 var attempt = options with { Authentication = method };
-                using var transport = new UpstreamConnection(new(snapshot.Version, attempt, snapshot.Credential, accountUuid: snapshot.AccountUuid), _proxy, 1);
+                using var transport = new UpstreamConnection(new(snapshot.ActiveVersion, attempt, snapshot.Credential, accountUuid: snapshot.AccountUuid), _proxy, 1);
                 var (reply, diagnostic, triedClaude) = await Call(transport, attempt, identity, timeout.Token);
                 used = attempt with { Diagnostic = diagnostic };
                 // 401/403 说明这种认证方式不被接受，换下一种；全部用完再判失败。
@@ -144,7 +144,7 @@ internal sealed class UpstreamProbe : IUpstreamProbe
         try
         {
             var identity = await _identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token);
-            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options, snapshot.Credential), _proxy, 1);
+            using var transport = new UpstreamConnection(new(snapshot.ActiveVersion, snapshot.Options, snapshot.Credential), _proxy, 1);
             using var request = transport.ProfileRequest(identity.Version);
             using var response = await transport.Send(request, timeout.Token);
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) throw new InvalidOperationException(next + "官方拒绝了这个账户的登录凭据，请重新登录官方账户。");
@@ -188,8 +188,8 @@ internal sealed class UpstreamProbe : IUpstreamProbe
         for (var index = 0; index < order.Length; index++)
         {
             var method = order[index];
-            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options with { Authentication = method }, snapshot.Credential, accountUuid: snapshot.AccountUuid), _proxy, 1);
-            using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0", identity: identity, deviceId: _siteIdentity.Current.DeviceId);
+            using var transport = new UpstreamConnection(new(snapshot.ActiveVersion, snapshot.Options with { Authentication = method }, snapshot.Credential, accountUuid: snapshot.AccountUuid), _proxy, 1);
+            using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0", null, identity, _siteIdentity.Current.DeviceId);
             using var response = await transport.Send(request, cancellation);
             var refused = response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
             if (refused && index + 1 < order.Length) continue;
@@ -273,15 +273,8 @@ internal sealed class UpstreamProbe : IUpstreamProbe
             var said = string.Join("：", new[] { "type", "message" }
                 .Select(name => error.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null)
                 .Where(value => !string.IsNullOrWhiteSpace(value)));
-            var text = new string(UpstreamResponses.Redact(said, secret).Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
-            if (text.Length == 0) return "";
-            if (text.Length > QuoteLimit)
-            {
-                var cut = QuoteLimit - 1;
-                if (char.IsHighSurrogate(text[cut - 1])) cut--;
-                text = text[..cut] + "…";
-            }
-            return $"上游原话：{text}。";
+            var text = SafeText.Clip(said, value => UpstreamResponses.Redact(value, secret), QuoteLimit);
+            return string.IsNullOrEmpty(text) ? "" : $"上游原话：{text}。";
         }
         // 错误正文不是 JSON（例如网关的 HTML 页面）：没有原话可引，读句照旧。
         catch (JsonException) { return ""; }
@@ -290,9 +283,7 @@ internal sealed class UpstreamProbe : IUpstreamProbe
     /// <summary>建连失败的读句：代理取不到时读出代理原因，其余给固定说明，不回显底层网络细节。</summary>
     private static string ConnectionMessage(HttpRequestException error)
     {
-        for (Exception? inner = error; inner is not null; inner = inner.InnerException)
-            if (inner is UpstreamProxyUnavailableException proxyError) return proxyError.Message;
-        return "连接或 TLS 校验失败，请检查地址、端口、证书及项目设置里的代理。";
+        return ExceptionChain.Find<UpstreamProxyUnavailableException>(error)?.Message ?? "连接或 TLS 校验失败，请检查地址、端口、证书及项目设置里的代理。";
     }
 
     /// <summary>上游回 5xx 时的原因与下一步：可能是上游暂时故障，也可能是按地区屏蔽了当前网络出口；附上当前代理方式，指向「查代理出口」而不是「查地址」。</summary>

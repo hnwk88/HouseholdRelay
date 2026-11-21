@@ -13,7 +13,7 @@ namespace HouseholdRelay;
 /// <summary>命令行入口：解析参数后经组合根构造容器，再从容器取各子命令的依赖。</summary>
 public static class Program
 {
-    /// <summary>进程入口：无参数时默认 serve；按首个参数分派 init、account、serve、clients、client 子命令，--home 指定数据目录。返回 0 表示成功、1 表示参数或运行失败；所有已知异常都在这里转成中文提示，不把堆栈或敏感细节打到控制台。</summary>
+    /// <summary>进程入口：无参数时默认 serve；按首个参数分派 init、account、serve、clients、client 子命令，--home 指定数据目录。退出码见 <see cref="ExitCodes"/>（0 成功、1 参数或业务拒绝、2 数据库、3 本机环境、4 未预料）；所有已知异常都在这里转成中文提示，不把堆栈或敏感细节打到控制台。</summary>
     public static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
@@ -68,21 +68,21 @@ public static class Program
                     using var services = CompositionRoot.BuildCommandServices(home);
                     return await services.GetRequiredService<IClientLauncher>().Run(bundle, split >= 0 ? args[(split + 1)..] : []);
                 }
-                default: Help(); return 1;
+                default: Help(); return ExitCodes.Rejected;
             }
-            return 0;
+            return ExitCodes.Success;
         }
         // 本程序把参数错误、业务拒绝统一抛成 InvalidOperationException，消息本身就是写给操作者的中文提示，可以原样输出。
-        catch (InvalidOperationException error) { Console.Error.WriteLine(error.Message); return 1; }
+        catch (InvalidOperationException error) { Console.Error.WriteLine(error.Message); return ExitCodes.Rejected; }
         // 数据库失败只输出错误码，不输出 SQL 或路径细节；并明确告知不会因此重新开放首次设置，避免误以为可借故障重置管理员。
         // 经 EF 写库时 SQLite 异常包在 DbUpdateException 里，取内层的错误码，读句与直接失败时相同。
         catch (Exception error) when ((error as Microsoft.Data.Sqlite.SqliteException ?? error.InnerException as Microsoft.Data.Sqlite.SqliteException) is { } sqlite)
-        { Console.Error.WriteLine($"数据库操作失败（SQLite {sqlite.SqliteErrorCode}）。请检查数据目录权限、文件占用及备份完整性；不会重新开放首次设置。"); return 1; }
+        { Console.Error.WriteLine($"数据库操作失败（SQLite {sqlite.SqliteErrorCode}）。请检查数据目录权限、文件占用及备份完整性；不会重新开放首次设置。"); return ExitCodes.Database; }
         // 文件、Windows 凭据、端口和加解密失败的原始消息可能带路径或密钥信息，这里只给归类后的排查方向。
         catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
-        { Console.Error.WriteLine("文件、Windows 凭据或端口操作失败。请检查路径、当前 Windows 用户及端口占用。"); return 1; }
+        { Console.Error.WriteLine("文件、Windows 凭据或端口操作失败。请检查路径、当前 Windows 用户及端口占用。"); return ExitCodes.Environment; }
         // 兜底：未预料的异常不打印消息和堆栈，防止泄露令牌或配置内容，只返回失败码。
-        catch (Exception) { Console.Error.WriteLine("操作失败。请检查配置文件格式及 .NET 10 运行环境。"); return 1; }
+        catch (Exception) { Console.Error.WriteLine("操作失败。请检查配置文件格式及 .NET 10 运行环境。"); return ExitCodes.Unexpected; }
     }
     /// <summary>未知子命令时打印用法说明；由 <see cref="Main"/> 的默认分支调用，随后进程返回 1。</summary>
     private static void Help() => Console.WriteLine("""

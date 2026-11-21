@@ -87,7 +87,7 @@ static class IntegerKeyUpgradeTests
         var plain = Plain();
         var file = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "LegacyDatabases", "v9", "upstreams.export"));
         await using var web = await WebFixture.Create();
-        var outcomes = await web.Upstreams.Import((await web.Upstreams.ReadActive()).Version, file, plain.ExportPassword, CancellationToken.None);
+        var outcomes = await web.Upstreams.Import((await web.Upstreams.ReadActive()).ActiveVersion, file, plain.ExportPassword, CancellationToken.None);
         Check(outcomes.Select(item => (item.Name, item.Error)).SequenceEqual([("夹具甲供应商", (string?)null), ("夹具乙供应商", null)]), string.Join(" | ", outcomes));
         var saved = await web.Upstreams.ListCandidates();
         Check(saved.Select(item => (item.Name, item.Options.BaseUrl)).SequenceEqual([("夹具甲供应商", "https://relay-a.example.com"), ("夹具乙供应商", "https://relay-b.example.com")]));
@@ -157,7 +157,7 @@ static class IntegerKeyUpgradeTests
         var first = await process.Identities.Create("甲"); var second = await process.Identities.Create("乙");
         Check(first.UserId == 1 && second.UserId == 2);
         Check((await process.Identities.List()).All(user => Regex.IsMatch(user.Name, "^u_[0-9a-f]{24}$")) && (await process.Identities.List())[0].Name != (await process.Identities.List())[1].Name);
-        var version = (await process.Upstreams.ReadActive()).Version;
+        var version = (await process.Upstreams.ReadActive()).ActiveVersion;
         var a = await process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://key-a.example.com" }, "sk-key-a-0001", "甲家");
         var b = await process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://key-b.example.com" }, "sk-key-b-0002", "乙家");
         Check(a == 1 && b == 2);

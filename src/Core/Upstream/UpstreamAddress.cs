@@ -1,4 +1,5 @@
 ﻿using System.Net;
+using Core.Relay;
 
 namespace Core.Upstream;
 
@@ -35,7 +36,7 @@ public static class UpstreamAddress
     /// </summary>
     public static Uri Endpoint(UpstreamOptions options, string route, string query = "")
     {
-        if (route is not ("/v1/messages" or "/v1/messages/count_tokens" or "/v1/models" or "/api/hello") && !(route == "/api/oauth/profile" && options.OfficialLogin))
+        if (!RelayRoutes.IsExposed(route) && route != "/api/hello" && !(route == "/api/oauth/profile" && options.OfficialLogin))
             throw new InvalidOperationException("不支持的上游接口。");
         var baseUri = Normalize(options.BaseUrl, options.AllowPrivateNetwork);
         var separator = baseUri.Query.Length == 0 ? "?" : "&";

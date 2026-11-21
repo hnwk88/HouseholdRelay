@@ -18,6 +18,18 @@ public sealed record UsageReport(DateTimeOffset WindowStart, DateTimeOffset AsOf
     /// <summary>本页明细各行的上游尝试，按请求编号（用量记录主键）分组；只给管理页，个人用量接口序列化时不输出，上游诊断不对使用者开放。</summary>
     [JsonIgnore] public IReadOnlyDictionary<string, IReadOnlyList<UpstreamAttemptRow>> Attempts { get; init; } = new Dictionary<string, IReadOnlyList<UpstreamAttemptRow>>();
 
+    /// <summary>明细一共几页（每页 <see cref="PageSize"/> 条）；没有记录时为 0。分页只在这里算，页面和脚本都读它。</summary>
+    public long TotalPages => (Total + PageSize - 1) / PageSize;
+
+    /// <summary>当前页前面还有没有页。</summary>
+    public bool HasPrevious => Page > 1;
+
+    /// <summary>当前页后面还有没有记录。</summary>
+    public bool HasNext => (long)Page * PageSize < Total;
+
+    /// <summary>用量取值的显示名表，供页面脚本把线上名读成中文；排在已有字段之后，原有字段不变。</summary>
+    public UsageLabelTable Labels => UsageLabelTable.Instance;
+
     /// <summary>取某条明细的上游尝试，按次序排列；没有发往上游或不在本页时为空。</summary>
     public IReadOnlyList<UpstreamAttemptRow> AttemptsOf(string requestId) => Attempts.TryGetValue(requestId, out var list) ? list : [];
 }

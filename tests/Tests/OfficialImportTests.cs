@@ -70,7 +70,7 @@ static class OfficialImportTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var service = web.Upstreams;
-        try { await service.ImportOfficial((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, FakeClaude.Credential(ImportedToken, 60), new string('名', 41), CancellationToken.None); Check(false, "Overlong name must be refused"); }
+        try { await service.ImportOfficial((await service.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, FakeClaude.Credential(ImportedToken, 60), new string('名', 41), CancellationToken.None); Check(false, "Overlong name must be refused"); }
         // 预期的拒绝：名称超长在落盘前就读出要求。
         catch (InvalidOperationException error) { Check(error.Message.Contains("供应商名称"), error.Message); }
         Check(NoAccountDirectories(web) && (await service.ListCandidates()).Count == 0);
@@ -105,7 +105,7 @@ static class OfficialImportTests
     private static async Task<Dictionary<string, string>> Form(WebFixture web, UpstreamFixture mock, string name) => new()
     {
         ["Import.Name"] = name, ["Import.BaseUrl"] = mock.Url, ["Import.AllowPrivateNetwork"] = "true",
-        ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+        ["Version"] = (await web.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
     };
 
     /// <summary>数据目录下没有任何官方账户目录（目录本身不存在或为空）。</summary>

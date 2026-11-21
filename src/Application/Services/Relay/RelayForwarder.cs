@@ -18,8 +18,6 @@ namespace Application.Services.Relay;
 /// <summary>中转的转发编排：鉴权、准入、用量记录、请求改写、上游转发与自动切换、错误分类；宿主只把请求包成 <see cref="IRelayExchange"/> 交进来。</summary>
 public sealed class RelayForwarder : IRelayForwarder
 {
-    private static readonly Dictionary<string, string> _routes = new()
-    { ["/v1/messages"] = "POST", ["/v1/messages/count_tokens"] = "POST", ["/v1/models"] = "GET" };
     private readonly RelayConfiguration _config;
     private readonly ClientRegistry _clients;
     private readonly Admission _admission;
@@ -98,9 +96,9 @@ public sealed class RelayForwarder : IRelayForwarder
                     upstreamPaused = paused, completed = Interlocked.Read(ref completed) }, exchange.Aborted); return;
             }
             if (path == "/api/hello" && exchange.Method == "HEAD") { exchange.Reply.StatusCode = 200; return; }
-            if (!_routes.TryGetValue(path, out var method)) throw new RelayFailure(404, "Endpoint not exposed by this relay.");
+            if (!RelayRoutes.Exposed.TryGetValue(path, out var method)) throw new RelayFailure(404, "Endpoint not exposed by this relay.");
             if (exchange.Method != method) throw new RelayFailure(405, "Method not allowed.");
-            var kind = path == "/v1/messages" ? UsageKind.Inference : path == "/v1/models" ? UsageKind.Models : UsageKind.Estimate;
+            var kind = RelayRoutes.Kind(path);
             usage = new UsageAccumulator(kind);
             if (_usage is not null) { await _usage.Start(id, client, kind); recorded = true; }
             using var route = await _upstreams.Route();
@@ -154,7 +152,7 @@ public sealed class RelayForwarder : IRelayForwarder
                     timeout.Token.ThrowIfCancellationRequested();
                     while (true)
                     {
-                        attempt = new UpstreamAttempt(attempts.Count + 1, upstream.Snapshot.UpstreamCandidateId, upstream.Snapshot.Version, _usage?.Now ?? DateTimeOffset.UtcNow);
+                        attempt = new UpstreamAttempt(attempts.Count + 1, upstream.Snapshot.UpstreamCandidateId, upstream.Snapshot.ActiveVersion, _usage?.Now ?? DateTimeOffset.UtcNow);
                         attempts.Add(attempt); classified = false; upstreamName = upstream.Snapshot.Name; upstreamStatus = null;
                         // 尝试记录里的说明先去掉这一家的上游凭据和个人令牌，再截断落库；每家只用自己的凭据，不会带到别家。
                         var secret = upstream.Snapshot.Credential!;
@@ -176,7 +174,7 @@ public sealed class RelayForwarder : IRelayForwarder
                             {
                                 _diagnostics?.Record(id, "assembled", path, attemptSite?.Version ?? 0, attemptSite?.DeviceId ?? _config.DeviceId, identity?.Version, caller?.IdentityEntrypoint);
                             }
-                            if (!dispatched && recorded) await _usage!.Dispatch(id, upstream.Snapshot.Version, upstream.Snapshot.UpstreamCandidateId, model);
+                            if (!dispatched && recorded) await _usage!.Dispatch(id, upstream.Snapshot.ActiveVersion, upstream.Snapshot.UpstreamCandidateId, model);
                             dispatched = true; attemptSent = true;
                             if (upstream.Snapshot.Options.OfficialAccount)
                                 _diagnostics?.Record(id, "dispatch", path, attemptSite?.Version ?? 0, attemptSite?.DeviceId ?? _config.DeviceId, identity?.Version, caller?.IdentityEntrypoint);
@@ -273,7 +271,7 @@ public sealed class RelayForwarder : IRelayForwarder
                         stopwatch.ElapsedMilliseconds, usage!.Completeness(dispatched, outcome == UsageOutcome.Succeeded), usage.Tokens,
                         usage.ReportedMoney is { } money ? money with { Completeness = usage.ProtocolComplete && outcome == UsageOutcome.Succeeded ? MoneyCompleteness.Complete : MoneyCompleteness.Partial } : null)
                         { Attempts = attempts });
-                _log.Write(new { time = DateTimeOffset.UtcNow, requestId = id, client = name, route = _routes.ContainsKey(path) ? path : "local",
+                _log.Write(new { time = DateTimeOffset.UtcNow, requestId = id, client = name, route = RelayRoutes.IsExposed(path) ? path : "local",
                     status = exchange.Reply.StatusCode, outcome = Wire<UsageOutcome>.Name(outcome), durationMs = stopwatch.ElapsedMilliseconds,
                     upstream = upstreamName, attempts = attempts.Count, error = attempts.LastOrDefault()?.ErrorType });
             }
@@ -295,16 +293,12 @@ public sealed class RelayForwarder : IRelayForwarder
         response.Headers.TryGetValues("request-id", out var values) || response.Headers.TryGetValues("x-request-id", out values) ? values.FirstOrDefault() : null;
 
     /// <summary>建连异常链里是否有「代理已启用却取不到地址」；有就说明请求根本没有发出。</summary>
-    private static bool ProxyUnavailable(Exception error)
-    {
-        for (Exception? inner = error; inner is not null; inner = inner.InnerException) if (inner is Core.Upstream.UpstreamProxyUnavailableException) return true;
-        return false;
-    }
+    private static bool ProxyUnavailable(Exception error) => ExceptionChain.Find<UpstreamProxyUnavailableException>(error) is not null;
 
-    /// <summary>把请求体里的模型名过滤成可安全写入用量记录的值：长度超过 160、含白名单以外字符，或包含个人令牌、上游凭据时一律记为空，防止秘密借模型字段落库。</summary>
+    /// <summary>把请求体里的模型名过滤成可安全写入用量记录的值：不合乎 <see cref="ModelName"/>，或包含个人令牌、上游凭据时一律记为空，防止秘密借模型字段落库。</summary>
     private static string? SafeModel(string? model, string? token, string? credential)
     {
-        if (model is not { Length: > 0 and <= 160 } || model.Any(c => !(char.IsAsciiLetterOrDigit(c) || "-_.:/@".Contains(c)))) return null;
+        if (!ModelName.IsValid(model)) return null;
         if (token is { Length: > 0 } && model.Contains(token, StringComparison.Ordinal)
             || credential is { Length: > 0 } && model.Contains(credential, StringComparison.Ordinal)) return null;
         return model;

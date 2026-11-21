@@ -3,16 +3,15 @@ const results = document.getElementById('results');
 const status = document.getElementById('status');
 const pagination = document.getElementById('pagination');
 let page = 1, active;
-const kinds = { inference: '推理', estimate: '估算', models: '模型查询' };
-const outcomes = { succeeded: '成功', failed: '失败', cancelled: '已取消', interrupted: '中断', started: '处理中 / 待写入' };
-const completeness = { complete: '完整', partial: '部分 / 不完整', not_provided: '上游未提供', not_applicable: '不适用' };
+// 类别、结果、完整性、金额来源的中文名都取自报告里的 labels（服务端 UsageLabels 那一份），这里不另抄。
+let labels = { kinds: {}, outcomes: {}, completeness: {}, moneySources: {} };
 const count = value => value == null ? '未知' : value.toLocaleString();
-const moneySources = { reported: '上游报告', estimated: '估算' };
+
 const moneyValue = value => Number(value).toLocaleString(undefined, { maximumFractionDigits: 9 });
 function moneyTotals(summary, parent) {
     if (summary.kind !== 'inference') { element('p', '金额：不适用', parent); return; }
     if (!summary.money.length) element('p', '金额：未知', parent);
-    for (const money of summary.money) element('p', `已知金额（${moneySources[money.source]}）：${moneyValue(money.amount)} ${money.currency} · ${money.requests} 次，其中不完整 ${money.incomplete} 次`, parent);
+    for (const money of summary.money) element('p', `已知金额（${labels.moneySources[money.source]}）：${moneyValue(money.amount)} ${money.currency} · ${money.requests} 次，其中不完整 ${money.incomplete} 次`, parent);
     element('p', `金额未知：${summary.unknownAmounts} 次。不同币种和来源分开统计。`, parent);
 }
 function element(tag, text, parent, className) {
@@ -23,13 +22,13 @@ function clear() {
     active?.abort(); results.replaceChildren(); pagination.hidden = true; status.textContent = '';
 }
 function render(report) {
-    results.replaceChildren();
+    results.replaceChildren(); labels = report.labels;
     if (report.persistenceFailures) element('p', '用量保存或清理曾失败，请联系管理员检查；统计可能不完整。', results, 'validation-summary-errors');
     element('p', `当前窗口从 ${new Date(report.windowStart).toLocaleString()} 起，共 ${report.total} 次请求。`, results);
     if (!report.total) element('p', '没有符合条件的请求记录。', results, 'notice');
     for (const summary of report.summary) {
         const card = element('section', null, results, 'card'); card.dataset.usageKind = summary.kind;
-        element('h2', `${kinds[summary.kind]} · ${summary.requests} 次`, card);
+        element('h2', `${labels.kinds[summary.kind]} · ${summary.requests} 次`, card);
         element('p', `成功 ${summary.succeeded} · 失败 ${summary.failed} · 取消 ${summary.cancelled} · 中断 ${summary.interrupted} · 处理中 / 待写入 ${summary.pending} · 未发送 ${summary.notSent}`, card);
         if (summary.kind === 'models') { element('p', 'Token：不适用', card); continue; }
         element('p', `已知输入：${count(summary.tokens.input)}` + (summary.kind === 'inference' ? ` · 已知输出：${count(summary.tokens.output)}` : ''), card);
@@ -47,7 +46,7 @@ function render(report) {
         for (const period of report.periods) {
             const item = period.summary, tr = element('tr', null, body);
             element('td', new Date(period.start).toLocaleString(undefined, { timeZone: report.timeZone, timeZoneName: 'short' }), tr);
-            element('td', kinds[item.kind], tr); element('td', `${item.requests} / ${item.succeeded}`, tr);
+            element('td', labels.kinds[item.kind], tr); element('td', `${item.requests} / ${item.succeeded}`, tr);
             element('td', `${item.failed} / ${item.cancelled} / ${item.interrupted}`, tr);
             element('td', item.kind === 'models' ? '不适用' : `${count(item.tokens.input)} / ${item.kind === 'estimate' ? '不适用' : count(item.tokens.output)}`, tr);
             element('td', `${item.incomplete} 次`, tr); moneyTotals(item, element('td', null, tr));
@@ -63,18 +62,18 @@ function render(report) {
             const tr = element('tr', null, body), cell = element('td', new Date(row.startedAt).toLocaleString(), tr);
             element('small', row.requestId, cell);
             const owner = element('td', row.displayName, tr); element('small', row.model || '模型未知', owner);
-            const kind = element('td', kinds[row.kind], tr); element('small', outcomes[row.outcome], kind);
+            const kind = element('td', labels.kinds[row.kind], tr); element('small', labels.outcomes[row.outcome], kind);
             const sent = element('td', row.dispatched ? '已尝试发送' : '未发送', tr); element('small', `中转 ${row.statusCode ?? '—'} / 上游 ${row.upstreamStatus ?? '—'}`, sent);
             element('td', row.completeness === 'not_applicable' ? '不适用' : `${count(row.tokens.input)} / ${row.kind === 'estimate' ? '不适用' : count(row.tokens.output)}`, tr);
             element('td', row.kind === 'inference' && row.dispatched ? `${count(row.tokens.cacheRead)} / ${count(row.tokens.cacheWrite)}` : '不适用', tr);
-            element('td', row.money.source === 'not_applicable' ? '不适用' : row.money.amount == null ? '未知' : `${moneyValue(row.money.amount)} ${row.money.currency} · ${moneySources[row.money.source]}${row.money.completeness === 'partial' ? '（部分）' : ''}`, tr);
-            element('td', completeness[row.completeness], tr);
+            element('td', row.money.source === 'not_applicable' ? '不适用' : row.money.amount == null ? '未知' : `${moneyValue(row.money.amount)} ${row.money.currency} · ${labels.moneySources[row.money.source]}${row.money.completeness === 'partial' ? '（部分）' : ''}`, tr);
+            element('td', labels.completeness[row.completeness], tr);
         }
     }
     pagination.hidden = report.total === 0;
     document.getElementById('page-label').textContent = `第 ${report.page} 页 · 每页 ${report.pageSize} 条`;
-    document.getElementById('previous').disabled = report.page <= 1;
-    document.getElementById('next').disabled = report.page * report.pageSize >= report.total;
+    document.getElementById('previous').disabled = !report.hasPrevious;
+    document.getElementById('next').disabled = !report.hasNext;
 }
 async function query(target) {
     clear(); const controller = active = new AbortController(); status.textContent = '正在查询…';

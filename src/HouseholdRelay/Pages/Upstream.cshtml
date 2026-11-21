@@ -53,7 +53,7 @@
             else
             {
                 <label for="test-model">模型名称（上游没有提供模型目录，请手填）</label>
-                <input id="test-model" name="model" value="@working.Options.Model" maxlength="200" required />
+                <input id="test-model" name="model" value="@working.Options.Model" maxlength="@ModelName.MaxLength" required />
             }
             <button type="submit" class="secondary">测试（会消耗少量上游额度）</button>
             <small>这是管理员诊断，不计入个人用量；测试不会切换当前上游。</small>

@@ -52,7 +52,7 @@ static class UpstreamNamingMigrationTests
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM upstream_candidates WHERE options_json LIKE '%proxyUrl%'")) == 0);
             Check(!((string)RelayDatabase.Scalar(connection, null, "SELECT options_json FROM upstream WHERE id=1")!).Contains("proxyUrl"));
         }
-        await upgraded.Upstreams.Activate(saved[1].Id, (await upgraded.Upstreams.ReadActive()).Version); await upgraded.Upstreams.Activate(saved[0].Id, (await upgraded.Upstreams.ReadActive()).Version);
+        await upgraded.Upstreams.Activate(saved[1].Id, (await upgraded.Upstreams.ReadActive()).ActiveVersion); await upgraded.Upstreams.Activate(saved[0].Id, (await upgraded.Upstreams.ReadActive()).ActiveVersion);
         Check((await upgraded.Upstreams.ReadActive()).UpstreamCandidateId == saved[0].Id, "Migrated candidates can be switched back and forth");
     }
 

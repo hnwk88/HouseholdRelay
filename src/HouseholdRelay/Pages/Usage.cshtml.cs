@@ -18,7 +18,7 @@ public sealed class UsageModel(IUsageService usage, IIdentityService identities)
     [BindProperty(SupportsGet = true)] public DateTimeOffset? Until { get; set; }
     /// <summary>查询参数：接口类别，只能是 inference、estimate、models 之一，空表示不筛选。</summary>
     [BindProperty(SupportsGet = true)] public string? Kind { get; set; }
-    /// <summary>查询参数：模型名（不超过 160 字符），空表示不筛选。</summary>
+    /// <summary>查询参数：模型名（不超过 <see cref="ModelName.MaxLength"/> 字符），空表示不筛选。</summary>
     [BindProperty(SupportsGet = true)] public string? ModelName { get; set; }
     /// <summary>查询参数：请求结果，只能是 started、succeeded、failed、cancelled、interrupted 之一，空表示不筛选。</summary>
     [BindProperty(SupportsGet = true)] public string? Outcome { get; set; }

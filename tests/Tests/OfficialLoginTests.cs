@@ -27,7 +27,7 @@ static class OfficialLoginTests
             var values = new Dictionary<string, string>
             {
                 ["Login.Name"] = "", ["Login.BaseUrl"] = mock.Url, ["Login.AllowPrivateNetwork"] = "true",
-                ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+                ["Version"] = (await web.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
             };
             using var page = await web.Post("/Upstream?handler=LoginAccount", values);
             var raw = await page.Content.ReadAsStringAsync(); var html = WebUtility.HtmlDecode(raw);
@@ -89,7 +89,7 @@ static class OfficialLoginTests
             var values = new Dictionary<string, string>
             {
                 ["Login.Name"] = "失败测试", ["Login.BaseUrl"] = mock.Url, ["Login.AllowPrivateNetwork"] = "true",
-                ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+                ["Version"] = (await web.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
             };
             using var page = await web.Post("/Upstream?handler=LoginAccount", values);
             var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
@@ -100,15 +100,15 @@ static class OfficialLoginTests
         using var named = new FakeClaudeLauncher("success");
         await using var host = await WebFixture.Create(overrides: named.Register);
         var service = host.Upstreams; var options = new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true };
-        try { await service.LoginOfficial((await service.ReadActive()).Version, options, new string('名', 41), CancellationToken.None); Check(false, "Overlong name must be refused"); }
+        try { await service.LoginOfficial((await service.ReadActive()).ActiveVersion, options, new string('名', 41), CancellationToken.None); Check(false, "Overlong name must be refused"); }
         // 预期的拒绝：名称超长在登录前就读出要求。
         catch (InvalidOperationException error) { Check(error.Message.Contains("供应商名称"), error.Message); }
         Check(NoAccountDirectories(host) && (await service.ListCandidates()).Count == 0);
-        try { await service.SaveCandidate((await service.ReadActive()).Version, options with { Mode = UpstreamMode.OAuth, Authentication = AuthenticationScheme.Bearer, OfficialLogin = true }, "fixture-pasted-token", "贴令牌"); Check(false, "Pasted tokens must not claim a login"); }
+        try { await service.SaveCandidate((await service.ReadActive()).ActiveVersion, options with { Mode = UpstreamMode.OAuth, Authentication = AuthenticationScheme.Bearer, OfficialLogin = true }, "fixture-pasted-token", "贴令牌"); Check(false, "Pasted tokens must not claim a login"); }
         // 预期的拒绝：官方登录只能经登录入口建立。
         catch (InvalidOperationException error) { Check(error.Message.Contains("登录官方账户"), error.Message); }
 
-        var removed = await service.LoginOfficial((await service.ReadActive()).Version, options, "将删除的账户", CancellationToken.None);
+        var removed = await service.LoginOfficial((await service.ReadActive()).ActiveVersion, options, "将删除的账户", CancellationToken.None);
         Check(Directory.Exists(Path.Combine(host.Home.Path, ".state", "official-accounts", (await service.ReadCandidate(removed)).Uid)));
         await service.Delete(removed);
         Check(NoAccountDirectories(host) && (await service.ListCandidates()).Count == 0, "Deleting an official login upstream must remove its account directory");
@@ -126,7 +126,7 @@ static class OfficialLoginTests
         await SettleOnFailure(async () =>
         {
             var service = web.Upstreams;
-            var id = await service.LoginOfficial((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新卡住", CancellationToken.None);
+            var id = await service.LoginOfficial((await service.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新卡住", CancellationToken.None);
             await service.ChooseModel(id, "fixture-model");
             Check((await service.TestCandidate(id, true, CancellationToken.None)).CanActivate); await service.Activate(id);
             var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", (await service.ReadCandidate(id)).Uid);
@@ -155,7 +155,7 @@ static class OfficialLoginTests
         await SettleOnFailure(async () =>
         {
             var service = web.Upstreams; var accounts = web.App.Services.GetRequiredService<IOfficialAccountLogin>();
-            var id = await service.LoginOfficial((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新中删除", CancellationToken.None);
+            var id = await service.LoginOfficial((await service.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true }, "刷新中删除", CancellationToken.None);
             var uid = (await service.ReadCandidate(id)).Uid; var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", uid); var log = Path.Combine(directory, "fake-calls.log");
             FakeClaude.Write(directory, "fixture-login-token-expired", -1);
             var reading = Task.Run(() => accounts.ReadAccessToken(uid));

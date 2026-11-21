@@ -113,7 +113,7 @@ static class DbTimeBenchmark
         /// <summary>原样转交。</summary>
         public Task Recover() => inner.Recover();
         /// <summary>原样转交。</summary>
-        public Task<int> Cleanup(CancellationToken cancellation = default) => inner.Cleanup(cancellation);
+        public Task<int> Cleanup(CancellationToken cancellation) => inner.Cleanup(cancellation);
         /// <summary>原样转交。</summary>
         public Task<UsageReport> Query(UsageFilter filter) => inner.Query(filter);
         /// <summary>原样转交。</summary>

@@ -15,7 +15,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
         "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "TE", "Trailer", "Transfer-Encoding", "Upgrade", "anthropic-beta" };
     private readonly HttpClient _http;
     /// <summary>官方操作是否允许新准入；维护只改变可用性判断，不清除原有认证暂停或冷却。</summary>
-    private readonly Func<bool>? _officialAvailable;
+    private readonly Func<bool> _officialAvailable;
     /// <summary>最近一次凭据读取因维护或私有身份配置失败而关闭；独立于认证暂停和限流，成功重读才清除。</summary>
     private int identityReadBlocked;
     /// <summary>最近一次私有身份配置拒绝的读句（固定说明）；null 时用通用读句。与 <see cref="identityReadBlocked"/> 一起更新。</summary>
@@ -31,8 +31,15 @@ internal sealed class UpstreamConnection : IUpstreamLease
     public int CooldownSeconds => (int)Math.Max(0, Math.Ceiling((Interlocked.Read(ref cooldownUntil) - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) / 1000d));
 
     /// <summary>为一个上游版本建立专用 HTTP 客户端：不跟随重定向、不用 Cookie、不自动解压，限制每服务器连接数；处理器自身不用系统代理，建连交给 <see cref="UpstreamDialer"/> 按全局代理设置与地址规则完成；客户端总超时关闭，由调用方的取消令牌控制请求时长。初始引用计数为 1，归连接池持有。</summary>
-    public UpstreamConnection(UpstreamSnapshot snapshot, IUpstreamProxy proxy, int maxConnections = 2, Func<bool>? officialAvailable = null)
+    public UpstreamConnection(UpstreamSnapshot snapshot, IUpstreamProxy proxy) : this(snapshot, proxy, 2) { }
+
+    /// <summary>同上，每服务器最多 <paramref name="maxConnections"/> 个连接；发往官方账户恒可发（检测与独立中转用）。</summary>
+    public UpstreamConnection(UpstreamSnapshot snapshot, IUpstreamProxy proxy, int maxConnections) : this(snapshot, proxy, maxConnections, () => true) { }
+
+    /// <summary>同上，发往官方账户前问 <paramref name="officialAvailable"/>（连接池按站点身份给出，维护中为假）。</summary>
+    public UpstreamConnection(UpstreamSnapshot snapshot, IUpstreamProxy proxy, int maxConnections, Func<bool> officialAvailable)
     {
+        ArgumentNullException.ThrowIfNull(snapshot); ArgumentNullException.ThrowIfNull(proxy); ArgumentNullException.ThrowIfNull(officialAvailable);
         Snapshot = snapshot;
         this._officialAvailable = officialAvailable;
         identityReadBlocked = snapshot.BlockedByIdentity ? 1 : 0;
@@ -48,24 +55,34 @@ internal sealed class UpstreamConnection : IUpstreamLease
     /// <summary>原子地增加一次引用并返回自身，供连接池在锁内发放租约；每个租约对应一次 <see cref="Dispose"/>。</summary>
     internal UpstreamConnection Retain() { Interlocked.Increment(ref references); return this; }
     /// <summary>发请求前检查上游是否可用：未配置或认证已暂停时抛 503，冷却期内抛 429 并带剩余秒数，让中转直接拒绝而不去消耗上游额度。</summary>
-    public void CheckState()
+    public void CheckState() { if (Refusal() is { } refusal) throw refusal; }
+
+    /// <summary>
+    /// 这家此刻能不能接请求的唯一结论：能接为 null；不能接时给出该回给客户端的中转失败，按顺序是官方身份被私有配置拒绝（读出具体原因）、
+    /// 官方身份暂不可用、未配置、认证暂停、限流冷却。<see cref="CheckState"/> 与 <see cref="Usable"/> 都只读它，暂避不算。
+    /// </summary>
+    private RelayFailure? Refusal()
     {
         // 私有配置拒绝（如还没有账户编号）把具体原因直接告诉下游；站点维护等没有具体原因的用通用读句。
         if (Snapshot.Options.OfficialAccount && IdentityReadBlocked && Volatile.Read(ref identityBlockedReason) is { } reason)
-            throw new RelayFailure(503, reason);
-        if (Snapshot.Options.OfficialAccount && (IdentityReadBlocked || _officialAvailable?.Invoke() == false))
-            throw new RelayFailure(503, "官方账户的设备身份暂不可用。请在本机管理页查看设备维护状态或修复本站私有配置；独立 API 上游仍可使用。");
-        if (!Snapshot.Configured) throw new RelayFailure(503, "Upstream is not configured.");
-        if (Paused) throw new RelayFailure(503, "Upstream authentication paused. Test and activate a new credential in local management.");
+            return new RelayFailure(503, reason);
+        if (Snapshot.Options.OfficialAccount && (IdentityReadBlocked || !_officialAvailable()))
+            return new RelayFailure(503, "官方账户的设备身份暂不可用。请在本机管理页查看设备维护状态或修复本站私有配置；独立 API 上游仍可使用。");
+        if (!Snapshot.Configured) return new RelayFailure(503, "Upstream is not configured.");
+        if (Paused) return new RelayFailure(503, "Upstream authentication paused. Test and activate a new credential in local management.");
         var seconds = CooldownSeconds;
-        if (seconds > 0) throw new RelayFailure(429, "Upstream cooldown is active.", seconds);
+        return seconds > 0 ? new RelayFailure(429, "Upstream cooldown is active.", seconds) : null;
     }
+
+    /// <summary>同下，不带客户端请求头、统一身份与设备编号：中转自己发的检测请求用它。</summary>
+    public HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent) => Request(route, query, body, method, userAgent, null, null, null);
+
     /// <summary>
     /// 按客户端请求组装发往上游的请求：剔除认证、Cookie、逐跳、转发类和 x-stainless 等私有请求头，仅 api-key 模式转发客户端 User-Agent，补齐 anthropic-version，按 OAuth 设置过滤或追加 anthropic-beta，最后写入本版本的上游凭据。
     /// 发往官方账户时客户端的头只留 <see cref="ClaudeCodeIdentity.RequestHeaders"/>（协议版本、内容类型、会话编号、重试次数、代理编号，按当次的值），User-Agent、其余 <c>x-stainless-*</c>、<c>x-app</c> 等一律换成 <paramref name="identity"/>；没带身份就抛
     /// <see cref="ClaudeCodeIdentityUnavailableException"/>，请求不组装、不发出。官方正文还须通过设备规则，<paramref name="deviceId"/> 必须是当前站点编号；其余模式忽略该参数。返回的请求由调用方释放。
     /// </summary>
-    public HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers = null, ClaudeCodeIdentity? identity = null, string? deviceId = null)
+    public HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent, IDictionary<string, StringValues>? headers, ClaudeCodeIdentity? identity, string? deviceId)
     {
         var options = Snapshot.Options;
         if (options.OfficialAccount) body = DeviceMetadata.ForOfficial(route, body, deviceId, options.OfficialLogin, Snapshot.AccountUuid);
@@ -171,8 +188,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
     }
 
     /// <summary>这家现在能不能接请求：有凭据、没有认证暂停、不在 429 冷却中；暂避不算，暂避的只是排到最后。</summary>
-    internal bool Usable => Snapshot.Configured && !Paused && CooldownSeconds == 0
-        && (!Snapshot.Options.OfficialAccount || !IdentityReadBlocked && _officialAvailable?.Invoke() != false);
+    internal bool Usable => Refusal() is null;
 
     /// <summary>最近一次明确的身份读取拒绝，供连接池测试和可用性检查读取。</summary>
     internal bool IdentityReadBlocked => Volatile.Read(ref identityReadBlocked) != 0;

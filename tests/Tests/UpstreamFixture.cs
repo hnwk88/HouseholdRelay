@@ -58,7 +58,7 @@ sealed class UpstreamFixture : IAsyncDisposable
     /// <summary>按当前版本保存候选上游，经明确同意后做诊断测试，测试必须允许激活，然后激活并返回候选编号。</summary>
     public async Task<long> Activate(IUpstreamService service, string credential = "fixture-new-upstream-secret", UpstreamOptions? options = null)
     {
-        var id = await service.SaveCandidate((await service.ReadActive()).Version, options ?? Options(), credential);
+        var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, options ?? Options(), credential);
         var report = await service.TestCandidate(id, true, CancellationToken.None);
         TestSuite.Check(report.CanActivate, report.Message); await service.Activate(id); return id;
     }

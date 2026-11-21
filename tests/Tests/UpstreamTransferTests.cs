@@ -33,9 +33,9 @@ static class UpstreamTransferTests
         var login = FakeClaude.Credential(OfficialToken, 60);
         var ids = new[]
         {
-            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).Version, mockA.Options(), KeyA, "甲"),
-            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).Version, mockB.Options(), KeyB, "乙"),
-            await source.Upstreams.ImportOfficial((await source.Upstreams.ReadActive()).Version, Official(mockA), login, "官方", CancellationToken.None)
+            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).ActiveVersion, mockA.Options(), KeyA, "甲"),
+            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).ActiveVersion, mockB.Options(), KeyB, "乙"),
+            await source.Upstreams.ImportOfficial((await source.Upstreams.ReadActive()).ActiveVersion, Official(mockA), login, "官方", CancellationToken.None)
         };
         await source.Login();
         var exported = await Export(source, ids, Password);
@@ -43,7 +43,7 @@ static class UpstreamTransferTests
             && exported.Html.Contains("下一步：把文件拷到新电脑"), exported.Html);
         Check((await source.Upstreams.ListCandidates()).Single(item => item.Name == "官方").ExportedAt is not null, "Exporting moves the official account");
 
-        await target.Upstreams.SaveCandidate((await target.Upstreams.ReadActive()).Version, mockA.Options(), "fixture-transfer-existing-key", "原有");
+        await target.Upstreams.SaveCandidate((await target.Upstreams.ReadActive()).ActiveVersion, mockA.Options(), "fixture-transfer-existing-key", "原有");
         await target.Login();
         var html = await Import(target, exported.File, Password);
         Check(html.Contains("已导入 3 家上游：「甲」「乙」「官方」，都排在已有上游后面，尚未测试。下一步：逐家按「选择模型并测试」"), html);
@@ -73,8 +73,8 @@ static class UpstreamTransferTests
         await using var source = await Web(claude); await using var target = await Web(claude);
         var ids = new[]
         {
-            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).Version, mock.Options(), KeyA, "甲"),
-            await source.Upstreams.ImportOfficial((await source.Upstreams.ReadActive()).Version, Official(mock), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None)
+            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).ActiveVersion, mock.Options(), KeyA, "甲"),
+            await source.Upstreams.ImportOfficial((await source.Upstreams.ReadActive()).ActiveVersion, Official(mock), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None)
         };
         var file = (await source.Upstreams.Export(ids, Password)).File;
         await target.Login();
@@ -102,7 +102,7 @@ static class UpstreamTransferTests
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Web(claude);
-        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, Official(mock), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None);
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, Official(mock), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None);
         await web.Login();
         foreach (var (ids, password, again, expected) in new[]
         {
@@ -130,10 +130,10 @@ static class UpstreamTransferTests
         await using var mockOfficial = await UpstreamFixture.Create(); await using var mockB = await UpstreamFixture.Create();
         await using var web = await Web(claude);
         var service = web.Upstreams;
-        var official = await service.ImportOfficial((await service.ReadActive()).Version, Official(mockOfficial), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None);
+        var official = await service.ImportOfficial((await service.ReadActive()).ActiveVersion, Official(mockOfficial), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None);
         await service.ChooseModel(official, "fixture-model");
         Check((await service.TestCandidate(official, true, CancellationToken.None)).CanActivate, "Official upstream passes");
-        var standby = await service.SaveCandidate((await service.ReadActive()).Version, mockB.Options(), KeyB, "乙");
+        var standby = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mockB.Options(), KeyB, "乙");
         Check((await service.TestCandidate(standby, true, CancellationToken.None)).CanActivate, "Standby passes");
         await service.Activate(official); await service.SetFailover(false);
         var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", (await service.ReadCandidate(official)).Uid);
@@ -229,7 +229,7 @@ static class UpstreamTransferTests
     {
         using var page = await web.Post("/Upstream?handler=ImportUpstreams", new()
         {
-            ["importPassword"] = password, ["Version"] = (await web.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+            ["importPassword"] = password, ["Version"] = (await web.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
         }, "UpstreamFile", "upstreams.hrupstreams", file);
         Check(page.StatusCode == HttpStatusCode.OK, "Import page: " + page.StatusCode);
         return WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());

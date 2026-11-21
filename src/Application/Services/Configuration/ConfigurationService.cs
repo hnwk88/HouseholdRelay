@@ -28,8 +28,7 @@ public sealed class ConfigurationService(IServiceScopeFactory scopes, ISecretPro
     public async Task Save(long version, RelayConfiguration config)
     {
         config.Validate();
-        if (config.PublicUrl.Length != 0 && (!Uri.TryCreate(config.PublicUrl, UriKind.Absolute, out var url)
-            || url.Scheme != "https" || url.UserInfo.Length != 0 || url.Query.Length != 0 || url.Fragment.Length != 0 || url.AbsolutePath != "/"))
+        if (config.PublicUrl.Length != 0 && !PublicAddress.IsHttpsRoot(config.PublicUrl, out _))
             throw new InvalidOperationException("对外地址应为 HTTPS 根地址，不含密码、查询参数或路径。");
         var certificate = await certificates.ReadInfo();
         if (certificate is not null && (config.PublicUrl.Length == 0 || !certificate.Host.Equals(new Uri(config.PublicUrl).DnsSafeHost, StringComparison.OrdinalIgnoreCase)))

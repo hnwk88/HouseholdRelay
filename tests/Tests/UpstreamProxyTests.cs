@@ -19,7 +19,7 @@ static class UpstreamProxyTests
         await using var mock = await UpstreamFixture.Create(); await using var proxy = new ProxyFixture(new Uri(mock.Url).Port);
         using var home = new TestHome(); var process = new TestProcess(home.Path); var service = process.Upstreams;
         await UseProxy(process, "manual", proxy.Url);
-        var id = await service.SaveCandidate((await service.ReadActive()).Version, mock.Options("/prefix"), "fixture-proxy-secret");
+        var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mock.Options("/prefix"), "fixture-proxy-secret");
         var report = await service.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate && proxy.Requests.Count > 0 && mock.Calls.Count == 2);
         Check(proxy.Requests.All(value => value.StartsWith("CONNECT 127.0.0.1:", StringComparison.Ordinal) && !value.Contains("fixture-proxy-secret")));

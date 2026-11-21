@@ -27,7 +27,7 @@
 <h2>正在设置：@Model.Selected.Name</h2>
 <form method="post" class="card usage-filters">
     <input asp-for="UpstreamCandidateId" type="hidden" />
-    <div><label asp-for="ModelName">模型（精确匹配）</label><input asp-for="ModelName" maxlength="160" required /></div>
+    <div><label asp-for="ModelName">模型（精确匹配）</label><input asp-for="ModelName" maxlength="@ModelName.MaxLength" required /></div>
     <div><label asp-for="Currency">币种代码</label><input asp-for="Currency" maxlength="3" required placeholder="例如 USD 或 CNY" /></div>
     <div><label asp-for="InputPrice">输入单价 / 百万 Token</label><input asp-for="InputPrice" type="number" min="0" max="1000000" step="any" /></div>
     <div><label asp-for="OutputPrice">输出单价 / 百万 Token</label><input asp-for="OutputPrice" type="number" min="0" max="1000000" step="any" /></div>

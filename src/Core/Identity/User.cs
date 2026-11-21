@@ -21,6 +21,6 @@ public sealed class User : BaseEntity
     /// <param name="existing">此刻已有的使用者人数。</param>
     public static void EnsureRoomFor(int existing)
     {
-        if (existing >= MaxUsers) throw new InvalidOperationException("最多支持 8 名使用者；轮换令牌不会占用新的名额。");
+        if (existing >= MaxUsers) throw new InvalidOperationException($"最多支持 {MaxUsers} 名使用者；轮换令牌不会占用新的名额。");
     }
 }

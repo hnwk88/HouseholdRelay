@@ -85,14 +85,14 @@ internal sealed class UpstreamPool : IUpstreamPool
         lock (_sync)
         {
             // 比当前连接晚开始读的快照才可能更新；先开始、后读完的慢读不能把已换上的新连接换回去，此时沿用当前连接。
-            if (current is not null && snapshot.BlockedByIdentity && current.Snapshot.Version == snapshot.Version
+            if (current is not null && snapshot.BlockedByIdentity && current.Snapshot.ActiveVersion == snapshot.ActiveVersion
                 && current.Snapshot.UpstreamCandidateId == snapshot.UpstreamCandidateId && current.Snapshot.Options == snapshot.Options)
             {
                 if (read > installed) { installed = read; current.SetIdentityReadBlocked(true, snapshot.BlockedReason); }
                 return (current.Retain(), failover);
             }
             // 账户编号和凭据一样随账户目录变化（重新登录换了账户）；不比它会让在用连接继续带旧账户段。
-            if (current is null || read > installed && (current.Snapshot.Version != snapshot.Version || !string.Equals(current.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
+            if (current is null || read > installed && (current.Snapshot.ActiveVersion != snapshot.ActiveVersion || !string.Equals(current.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
                 || !string.Equals(current.Snapshot.AccountUuid, snapshot.AccountUuid, StringComparison.Ordinal)))
             {
                 var replacement = new UpstreamConnection(snapshot, _proxy, _maxConnections, _officialAvailable);
@@ -120,8 +120,8 @@ internal sealed class UpstreamPool : IUpstreamPool
             {
                 var id = snapshot.UpstreamCandidateId!.Value;
                 _standby.TryGetValue(id, out var connection);
-                var keepBlocked = snapshot.BlockedByIdentity && connection is not null && connection.Snapshot.Version == snapshot.Version && connection.Snapshot.Options == snapshot.Options;
-                if (!stale && !keepBlocked && (connection is null || connection.Snapshot.Version != snapshot.Version || connection.Snapshot.Options != snapshot.Options
+                var keepBlocked = snapshot.BlockedByIdentity && connection is not null && connection.Snapshot.ActiveVersion == snapshot.ActiveVersion && connection.Snapshot.Options == snapshot.Options;
+                if (!stale && !keepBlocked && (connection is null || connection.Snapshot.ActiveVersion != snapshot.ActiveVersion || connection.Snapshot.Options != snapshot.Options
                     || !string.Equals(connection.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
                     || !string.Equals(connection.Snapshot.AccountUuid, snapshot.AccountUuid, StringComparison.Ordinal)))
                 { connection?.Dispose(); connection = new UpstreamConnection(snapshot, _proxy, _maxConnections, _officialAvailable); _standby[id] = connection; }
@@ -153,7 +153,7 @@ internal sealed class UpstreamPool : IUpstreamPool
     /// <summary>指定版本的暂停与冷却状态。</summary>
     public (bool Paused, int CooldownSeconds) Status(long version)
     // 加锁读取，保证版本比较和状态读取针对的是同一个连接，不会在中途被 Acquire 替换。
-    { lock (_sync) return current?.Snapshot.Version == version ? (current.Paused, current.CooldownSeconds) : (false, 0); }
+    { lock (_sync) return current?.Snapshot.ActiveVersion == version ? (current.Paused, current.CooldownSeconds) : (false, 0); }
 
     /// <summary>释放全部连接；重复调用无副作用。</summary>
     // 与 Acquire 互斥，避免关闭时有请求正好拿到即将释放的连接；在途租约各自持有引用，不受影响。

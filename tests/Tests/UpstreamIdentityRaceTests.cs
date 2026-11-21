@@ -19,7 +19,7 @@ public static class UpstreamIdentityRaceTests
             services.AddSingleton<SiteIdentityService>();
             services.AddSingleton<ISiteIdentityService>(provider => controlled = new(provider.GetRequiredService<SiteIdentityService>()));
         });
-        var official = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), "模拟官方", default);
+        var official = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), "模拟官方", default);
         Check((await web.Upstreams.TestCandidate(official, true, default)).CanActivate);
         await web.Upstreams.Activate(official);
         var api = await AddApi(web, mock, "备用 API");
@@ -125,7 +125,7 @@ public static class UpstreamIdentityRaceTests
     /// <summary>导入并测试独立假官方账户；不改变当前活动上游。</summary>
     private static async Task<long> AddOfficial(WebFixture web, UpstreamFixture mock, string name)
     {
-        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), name, default);
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), FakeClaude.Credential("fixture-race-official", 60), name, default);
         Check((await web.Upstreams.TestCandidate(id, true, default)).CanActivate);
         return id;
     }
@@ -133,7 +133,7 @@ public static class UpstreamIdentityRaceTests
     /// <summary>创建并测试一个独立 API 候选，但不切换当前活动上游。</summary>
     private static async Task<long> AddApi(WebFixture web, UpstreamFixture mock, string name)
     {
-        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).Version, mock.Options(), "fixture-race-api", name);
+        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-race-api", name);
         Check((await web.Upstreams.TestCandidate(id, true, default)).CanActivate);
         return id;
     }

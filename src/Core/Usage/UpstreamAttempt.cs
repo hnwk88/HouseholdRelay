@@ -106,22 +106,10 @@ public sealed class UpstreamAttempt(int number, long? candidateId, long version,
     }
 
     /// <summary>沿内部异常链找第一个指定类型的异常。</summary>
-    private static T? Find<T>(Exception error) where T : Exception
-    {
-        for (Exception? inner = error; inner is not null; inner = inner.InnerException) if (inner is T match) return match;
-        return null;
-    }
+    private static T? Find<T>(Exception error) where T : Exception => ExceptionChain.Find<T>(error);
 
-    /// <summary>先去掉秘密，再把控制字符换成空格，最后截到 <see cref="MessageLimit"/> 字以内；先脱敏后截断，截断处不会留下半截秘密。</summary>
-    private static string? Clip(string? message, Func<string, string> redact)
-    {
-        if (string.IsNullOrWhiteSpace(message)) return null;
-        var text = new string(redact(message).Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
-        if (text.Length <= MessageLimit) return text;
-        var cut = MessageLimit - 1;
-        if (char.IsHighSurrogate(text[cut - 1])) cut--;
-        return text[..cut] + "…";
-    }
+    /// <summary>先去掉秘密，再截到 <see cref="MessageLimit"/> 字以内（规则见 <see cref="SafeText.Clip"/>）。</summary>
+    private static string? Clip(string? message, Func<string, string> redact) => SafeText.Clip(message, redact, MessageLimit);
 
     /// <summary>从开始尝试到此刻的毫秒数。</summary>
     private long Elapsed => (long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds;

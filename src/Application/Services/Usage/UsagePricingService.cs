@@ -18,14 +18,14 @@ public sealed class UsagePricingService(IServiceScopeFactory scopes) : IUsagePri
     }
 
     /// <summary>
-    /// 保存某个已保存上游某模型的每百万计数单价：模型名去空白后须为 1–160 个字符，只含字母数字和 <c>- _ . : / @</c>；币种转大写后须为三位字母；
+    /// 保存某个已保存上游某模型的每百万计数单价：模型名去空白后须合乎 <see cref="ModelName"/>；币种转大写后须为三位字母；
     /// 各项单价须在 0–1000000 之间且至少填一项，未知单价留空（null）。同一上游同一模型再存一次就覆盖费率（主键不变）。
     /// 那一家已不在（停用或不存在）时拒绝；核对与写入在同一个事务里。不合法时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
     public async Task Save(long upstreamCandidateId, string model, string currency, decimal? input, decimal? output, decimal? read, decimal? write)
     {
         model = model.Trim(); currency = currency.Trim().ToUpperInvariant();
-        if (model.Length is < 1 or > 160 || model.Any(c => !(char.IsAsciiLetterOrDigit(c) || "-_.:/@".Contains(c)))
+        if (!ModelName.IsValid(model)
             || !UsageMoneyRules.ValidCurrency(currency) || new[] { input, output, read, write }.Any(value => value is < 0 or > 1000000)
             || new[] { input, output, read, write }.All(value => value is null))
             throw new InvalidOperationException("请填写有效模型、三位币种代码和至少一项非负单价；未知单价留空。");

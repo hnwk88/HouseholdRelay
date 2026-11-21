@@ -230,7 +230,7 @@ static class SiteIdentityFlowTests
     /// <summary>仅假凭据与回环地址，导入、测试并激活一个真实流程中的官方账户候选。</summary>
     private static async Task<long> Official(WebFixture web, UpstreamFixture mock)
     {
-        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version,
+        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion,
             new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model" },
             FakeClaude.Credential("fixture-maintenance-official", 60), "维护官方夹具", default);
         var tested = await web.Upstreams.TestCandidate(id, true, default); Check(tested.CanActivate, tested.Message);

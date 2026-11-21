@@ -58,11 +58,11 @@ static class ClaudeCodeProbeTests
             foreach (var frame in Events.Split("\n\n")) { await context.Response.WriteAsync(frame + "\n\n"); await context.Response.Body.FlushAsync(); }
         };
         var options = mock.Options("/v1/cc", authentication: "bearer") with { Model = "claude-opus-5-5" };
-        var standard = await service.SaveCandidate((await service.ReadActive()).Version, options, "fixture-probe-secret");
+        var standard = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, options, "fixture-probe-secret");
         var failed = await service.TestCandidate(standard, true, CancellationToken.None);
         Check(failed.Authentication == Core.Upstream.CheckStatus.Passed && !failed.CanActivate && failed.Message.Contains("400"));
         Check(mock.Calls.Count(call => call.Path.Contains("/messages")) == 1, "Rejected generation must not replay or silently switch diagnostics");
-        var id = await service.SaveCandidate((await service.ReadActive()).Version, options with { Diagnostic = Core.Upstream.DiagnosticMethod.ClaudeCode }, "fixture-probe-secret");
+        var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, options with { Diagnostic = Core.Upstream.DiagnosticMethod.ClaudeCode }, "fixture-probe-secret");
         var report = await service.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate, report.Message); await service.Activate(id);
         var native = mock.Calls.Last(); Check(native.Path == "/v1/cc/v1/messages?beta=true");
@@ -80,7 +80,7 @@ static class ClaudeCodeProbeTests
         Check(mock.Calls.Last().Body == native.Body && mock.Calls.All(call => call.Headers.Values.All(value => !value.Contains(person.Token))));
         var persisted = await new TestProcess(web.Home.Path).Upstreams.ReadActive();
         Check(persisted.Options.Diagnostic == Core.Upstream.DiagnosticMethod.ClaudeCode && persisted.Report?.CanActivate == true);
-        var version = persisted.Version; var before = mock.Calls.Count;
+        var version = persisted.ActiveVersion; var before = mock.Calls.Count;
         mock.Handler = async context =>
         {
             if (context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal)) { await UpstreamFixture.Success(context); return; }
@@ -90,7 +90,7 @@ static class ClaudeCodeProbeTests
         var rejectedReport = await service.TestCandidate(rejected, true, CancellationToken.None);
         Check(!rejectedReport.CanActivate && !JsonSerializer.Serialize(rejectedReport).Contains("fixture-probe-secret"));
         Check(mock.Calls.Skip(before).Count(call => call.Path.Contains("/messages")) == 1);
-        Check((await service.ReadActive()).Version == version && !web.Pool.Status(version).Paused);
+        Check((await service.ReadActive()).ActiveVersion == version && !web.Pool.Status(version).Paused);
     }
 
     /// <summary>
@@ -112,7 +112,7 @@ static class ClaudeCodeProbeTests
             context.Response.ContentType = "text/event-stream";
             foreach (var frame in Events.Split("\n\n")) { await context.Response.WriteAsync(frame + "\n\n"); await context.Response.Body.FlushAsync(); }
         };
-        var id = await service.SaveCandidate((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url + "/v1/cc", AllowPrivateNetwork = true }, "fixture-auto-secret", "自动探测");
+        var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = mock.Url + "/v1/cc", AllowPrivateNetwork = true }, "fixture-auto-secret", "自动探测");
         var catalog = await service.DiscoverModels(id, CancellationToken.None);
         Check(catalog.Status == Core.Upstream.CatalogStatus.Passed && catalog.Authentication == Core.Upstream.AuthenticationScheme.Bearer, catalog.Message);
         await service.ChooseModel(id, "claude-opus-5-5");
@@ -142,7 +142,7 @@ static class ClaudeCodeProbeTests
             // 诊断取消后必须中止上游请求；捕获到取消即证明取消已传播到模拟上游。
             catch (OperationCanceledException) { released.TrySetResult(); }
         };
-        var service = web.Upstreams; var version = (await service.ReadActive()).Version;
+        var service = web.Upstreams; var version = (await service.ReadActive()).ActiveVersion;
         var id = await service.SaveCandidate(version, mock.Options() with { Diagnostic = Core.Upstream.DiagnosticMethod.ClaudeCode, Model = "claude-opus-5-5" }, "fixture-cancel-secret");
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         var pending = service.TestCandidate(id, true, cancellation.Token);
@@ -150,7 +150,7 @@ static class ClaudeCodeProbeTests
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(20)); cancellation.Cancel();
         var report = await pending.WaitAsync(TimeSpan.FromSeconds(10));
         await released.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        Check(report.Call == Core.Upstream.CheckStatus.Cancelled && !report.CanActivate && (await service.ReadActive()).Version == version, report.Call + ": " + report.Message);
+        Check(report.Call == Core.Upstream.CheckStatus.Cancelled && !report.CanActivate && (await service.ReadActive()).ActiveVersion == version, report.Call + ": " + report.Message);
         Check(mock.Calls.Count(call => call.Path.Contains("/messages")) == 1);
     }
 

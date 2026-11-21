@@ -141,7 +141,7 @@ static class UpstreamIntegrationTests
             using var home = new TestHome(); var service = new TestProcess(home.Path).Upstreams;
             var active = await service.ReadActive();
             var options = new UpstreamOptions { Mode = Core.Upstream.UpstreamMode.ApiKey, Authentication = Core.Upstream.AuthenticationScheme.XApiKey, Preset = Core.Upstream.UpstreamPreset.Compatible, BaseUrl = mock.Urls.Single(), AllowPrivateNetwork = true, Model = "fixture-model" };
-            var id = await service.SaveCandidate(active.Version, options, "fixture-api-secret");
+            var id = await service.SaveCandidate(active.ActiveVersion, options, "fixture-api-secret");
             Check((await service.ReadActive()).Credential is null && (await service.ReadCandidate(id)).State == Core.Upstream.CandidateState.Untested);
             var refused = false;
             try { await service.TestCandidate(id, false, CancellationToken.None); }
@@ -161,7 +161,7 @@ static class UpstreamIntegrationTests
             await service.Activate(id); var activated = await service.ReadActive();
             Check(activated.Configured && activated.Options.Mode == Core.Upstream.UpstreamMode.ApiKey && activated.Options.BaseUrl == options.Validated().BaseUrl);
             Check(activated.Report?.CanActivate == true);
-            await CheckThrows(() => service.SaveCandidate(active.Version, options, "fixture-api-secret-2"));
+            await CheckThrows(() => service.SaveCandidate(active.ActiveVersion, options, "fixture-api-secret-2"));
         }
         // 无论断言成败都停止模拟上游，释放端口，避免影响后续测试。
         finally { await mock.StopAsync(); await mock.DisposeAsync(); }
@@ -188,7 +188,7 @@ static class UpstreamIntegrationTests
             async Task<Dictionary<string, string>> Form(string name) => new()
             {
                 ["Api.Name"] = name, ["Api.BaseUrl"] = mock.Urls.Single(), ["Api.Credential"] = "fixture-page-secret", ["Api.AllowPrivateNetwork"] = "true",
-                ["Version"] = (await fixture.Upstreams.ReadActive()).Version.ToString()
+                ["Version"] = (await fixture.Upstreams.ReadActive()).ActiveVersion.ToString()
             };
             var unnamed = await Form(""); unnamed["__RequestVerificationToken"] = await fixture.Csrf("/Upstream");
             using (var refused = await fixture.Post("/Upstream?handler=DiscoverApi", unnamed))
@@ -206,7 +206,7 @@ static class UpstreamIntegrationTests
             using var tested = await fixture.Post("/Upstream?handler=Test", values); html = WebUtility.HtmlDecode(await tested.Content.ReadAsStringAsync());
             Check(tested.IsSuccessStatusCode && html.Contains("认证用 x-api-key，按标准 Messages 方式通过，模型 fixture-model。") && !html.Contains("fixture-page-secret"));
             Check(html.Contains("测试（会消耗少量上游额度）") && !html.Contains("type=\"checkbox\" name=\"confirmed\""));
-            values = new() { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["Version"] = (await fixture.Upstreams.ReadActive()).Version.ToString(), ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
+            values = new() { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["Version"] = (await fixture.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
             using var activated = await fixture.Post("/Upstream?handler=Activate", values); html = WebUtility.HtmlDecode(await activated.Content.ReadAsStringAsync());
             Check(activated.IsSuccessStatusCode && html.Contains("已切换到「页面测试」"));
             var active = await fixture.Upstreams.ReadActive();

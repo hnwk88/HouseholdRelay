@@ -16,7 +16,10 @@ public interface IUpstreamService : IActiveUpstreamSource
     Task<UpstreamCandidateView> ReadCandidate(long id);
 
     /// <summary>校验并加密保存一个带名称的上游，返回主键；<paramref name="name"/> 为空时用地址主机名（命令行用），空白名称拒绝；活动版本已变化时拒绝。</summary>
-    Task<long> SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name = null);
+    Task<long> SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name);
+
+    /// <summary>同上，名称用地址的主机名。</summary>
+    Task<long> SaveCandidate(long expectedVersion, UpstreamOptions options, string credential) => SaveCandidate(expectedVersion, options, credential, null);
 
     /// <summary>
     /// 登录官方账户并保存为一个账户模式的未测试上游，返回主键：<paramref name="options"/> 给出地址与私网开关，凭据由 <c>claude auth login</c> 写进这个上游自己的配置目录；
@@ -67,5 +70,8 @@ public interface IUpstreamService : IActiveUpstreamSource
     Task<UpstreamReport> TestCandidate(long id, bool confirmed, CancellationToken cancellation);
 
     /// <summary>把检测通过的上游原子切换为活动版本；<paramref name="expectedVersion"/> 是调用方看到的活动版本，为空时沿用该上游保存时基于的版本。</summary>
-    Task Activate(long id, long? expectedVersion = null);
+    Task Activate(long id, long expectedVersion);
+
+    /// <summary>同上，活动版本按这家保存时基于的那个版本核对。</summary>
+    Task Activate(long id);
 }

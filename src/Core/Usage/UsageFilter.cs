@@ -1,4 +1,5 @@
-﻿using Core.Values;
+﻿using Core.Upstream;
+using Core.Values;
 
 namespace Core.Usage;
 
@@ -10,12 +11,12 @@ public sealed record UsageFilter(long? UserId = null, DateTimeOffset? From = nul
     public const int PageSize = 25;
 
     /// <summary>
-    /// 校验筛选条件：页码 1–1000000、起止时间不倒置、模型名不超过 160 字符、使用者主键为正数、粒度只能为 day 或 hour，
+    /// 校验筛选条件：页码 1–1000000、起止时间不倒置、模型名不超过 <see cref="ModelName.MaxLength"/> 字符、使用者主键为正数、粒度只能为 day 或 hour，
     /// 接口类别与结果只能取已知值（空表示不筛选），时区必须是本机可识别的时区标识。不合法时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
     public void Validate()
     {
-        if (Page is < 1 or > 1000000 || From > Until || Model?.Length > 160 || UserId is < 1
+        if (Page is < 1 or > 1000000 || From > Until || Model?.Length > ModelName.MaxLength || UserId is < 1
             || Granularity is not ("day" or "hour") || TimeZone.Length is < 1 or > 128)
             throw Invalid();
         try { _ = TimeZoneInfo.FindSystemTimeZoneById(TimeZone); }

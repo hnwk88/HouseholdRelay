@@ -72,10 +72,7 @@ internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretPro
     /// <summary>解析并校验对外地址：必须是 HTTPS 根地址，不得含用户信息、查询、片段或路径；证书主机名都取自这里。</summary>
     internal static Uri PublicAddress(string value)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var url) || url.Scheme != "https" || url.UserInfo.Length != 0
-            || url.Query.Length != 0 || url.Fragment.Length != 0 || url.AbsolutePath != "/")
-            throw new InvalidOperationException("对外地址必须是 HTTPS 根地址，不含密码、查询参数或路径。");
-        return url;
+        return Core.Configuration.PublicAddress.IsHttpsRoot(value, out var url) ? url : throw new InvalidOperationException("对外地址必须是 HTTPS 根地址，不含密码、查询参数或路径。");
     }
 
     /// <summary>校验服务器证书：必须含私钥、在有效期内、按 SAN 匹配主机名（允许通配符、不看 CN）、不是 CA 证书，并以服务器认证用途建链。未给 <paramref name="testRoots"/> 时按系统信任并在线检查吊销（超时 5 秒）；给出时只信任这些根、不查吊销也不下载证书，用于本实例私有 CA。不通过时抛 <see cref="InvalidOperationException"/>。</summary>

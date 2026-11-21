@@ -32,7 +32,7 @@ public static class DeviceMetadataTests
             Check(ReferenceEquals(normalized, DeviceMetadata.ForOfficial("/v1/messages", normalized, _canonical, true, Account)), "The current device and account identity need no second copy.");
             var manual = DeviceMetadata.ForOfficial("/v1/messages", input, _canonical, false, null);
             Check(manual.SequenceEqual(Encoding.UTF8.GetBytes(Fill(template, _canonical, account))), "Without an account directory the account segment stays exactly as the client sent it.");
-            using var request = transport.Request("/v1/messages", "?beta=true", input, "POST", "unused", identity: identity, deviceId: _canonical);
+            using var request = transport.Request("/v1/messages", "?beta=true", input, "POST", "unused", headers: null, identity: identity, deviceId: _canonical);
             using var response = await transport.Send(request, CancellationToken.None);
             Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(expected), "The common outbound boundary must apply the same byte-preserving rule.");
         }
@@ -47,8 +47,8 @@ public static class DeviceMetadataTests
         foreach (var missing in new string?[] { null, "", "not-a-uuid", "{" + Account + "}" })
         {
             using var held = new UpstreamConnection(new(1, mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret", accountUuid: missing), Proxy());
-            Reject(() => held.Request("/v1/messages", "", body, "POST", "unused", identity: Identity(), deviceId: _canonical), 503);
-            Reject(() => held.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: _canonical), 503);
+            Reject(() => held.Request("/v1/messages", "", body, "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical), 503);
+            Reject(() => held.Request("/v1/models", "", [], "GET", "unused", headers: null, identity: Identity(), deviceId: _canonical), 503);
             held.CheckState();
             Check(!held.Paused && held.CooldownSeconds == 0, "A missing account identity is a local block, not an upstream pause or cooldown.");
         }
@@ -85,7 +85,7 @@ public static class DeviceMetadataTests
         {
             try
             {
-                using var request = transport.Request("/v1/messages", "", Encoding.UTF8.GetBytes(body), "POST", "unused", identity: Identity(), deviceId: _canonical);
+                using var request = transport.Request("/v1/messages", "", Encoding.UTF8.GetBytes(body), "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical);
                 using var response = await transport.Send(request, CancellationToken.None);
                 Check(false, "Unsupported metadata must fail locally before dispatch.");
             }
@@ -105,7 +105,7 @@ public static class DeviceMetadataTests
     {
         await using var mock = await UpstreamFixture.Create();
         var available = false;
-        using (var held = new UpstreamConnection(new(1, mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret"), Proxy(), officialAvailable: () => available))
+        using (var held = new UpstreamConnection(new(1, mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret"), Proxy(), 2, () => available))
         {
             Check(!held.Usable, "Official maintenance closes new route selection.");
             try { held.CheckState(); Check(false, "Official maintenance must reject admission."); }
@@ -119,21 +119,21 @@ public static class DeviceMetadataTests
             available = true;
             Check(held.Paused && held.CooldownSeconds > 0 && !held.Usable, "Finishing maintenance cannot reset authentication pauses or cooldown.");
         }
-        using (var api = new UpstreamConnection(new(1, mock.Options(), "fixture-secret"), Proxy(), officialAvailable: () => false))
+        using (var api = new UpstreamConnection(new(1, mock.Options(), "fixture-secret"), Proxy(), 2, () => false))
         { api.CheckState(); Check(api.Usable, "Official maintenance does not close independent API admission."); }
         using var official = Connection(mock);
         var count = Encoding.UTF8.GetBytes("{ \"model\":\"fixture-model\", \"messages\":[], \"tools\":[], \"extension\":{\"metadata\":\"nested-business-data\"} }");
-        using (var models = official.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: _canonical))
+        using (var models = official.Request("/v1/models", "", [], "GET", "unused", headers: null, identity: Identity(), deviceId: _canonical))
         using (var response = await official.Send(models, CancellationToken.None)) Check(response.IsSuccessStatusCode);
-        using (var request = official.Request("/v1/messages/count_tokens", "", count, "POST", "unused", identity: Identity(), deviceId: _canonical))
+        using (var request = official.Request("/v1/messages/count_tokens", "", count, "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical))
         using (var response = await official.Send(request, CancellationToken.None))
             Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(count), "Count requests without top-level metadata remain byte-identical.");
-        Reject(() => official.Request("/v1/models", "", "{}"u8.ToArray(), "GET", "unused", identity: Identity(), deviceId: _canonical), 400);
-        Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"metadata\":null}"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: _canonical), 400);
-        Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"meta\\u0064ata\":{}}"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: _canonical), 400);
-        Reject(() => official.Request("/v1/messages/count_tokens", "", "[]"u8.ToArray(), "POST", "unused", identity: Identity(), deviceId: _canonical), 400);
-        Reject(() => official.Request("/v1/models", "", [], "GET", "unused", identity: Identity()), 503);
-        Reject(() => official.Request("/v1/models", "", [], "GET", "unused", identity: Identity(), deviceId: "invalid"), 503);
+        Reject(() => official.Request("/v1/models", "", "{}"u8.ToArray(), "GET", "unused", headers: null, identity: Identity(), deviceId: _canonical), 400);
+        Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"metadata\":null}"u8.ToArray(), "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical), 400);
+        Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"meta\\u0064ata\":{}}"u8.ToArray(), "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical), 400);
+        Reject(() => official.Request("/v1/messages/count_tokens", "", "[]"u8.ToArray(), "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical), 400);
+        Reject(() => official.Request("/v1/models", "", [], "GET", "unused", headers: null, identity: Identity(), deviceId: null), 503);
+        Reject(() => official.Request("/v1/models", "", [], "GET", "unused", headers: null, identity: Identity(), deviceId: "invalid"), 503);
         Check(mock.Calls.Count == 2 && !official.Paused && official.CooldownSeconds == 0, "Rejected endpoint variants do not send or change upstream state.");
         foreach (var mode in new[] { "api-key", "oauth" })
         {
@@ -141,7 +141,7 @@ public static class DeviceMetadataTests
             foreach (var body in new[] { "{}", "{\"metadata\":{\"user_id\":\"unknown\"}}", "{\"metadata\":null}", "{\"metadata\":{},\"metadata\":{}}" })
             {
                 var bytes = Encoding.UTF8.GetBytes(body);
-                using var request = other.Request("/v1/messages", "", bytes, "POST", "fixture-agent", deviceId: "ignored");
+                using var request = other.Request("/v1/messages", "", bytes, "POST", "fixture-agent", headers: null, identity: null, deviceId: "ignored");
                 using var response = await other.Send(request, CancellationToken.None);
                 Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(bytes), "Independent API and compatible OAuth bypass the official metadata policy.");
             }
@@ -184,7 +184,7 @@ public static class DeviceMetadataTests
         using (var request = official.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, Identity(), _canonical))
             Check(request.Headers.AcceptEncoding.ToString() == "gzip, deflate, br, zstd", "Official path forwards the client's Accept-Encoding verbatim: " + request.Headers.AcceptEncoding);
         using var api = new UpstreamConnection(new(1, mock.Options(), "fixture-secret"), Proxy());
-        using (var request = api.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers))
+        using (var request = api.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, null, null))
             Check(request.Headers.AcceptEncoding.ToString() == "identity", "API path keeps identity: " + request.Headers.AcceptEncoding);
     }
 
@@ -204,7 +204,7 @@ public static class DeviceMetadataTests
             Check(response.IsSuccessStatusCode && mock.Calls.Last().Headers.TryGetValue("Connection", out var connection) && connection.Contains("keep-alive", StringComparison.OrdinalIgnoreCase), "The mock official upstream receives keep-alive over HTTP/1.1");
         }
         using var api = new UpstreamConnection(new(1, mock.Options(), "fixture-secret"), Proxy());
-        using (var request = api.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers))
+        using (var request = api.Request("/v1/messages", "?beta=true", body, "POST", "unused", headers, null, null))
             Check(request.Version == System.Net.HttpVersion.Version20 && !request.Headers.Connection.Contains("keep-alive"), "API upstreams keep the previous transport");
     }
 

@@ -64,7 +64,7 @@ static class UpstreamVersionTests
             using var after = await UpstreamFixture.RelayRequest(web, a.Token, "after-old-error"); Check(after.IsSuccessStatusCode);
             Check(first.Calls.Last().Headers["x-api-key"] == "fixture-old-secret" && second.Calls.Last().Headers["x-api-key"] == "fixture-fresh-secret");
             Check(first.Calls.Count == 3, "Old dispatch must never be replayed to the new upstream");
-            Check(!web.Pool.Status((await service.ReadActive()).Version).Paused && web.Pool.Status((await service.ReadActive()).Version).CooldownSeconds == 0);
+            Check(!web.Pool.Status((await service.ReadActive()).ActiveVersion).Paused && web.Pool.Status((await service.ReadActive()).ActiveVersion).CooldownSeconds == 0);
         }
         // 断言提前失败时也放行旧上游的挂起请求，避免夹具释放时卡住。
         finally { release.TrySetResult(); }
@@ -82,7 +82,7 @@ static class UpstreamVersionTests
         foreach (var status in new[] { 401, 403, 429, 307, 500 })
         {
             bad.Handler = async context => { context.Response.StatusCode = status; context.Response.Headers.Location = mock.Url + "/steal"; await context.Response.WriteAsync("secret-error-content"); };
-            var id = await service.SaveCandidate((await service.ReadActive()).Version, bad.Options(), "fixture-bad-secret");
+            var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, bad.Options(), "fixture-bad-secret");
             var report = await service.TestCandidate(id, true, CancellationToken.None); Check(!report.CanActivate);
             Check(!JsonSerializer.Serialize(report).Contains("secret-error-content"));
             using var response = await UpstreamFixture.RelayRequest(web, user.Token); Check(response.IsSuccessStatusCode);
@@ -91,15 +91,15 @@ static class UpstreamVersionTests
         }
         bad.Handler = context => context.Request.Path == "/v1/models"
             ? NotFound(context) : UpstreamFixture.Success(context);
-        var absent = await service.SaveCandidate((await service.ReadActive()).Version, bad.Options(), "fixture-no-model-catalog");
+        var absent = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, bad.Options(), "fixture-no-model-catalog");
         var accepted = await service.TestCandidate(absent, true, CancellationToken.None);
         Check(accepted.CanActivate && accepted.ModelDiscovery == Core.Upstream.CheckStatus.Unsupported && accepted.Authentication == Core.Upstream.CheckStatus.Passed);
         bad.Handler = context => context.Response.WriteAsJsonAsync(new { status = "ok" });
-        var fake = await service.SaveCandidate((await service.ReadActive()).Version, bad.Options(), "fixture-invalid-protocol");
+        var fake = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, bad.Options(), "fixture-invalid-protocol");
         Check(!(await service.TestCandidate(fake, true, CancellationToken.None)).CanActivate, "HTTP 200 alone must not validate a model call");
         bad.Handler = UpstreamFixture.Success;
-        var first = await service.SaveCandidate((await service.ReadActive()).Version, bad.Options(), "fixture-first-candidate");
-        var second = await service.SaveCandidate((await service.ReadActive()).Version, bad.Options(), "fixture-second-candidate");
+        var first = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, bad.Options(), "fixture-first-candidate");
+        var second = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, bad.Options(), "fixture-second-candidate");
         await service.TestCandidate(first, true, CancellationToken.None); await service.TestCandidate(second, true, CancellationToken.None);
         await service.Activate(first); var conflict = false; try { await service.Activate(second); } catch (InvalidOperationException) { /* 第一个候选激活后版本已变，基于旧版本的第二个候选必须拒绝激活。 */ conflict = true; } Check(conflict);
     }

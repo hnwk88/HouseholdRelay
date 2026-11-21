@@ -131,7 +131,7 @@ static class ProxySettingsTests
     }
 
     /// <summary>本机没装 Claude Code 的替身：不会被调用。</summary>
-    private sealed class AbsentClaudeCode : IClaudeCodeProbe
+    internal sealed class AbsentClaudeCode : IClaudeCodeProbe
     {
         /// <summary>始终报告没有安装。</summary>
         public bool IsAvailable => false;
@@ -142,7 +142,7 @@ static class ProxySettingsTests
     }
 
     /// <summary>本机没装 Claude Code 时的统一身份来源：API 上游用不到，被问到就读「找不到」。</summary>
-    private sealed class AbsentIdentity : Application.Interfaces.ClaudeCode.IClaudeCodeIdentitySource
+    internal sealed class AbsentIdentity : Application.Interfaces.ClaudeCode.IClaudeCodeIdentitySource
     {
         /// <summary>始终按找不到 Claude Code 抛出。</summary>
         public Task<ClaudeCodeIdentity> Current(string entrypoint, CancellationToken cancellation) => throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.NotFound);
