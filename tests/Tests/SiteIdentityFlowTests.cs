@@ -184,7 +184,7 @@ static class SiteIdentityFlowTests
                 if (response.StatusCode == HttpStatusCode.OK) warm++;
             }
         Check(warm == 8 && official.Calls.Count == calls + 9, "A validated account must not reopen its private configuration on every request");
-        var report = await Settled(web, (await web.Relay.Usage!.Query(new())).Total);
+        var report = await Settled(web, (await web.RelayUsage.Query(new())).Total);
         Check(report.Rows.All(row => row.Outcome != "interrupted"), "A local configuration block is not an interrupted upstream response");
         Console.WriteLine($"cold_occupied_status=503; official_calls_while_cold_occupied=0; failover_api_calls=1; warm_occupied_ok={warm}/8; claude_json_opens_per_warm_request=0");
     }

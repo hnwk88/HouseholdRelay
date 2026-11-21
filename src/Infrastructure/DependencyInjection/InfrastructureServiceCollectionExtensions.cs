@@ -105,17 +105,28 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IOfficialAccountLogin, OfficialAccountLogin>();
         // 执行已保存上游的独立诊断；选 Singleton 的原因：无状态。
         services.AddSingleton<IUpstreamProbe, UpstreamProbe>();
-        return services.AddUpstreamConnections();
+        // 维护到各上游的连接与暂避计时；选 Singleton 的原因：连接与暂避状态必须全进程共享，按请求新建会丢掉连接复用。正式服务的连接池要站点身份（维护中不发往官方）。
+        services.AddSingleton<IUpstreamPool, UpstreamPool>();
+        return services.AddUpstreamResponses();
     }
 
-    /// <summary>只登记上游连接池；独立中转模式（不连数据库）也用它，活动上游来源与启动配置由调用方登记，此时代理按启动配置解析。</summary>
-    public static IServiceCollection AddUpstreamConnections(this IServiceCollection services)
+    /// <summary>
+    /// 独立中转（不连数据库）的上游连接：活动上游来源与启动配置由调用方登记，代理按启动配置解析（调用方已登记的不覆盖），
+    /// 连接池走 <see cref="UpstreamPool.Standalone"/>，没有站点身份。
+    /// </summary>
+    public static IServiceCollection AddStandaloneUpstreamConnections(this IServiceCollection services)
     {
         services.TryAddSingleton<IUpstreamProxy>(provider => new SystemUpstreamProxy(provider.GetRequiredService<RelayConfiguration>));
-        // 暂避计时用它；正式服务由应用层登记过，独立中转模式在这里补上系统时钟。
         services.TryAddSingleton(TimeProvider.System);
-        // 维护到各上游的连接与暂避计时；选 Singleton 的原因：连接与暂避状态必须全进程共享，按请求新建会丢掉连接复用。
-        services.AddSingleton<IUpstreamPool, UpstreamPool>();
+        services.AddSingleton<IUpstreamPool>(provider => UpstreamPool.Standalone(provider.GetRequiredService<IActiveUpstreamSource>(),
+            provider.GetRequiredService<RelayConfiguration>(), provider.GetRequiredService<IUpstreamProxy>(), provider.GetRequiredService<TimeProvider>()));
+        return services.AddUpstreamResponses();
+    }
+
+    /// <summary>上游响应的复制、检查与脱敏；选 Singleton 的原因：无状态。</summary>
+    private static IServiceCollection AddUpstreamResponses(this IServiceCollection services)
+    {
+        services.TryAddSingleton<IUpstreamResponses, UpstreamResponses>();
         return services;
     }
 }

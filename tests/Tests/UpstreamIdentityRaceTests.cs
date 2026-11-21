@@ -24,11 +24,11 @@ public static class UpstreamIdentityRaceTests
         await web.Upstreams.Activate(official);
         var api = await AddApi(web, mock, "备用 API");
         await web.Upstreams.SetFailover(true);
-        using (var original = await web.Relay.Upstreams.Acquire())
+        using (var original = await web.Pool.Acquire())
         {
             PauseAndCool(original);
             controlled!.RejectSecondEntry();
-            using var raced = await web.Relay.Upstreams.Acquire();
+            using var raced = await web.Pool.Acquire();
             Check(controlled.EntryCalls == 2, "The injected refusal must be inside ReadAccessToken after the first permit succeeds.");
             Check(ReferenceEquals(original, raced) && raced.Paused && raced.CooldownSeconds > 0 && ((UpstreamConnection)raced).IdentityReadBlocked,
                 "A blocked read must retain the old active connection and close it even when availability has already recovered.");
@@ -37,14 +37,14 @@ public static class UpstreamIdentityRaceTests
         var blocked = await web.Upstreams.ReadActive();
         Check(blocked.BlockedByIdentity && blocked.Credential is null && controlled.Available, "A blocked snapshot records the observed race, independently of current availability.");
         controlled.RejectSecondEntry();
-        using (var route = await web.Relay.Upstreams.Route())
+        using (var route = await web.Pool.Route())
         {
             await route.CheckState();
             Check((await route.Next("fixture-model"))?.Snapshot.UpstreamCandidateId == api, "Independent API fallback must survive the official credential read race.");
         }
         await web.Upstreams.Activate(api);
         var anotherApi = await AddApi(web, mock, "另一个 API");
-        var pool = (UpstreamPool)web.Relay.Upstreams;
+        var pool = (UpstreamPool)web.Pool;
         var before = await pool.Standby();
         try
         {
@@ -89,7 +89,7 @@ public static class UpstreamIdentityRaceTests
         using (var response = await web.Http.SendAsync(request)) Check(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         Check(mock.Calls.Count == before + 1 && mock.Calls.Last().Headers.ContainsKey("x-api-key") && !mock.Calls.Last().Headers.ContainsKey("Authorization"),
             "The post-selection refusal must skip the other official account and send only to the independent API.");
-        using var original = await web.Relay.Upstreams.Acquire();
+        using var original = await web.Pool.Acquire();
         var path = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(official)).Uid, ".claude.json");
         var originalBytes = File.ReadAllBytes(path);
         File.WriteAllText(path, "{broken-identity-configuration");
@@ -100,10 +100,10 @@ public static class UpstreamIdentityRaceTests
         // 损坏配置的固定拒绝是本步预期结果。
         catch (ClaudeConfigurationUnavailableException) { refused = true; }
         Check(refused && File.ReadAllText(path) == "{broken-identity-configuration", "Controlled preparation refuses the damaged file without rewriting it.");
-        using (var blocked = await web.Relay.Upstreams.Acquire())
+        using (var blocked = await web.Pool.Acquire())
             Check(ReferenceEquals(original, blocked) && ((UpstreamConnection)blocked).IdentityReadBlocked && !blocked.Paused && blocked.CooldownSeconds == 0,
                 "A known configuration refusal preserves credentials and upstream states, but closes the existing connection.");
-        using (var route = await web.Relay.Upstreams.Route())
+        using (var route = await web.Pool.Route())
         {
             await route.CheckState();
             var selected = await route.Next("fixture-model");
@@ -116,7 +116,7 @@ public static class UpstreamIdentityRaceTests
         Check(mock.Calls.Count == before + 1 && mock.Calls.Last().Headers.ContainsKey("x-api-key"), "A damaged official configuration cannot block the API candidate.");
         Check(File.ReadAllText(path) == "{broken-identity-configuration", "Ordinary forwarding must not repair damaged private configuration.");
         File.WriteAllBytes(path, originalBytes);
-        using var restored = await web.Relay.Upstreams.Acquire();
+        using var restored = await web.Pool.Acquire();
         Check(ReferenceEquals(original, restored) && !((UpstreamConnection)restored).IdentityReadBlocked && !restored.Paused && restored.CooldownSeconds == 0,
             "A successful credential reread clears only the local block without replacing the connection.");
         Check((await web.Upstreams.ReadCandidate(api)).State == "passed");

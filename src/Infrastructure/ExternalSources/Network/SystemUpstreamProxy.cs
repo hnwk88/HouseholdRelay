@@ -9,9 +9,24 @@ namespace Infrastructure.ExternalSources.Network;
 /// 全局出站代理的实现：每次解析都重读设置，改完设置后新建立的上游连接立即按新方式走。
 /// 失败关闭照 MyCoAI 的代码而不是它的旧注释：已启用却取不到可用地址时一律拒绝，绝不悄悄直连。
 /// </summary>
-public sealed class SystemUpstreamProxy(Func<RelayConfiguration> settings, IWebProxy? systemProxy = null) : IUpstreamProxy
+public sealed class SystemUpstreamProxy : IUpstreamProxy
 {
     private const string Loopback = "localhost,127.0.0.1,::1";
+    private readonly Func<RelayConfiguration> _settings;
+    private readonly Func<IWebProxy> _systemProxy;
+
+    /// <summary>正式用法：自动检测时问本机系统代理（<see cref="HttpClient.DefaultProxy"/>，每次解析时取）。</summary>
+    public SystemUpstreamProxy(Func<RelayConfiguration> settings) : this(settings, () => HttpClient.DefaultProxy) { }
+
+    /// <summary>自动检测时改问 <paramref name="systemProxy"/>；测试用它模拟系统代理。</summary>
+    public SystemUpstreamProxy(Func<RelayConfiguration> settings, IWebProxy systemProxy) : this(settings, () => systemProxy) => ArgumentNullException.ThrowIfNull(systemProxy);
+
+    /// <summary>两个公开入口的汇合处。</summary>
+    private SystemUpstreamProxy(Func<RelayConfiguration> settings, Func<IWebProxy> systemProxy)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _settings = settings; _systemProxy = systemProxy;
+    }
 
     /// <summary>
     /// 按当前设置为 <paramref name="target"/> 解析代理：<c>none</c> 直连；<c>manual</c> 用设置里的地址；<c>auto</c> 用系统对该目标生效的代理（HTTPS 目标优先取 HTTPS 代理）。
@@ -19,7 +34,7 @@ public sealed class SystemUpstreamProxy(Func<RelayConfiguration> settings, IWebP
     /// </summary>
     public ProxyRoute Resolve(Uri target)
     {
-        var config = settings();
+        var config = _settings();
         switch (config.ProxyMode)
         {
             case "manual":
@@ -28,7 +43,7 @@ public sealed class SystemUpstreamProxy(Func<RelayConfiguration> settings, IWebP
                 var manual = Checked(config.ProxyUrl, "手动指定的代理地址");
                 return new(manual, Loopback, "手动指定 " + Text(manual));
             case "auto":
-                var detected = WindowsSystemProxyDetector.Detect(target, systemProxy);
+                var detected = WindowsSystemProxyDetector.Detect(target, _systemProxy());
                 var found = target.Scheme == "https" ? detected.HttpsProxy ?? detected.HttpProxy : detected.HttpProxy ?? detected.HttpsProxy;
                 if (string.IsNullOrWhiteSpace(found))
                     throw new UpstreamProxyUnavailableException("已选择自动检测系统代理，但系统没有为上游地址提供代理；为防止意外直连，请求没有发出。请打开代理软件，或到项目设置改成不使用代理、手动指定地址。");

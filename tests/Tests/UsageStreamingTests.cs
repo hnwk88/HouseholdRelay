@@ -83,7 +83,7 @@ static class UsageStreamingTests
             var received = "";
             while (!received.Contains("\"output_tokens\":4", StringComparison.Ordinal))
             { var read = await stream.ReadAsync(first).AsTask().WaitAsync(TimeSpan.FromSeconds(2)); Check(read > 0); received += Encoding.UTF8.GetString(first, 0, read); }
-            Check((await web.Relay.Usage!.Query(new())).Summary[0].Pending == 1);
+            Check((await web.RelayUsage.Query(new())).Summary[0].Pending == 1);
             // 流开放时配置提交可完成，证明没有跨网络请求持有写事务。
             await Task.Run(() => web.Identities.Rename(user.UserId, "取消后仍归本人")).WaitAsync(TimeSpan.FromSeconds(1));
             if (cancel) { cancellation.Cancel(); response.Dispose(); }
@@ -92,7 +92,7 @@ static class UsageStreamingTests
             var report = await Settled(web, 1); var row = report.Rows[0];
             Check(row.Outcome == (cancel ? "cancelled" : "failed") && row.Completeness == "partial", $"cancel={cancel}, outcome={row.Outcome}, completeness={row.Completeness}");
             Check(row.Tokens.Input == 11 && row.Tokens.Output == 4 && row.Dispatched);
-            Check(web.Relay.Admission.Active == 0 && upstream.Calls.Count == 3);
+            Check(web.Admission.Active == 0 && upstream.Calls.Count == 3);
         }
     }
 

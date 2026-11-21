@@ -71,7 +71,7 @@ public static class DeviceMetadataPathTests
             Check((int)response.StatusCode == 400, "Unsupported official metadata must be a local 400.");
             Check(mock.Calls.Count == allowed, "Each negative category must produce zero upstream requests.");
         }
-        using var lease = await web.Relay.Upstreams.Acquire();
+        using var lease = await web.Pool.Acquire();
         Check(!lease.Paused && lease.CooldownSeconds == 0, "Local failures do not change upstream authentication or cooldown.");
         var records = logs.Select(line => JsonSerializer.Deserialize<JsonElement>(line))
             .Where(entry => entry.TryGetProperty("diagnostic", out var kind) && kind.GetString() == "site_identity").ToArray();
@@ -139,7 +139,7 @@ public static class DeviceMetadataPathTests
             Check((int)response.StatusCode == 503 && said.Contains("测试", StringComparison.Ordinal) && mock.Calls.Count == sent,
                 $"Without an account UUID the relay refuses locally, tells the admin to test, and sends nothing: {(int)response.StatusCode} {said} sent={mock.Calls.Count - sent}");
         }
-        using var lease = await web.Relay.Upstreams.Acquire();
+        using var lease = await web.Pool.Acquire();
         Check(!lease.Paused && lease.CooldownSeconds == 0, "The missing account UUID is a local block, not an upstream pause or cooldown");
     }
 

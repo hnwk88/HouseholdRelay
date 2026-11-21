@@ -15,10 +15,25 @@ namespace Infrastructure.ExternalSources.ClaudeCode;
 /// 照 MyCoAI <c>AuthCliRunner</c> 委托本机 Claude Code 登录官方账户：每个账户一个独立配置目录 <c>.state\official-accounts\上游主键</c>，
 /// 子进程环境由 <see cref="IsolatedClaudeEnvironment"/> 隔离、代理按全局设置；令牌刷新交给 CLI，中转只读最新的凭据文件。
 /// </summary>
-internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamProxy proxy, IRelayInstance instance,
-    TimeProvider clock, OfficialLoginOptions options, IClaudeConfigurationPreparation configuration, ISiteIdentityService siteIdentity,
-    IOwnedClaudeProcesses ownedProcesses, IProtocolDiagnostics? diagnostics = null) : IOfficialAccountLogin
+internal sealed class OfficialAccountLogin : IOfficialAccountLogin
 {
+    private readonly IClientLauncher _launcher;
+    private readonly IUpstreamProxy _proxy;
+    private readonly IRelayInstance _instance;
+    private readonly TimeProvider _clock;
+    private readonly OfficialLoginOptions _options;
+    private readonly IClaudeConfigurationPreparation _configuration;
+    private readonly ISiteIdentityService _siteIdentity;
+    private readonly IOwnedClaudeProcesses _ownedProcesses;
+    private readonly IProtocolDiagnostics _diagnostics;
+
+    /// <summary>九个依赖全部必填，构造时当场判空：协议诊断不再可省，漏登记在启动时就报，不会静默少记续期诊断。</summary>
+    public OfficialAccountLogin(IClientLauncher launcher, IUpstreamProxy proxy, IRelayInstance instance, TimeProvider clock, OfficialLoginOptions options, IClaudeConfigurationPreparation configuration, ISiteIdentityService siteIdentity, IOwnedClaudeProcesses ownedProcesses, IProtocolDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(launcher); ArgumentNullException.ThrowIfNull(proxy); ArgumentNullException.ThrowIfNull(instance); ArgumentNullException.ThrowIfNull(clock); ArgumentNullException.ThrowIfNull(options); ArgumentNullException.ThrowIfNull(configuration); ArgumentNullException.ThrowIfNull(siteIdentity); ArgumentNullException.ThrowIfNull(ownedProcesses); ArgumentNullException.ThrowIfNull(diagnostics);
+        _launcher = launcher; _proxy = proxy; _instance = instance; _clock = clock; _options = options; _configuration = configuration; _siteIdentity = siteIdentity; _ownedProcesses = ownedProcesses; _diagnostics = diagnostics;
+    }
+
     /// <summary>令牌离到期不足这么久就让 CLI 刷新。</summary>
     private static readonly TimeSpan _refreshMargin = TimeSpan.FromMinutes(5);
     /// <summary>令牌已过期时，转发最多等刷新这么久。</summary>
@@ -44,23 +59,23 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     /// </summary>
     public async Task<string?> Login(string accountId, CancellationToken cancellation)
     {
-        using var operation = siteIdentity.Enter();
+        using var operation = _siteIdentity.Enter();
         string executable;
-        try { executable = launcher.FindClaude(); }
+        try { executable = _launcher.FindClaude(); }
         // 定位失败只说明本机没装，换成登录场景的原因与下一步。
         catch (InvalidOperationException) { throw new InvalidOperationException("本机没有找到 Claude Code，无法登录官方账户。请先安装 Claude Code，再按「登录官方账户」。"); }
-        var route = proxy.Resolve(OfficialTarget);
+        var route = _proxy.Resolve(OfficialTarget);
         var directory = Directory(accountId);
-        configuration.PrepareAccount(accountId, true);
+        _configuration.PrepareAccount(accountId, true);
         try
         {
             var start = Start(executable, directory, route, "auth", "login");
-            if (options.ShowWindow) { start.CreateNoWindow = false; start.WindowStyle = ProcessWindowStyle.Minimized; }
+            if (_options.ShowWindow) { start.CreateNoWindow = false; start.WindowStyle = ProcessWindowStyle.Minimized; }
             else start.CreateNoWindow = true;
             // 调用方取消（浏览器断开）与登录限时合成一个令牌，任一触发都结束登录进程；两者靠调用方令牌是否已取消来区分读法。
-            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation); limit.CancelAfter(options.LoginTimeout);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation); limit.CancelAfter(_options.LoginTimeout);
             int exit;
-            using var owned = ownedProcesses.Starting(); var registered = false;
+            using var owned = _ownedProcesses.Starting(); var registered = false;
             using (var process = StartOwned(start, owned) ?? throw new InvalidOperationException("无法启动 Claude Code 登录，请再按一次「登录官方账户」。"))
             {
                 try
@@ -70,7 +85,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
                 }
                 // 只有限时到了才换成超时说明；浏览器断开等调用方取消原样抛出。
                 catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
-                { throw new InvalidOperationException($"等了 {options.LoginTimeout.TotalMinutes:0} 分钟还没有登录完成，已停止。需要时再按「登录官方账户」重试。"); }
+                { throw new InvalidOperationException($"等了 {_options.LoginTimeout.TotalMinutes:0} 分钟还没有登录完成，已停止。需要时再按「登录官方账户」重试。"); }
                 // 超时、取消或等待出错时结束登录进程树，不留后台进程。
                 finally
                 {
@@ -89,20 +104,20 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     }
 
     /// <summary>
-    /// 先在内存里校验登录文件（不超过 <see cref="OfficialCredential.MaxFileBytes"/>、是 JSON、有访问令牌和刷新令牌），再定位 claude.exe、解析代理，
+    /// 先在内存里校验登录文件（不超过 <see cref="Application.Contracts.Uploads.UploadLimits.OfficialCredentialBytes"/>、是 JSON、有访问令牌和刷新令牌），再定位 claude.exe、解析代理，
     /// 合格才建受保护的账户目录、把文件原样写进去，用 <c>auth status --json</c> 取邮箱返回。任何失败都删掉目录；读给管理员的原因不含文件内容。
     /// </summary>
     public async Task<string?> Import(string accountId, byte[] content, CancellationToken cancellation)
     {
-        using var operation = siteIdentity.Enter();
+        using var operation = _siteIdentity.Enter();
         ValidateImport(content);
         string executable;
-        try { executable = launcher.FindClaude(); }
+        try { executable = _launcher.FindClaude(); }
         // 定位失败只说明本机没装；导入的令牌到期要靠它续期，所以照登录的口径拒绝。
         catch (InvalidOperationException) { throw new InvalidOperationException("本机没有找到 Claude Code，无法导入登录文件（令牌到期要靠它自动续期）。请先安装 Claude Code，再导入。"); }
-        var route = proxy.Resolve(OfficialTarget);
+        var route = _proxy.Resolve(OfficialTarget);
         var directory = Directory(accountId);
-        configuration.PrepareAccount(accountId, true);
+        _configuration.PrepareAccount(accountId, true);
         try
         {
             File.WriteAllBytes(Path.Combine(directory, OfficialCredential.FileName), content);
@@ -120,13 +135,13 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     {
         // 已删除或搬走的账户不再读文件，也不能因查询状态而重新启动续期。
         lock (_refreshes) if (_removed.Contains(accountId) || _moved.Contains(accountId)) return null;
-        using var operation = siteIdentity.Enter();
-        configuration.ValidateAccount(accountId);
+        using var operation = _siteIdentity.Enter();
+        _configuration.ValidateAccount(accountId);
         var directory = Directory(accountId);
         var credential = Read(directory);
-        if (credential?.ExpiresAt is not { } expires || expires - clock.GetUtcNow() > _refreshMargin) return credential?.AccessToken;
+        if (credential?.ExpiresAt is not { } expires || expires - _clock.GetUtcNow() > _refreshMargin) return credential?.AccessToken;
         var refresh = Refresh(accountId, directory);
-        if (expires > clock.GetUtcNow()) return credential.AccessToken;
+        if (expires > _clock.GetUtcNow()) return credential.AccessToken;
         refresh.Wait(_refreshWait);
         return Read(directory)?.AccessToken ?? credential.AccessToken;
     }
@@ -136,7 +151,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     {
         // 与删除、搬走共用这把锁，读到的是最新状态：已删除或搬走的账户不再读私有配置，也不因此触发续期。
         lock (_refreshes) if (_removed.Contains(accountId) || _moved.Contains(accountId)) return null;
-        return configuration.AccountUuid(accountId);
+        return _configuration.AccountUuid(accountId);
     }
 
     /// <summary>把官方返回的账户资料存进账户私有配置；已删除或搬走的账户不写（搬走后本机不再用它）。</summary>
@@ -144,7 +159,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     {
         // 与删除、搬走共用这把锁判断最新状态。
         lock (_refreshes) if (_removed.Contains(accountId) || _moved.Contains(accountId)) throw new InvalidOperationException("这个官方账户已经删除或搬走，本机不再保存它的账户资料。");
-        configuration.RecordAccount(accountId, profile);
+        _configuration.RecordAccount(accountId, profile);
     }
 
     /// <summary>
@@ -206,12 +221,12 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         lock (_refreshes)
         {
             if (_removed.Contains(accountId) || _moved.Contains(accountId)) return Task.CompletedTask;
-            if (_refreshes.TryGetValue(accountId, out var last) && (!last.Task.IsCompleted || clock.GetUtcNow() - last.StartedAt < _refreshInterval)) return last.Task;
-            var operation = siteIdentity.Enter();
+            if (_refreshes.TryGetValue(accountId, out var last) && (!last.Task.IsCompleted || _clock.GetUtcNow() - last.StartedAt < _refreshInterval)) return last.Task;
+            var operation = _siteIdentity.Enter();
             var stop = new CancellationTokenSource();
             // 后台任务独立占一个许可，调用方先返回也不会让维护漏掉仍在写凭据的 CLI。
             var task = Task.Run(async () => { using (operation) await RunRefresh(accountId, directory, stop.Token); });
-            _refreshes[accountId] = (task, clock.GetUtcNow(), stop);
+            _refreshes[accountId] = (task, _clock.GetUtcNow(), stop);
             return task;
         }
     }
@@ -225,16 +240,16 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         try
         {
             // 启动续期程序之前重读一次私有配置，不用本代缓存。
-            configuration.ValidateAccount(accountId, reread: true);
-            var start = Start(launcher.FindClaude(), directory, proxy.Resolve(OfficialTarget), "-p", "/usage", "--output-format", "json", "--no-session-persistence");
+            _configuration.ValidateAccount(accountId, reread: true);
+            var start = Start(_launcher.FindClaude(), directory, _proxy.Resolve(OfficialTarget), "-p", "/usage", "--output-format", "json", "--no-session-persistence");
             var (exit, _) = await RunHidden(start, TimeSpan.FromSeconds(60), stop);
-            diagnostics?.Record(Guid.NewGuid().ToString("N"), "cli_completed", "cli", siteIdentity.Current.Version, siteIdentity.Current.DeviceId,
+            _diagnostics.Record(Guid.NewGuid().ToString("N"), "cli_completed", "cli", _siteIdentity.Current.Version, _siteIdentity.Current.DeviceId,
                 status: exit, error: exit == 0 ? null : "renewal_failed");
         }
         // 没装 Claude Code、代理取不到、进程起不来、超时或因删除被取消：这次不刷新，令牌真失效时上游拒绝会提示重新登录。
         catch (Exception error) when (error is InvalidOperationException or Win32Exception or IOException or OperationCanceledException)
         {
-            diagnostics?.Record(Guid.NewGuid().ToString("N"), "cli_failed", "cli", siteIdentity.Current.Version, siteIdentity.Current.DeviceId, error: "renewal_failed");
+            _diagnostics.Record(Guid.NewGuid().ToString("N"), "cli_failed", "cli", _siteIdentity.Current.Version, _siteIdentity.Current.DeviceId, error: "renewal_failed");
         }
         bool gone;
         // 已删除集合与删除方共用这把锁，读到的是删除之后的最新状态。
@@ -247,7 +262,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     private static void ValidateImport(byte[] content)
     {
         const string Where = "另一台电脑上的 %USERPROFILE%\\.claude\\.credentials.json";
-        if (content.Length > OfficialCredential.MaxFileBytes) throw new InvalidOperationException($"选的文件超过 64 KB，不是 Claude Code 的登录文件。请选{Where}。");
+        if (content.Length > Application.Contracts.Uploads.UploadLimits.OfficialCredentialBytes) throw new InvalidOperationException($"选的文件超过 64 KB，不是 Claude Code 的登录文件。请选{Where}。");
         OfficialCredential? credential;
         try { credential = OfficialCredential.Parse(content); }
         // 解析错误的消息里可能带文件片段，只读出结论。
@@ -298,7 +313,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
         start.StandardOutputEncoding = new UTF8Encoding(false); start.StandardErrorEncoding = new UTF8Encoding(false);
         // 调用方取消与本次限时合成一个令牌，读输出和等退出都受它约束，任一触发都在 finally 里结束进程树。
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation); timeout.CancelAfter(limit);
-        using var owned = ownedProcesses.Starting(); var registered = false;
+        using var owned = _ownedProcesses.Starting(); var registered = false;
         using var process = StartOwned(start, owned) ?? throw new InvalidOperationException("无法启动 Claude Code。");
         try
         {
@@ -354,7 +369,7 @@ internal sealed class OfficialAccountLogin(IClientLauncher launcher, IUpstreamPr
     private string Directory(string accountId)
     {
         if (accountId.Length != 32 || !accountId.All(char.IsAsciiHexDigitLower)) throw new InvalidOperationException("上游主键无效，请重新加载页面。");
-        return Path.Combine(instance.State, "official-accounts", accountId);
+        return Path.Combine(_instance.State, "official-accounts", accountId);
     }
 
     /// <summary>删除登录失败留下的、或所属上游已删除的账户目录；删不掉时放弃并返回 true（目录还在），残留的只是一个没有凭据或未被任何上游引用的目录。</summary>

@@ -21,7 +21,7 @@ static class UsageRestartTests
         var call = Call(web, user.Token); await entered.Task;
         var stopping = web.App.StopAsync(); release.TrySetResult();
         Check((int)await call == 200); await stopping;
-        var original = (await web.Relay.Usage!.Query(new())).Rows.Single();
+        var original = (await web.RelayUsage.Query(new())).Rows.Single();
         Check(original.Outcome == "succeeded" && original.Completeness == "complete");
         await using var app = ManagementWeb.Build(web.Home.Path, 0); await app.StartAsync();
         try

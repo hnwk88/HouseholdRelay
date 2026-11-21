@@ -340,7 +340,7 @@ static class TestSuite
         using var route = await f.Send(path: "/elsewhere"); Check((int)route.StatusCode == 404);
         using var malformed = await f.Send(body: "{bad"); Check((int)malformed.StatusCode == 400);
         using var huge = await f.Send(body: new string('x', 513)); Check((int)huge.StatusCode == 413);
-        f.Relay.Clients.Replace(f.Config.Clients.Select(c => c with { Enabled = false }).ToArray());
+        f.Clients.Replace(f.Config.Clients.Select(c => c with { Enabled = false }).ToArray());
         using var disabled = await f.Send(); Check((int)disabled.StatusCode == 401); Check(f.Calls.IsEmpty);
     }
 
@@ -364,7 +364,7 @@ static class TestSuite
         var count = await stream.ReadAsync(buffer); Check(Encoding.UTF8.GetString(buffer, 0, count) == "data: first\n\n");
         // 主动取消并释放响应来模拟客户端中途断开，再等待上游收到取消，3 秒内没收到即判失败。
         abort.Cancel(); response.Dispose(); await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        await Until(() => f.Relay.Admission.Active == 0);
+        await Until(() => f.Admission.Active == 0);
     }
 
     /// <summary>
@@ -380,9 +380,9 @@ static class TestSuite
             await release.Task.WaitAsync(c.RequestAborted); await c.Response.WriteAsync("{}");
         });
         var first = f.Send("study"); var second = f.Send("bedroom");
-        await Until(() => releases.Count == 2); Check(f.Relay.Admission.Active == 2);
-        var third = f.Send("study"); await Until(() => f.Relay.Admission.Queued == 1);
-        f.Relay.Clients.Replace(f.Config.Clients.Select(c => c with { Enabled = false }).ToArray());
+        await Until(() => releases.Count == 2); Check(f.Admission.Active == 2);
+        var third = f.Send("study"); await Until(() => f.Admission.Queued == 1);
+        f.Clients.Replace(f.Config.Clients.Select(c => c with { Enabled = false }).ToArray());
         foreach (var release in releases) release.SetResult();
         using var a = await first; using var b = await second; using var c = await third;
         Check((int)c.StatusCode == 401); Check(f.Calls.Count == 2);
@@ -421,7 +421,7 @@ static class TestSuite
     public static async Task TimeoutAndRedirect()
     {
         await using (var f = await Fixture.Create(c => Task.Delay(Timeout.Infinite, c.RequestAborted), c => c.RequestTimeoutSeconds = 1))
-        { using var response = await f.Send(); Check((int)response.StatusCode == 504); Check(f.Relay.Admission.Active == 0); }
+        { using var response = await f.Send(); Check((int)response.StatusCode == 504); Check(f.Admission.Active == 0); }
         await using (var f = await Fixture.Create(c => { c.Response.StatusCode = 307; c.Response.Headers.Location = "http://127.0.0.1:1/steal"; return Task.CompletedTask; }))
         { using var response = await f.Send(); Check((int)response.StatusCode == 502); Check(f.Calls.Count == 1); }
     }
@@ -525,7 +525,7 @@ static class TestSuite
                 // 超时或断言失败时子进程可能仍在运行，必须连同进程树一起结束，防止残留 Claude Code 进程。
                 finally { if (!child.HasExited) { child.Kill(true); await child.WaitForExitAsync(); } }
             }
-            f.Relay.Clients.Replace(f.Config.Clients.Select(c => c with { TokenHash = ConfigurationFiles.Hash("hr_" + c.Name + "-test-token") }).ToArray());
+            f.Clients.Replace(f.Config.Clients.Select(c => c with { TokenHash = ConfigurationFiles.Hash("hr_" + c.Name + "-test-token") }).ToArray());
             // 两个客户端并发运行，验证共用同一上游身份时各自会话和答复互不串扰。
             await Task.WhenAll(Client("study", "FIXTURE_STUDY", "STUDY_OK"), Client("bedroom", "FIXTURE_BEDROOM", "BEDROOM_OK"));
             Check(f.Calls.Count >= 2); Check(f.Calls.All(c => c.Headers["Authorization"] == "Bearer fixture-upstream-secret"));
@@ -555,6 +555,12 @@ sealed class Fixture : IAsyncDisposable
     public required RelayConfiguration Config { get; init; }
     /// <summary>被测中转服务实例，测试通过它读取活动与排队计数或替换客户端列表。</summary>
     public required RelayServer Relay { get; init; }
+    /// <summary>独立中转的容器；释放夹具时一并释放（连接池随它释放）。</summary>
+    public required ServiceProvider Services { get; init; }
+    /// <summary>鉴权名单，测试可替换客户端列表。</summary>
+    public ClientRegistry Clients => Services.GetRequiredService<ClientRegistry>();
+    /// <summary>准入控制，测试读活动与排队计数。</summary>
+    public Admission Admission => Services.GetRequiredService<Admission>();
     /// <summary>在本机回环随机端口上运行的中转主机。</summary>
     public required WebApplication App { get; init; }
     /// <summary>模拟 Claude 上游的本机主机，记录每次请求后交给测试传入的处理委托作答。</summary>
@@ -589,7 +595,7 @@ sealed class Fixture : IAsyncDisposable
         var services = TestProcess.StandaloneRelay(config, "fixture-upstream-secret", new Uri(upstream.Urls.Single()), clients, new FixtureLog(logs), proxy);
         var relay = services.GetRequiredService<RelayServer>();
         var app = relay.Build(certificate, 0, certificateChain); await app.StartAsync();
-        return new Fixture { Config = config, Relay = relay, App = app, Upstream = upstream, Url = app.Urls.Single(), Calls = calls, Logs = logs,
+        return new Fixture { Config = config, Relay = relay, Services = services, App = app, Upstream = upstream, Url = app.Urls.Single(), Calls = calls, Logs = logs,
             Http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false }) };
     }
     /// <summary>构造发往中转的 POST 请求，默认路径 /v1/messages?beta=true，按名字携带对应测试客户端的 Bearer 令牌；调用方负责释放。</summary>
@@ -604,7 +610,7 @@ sealed class Fixture : IAsyncDisposable
     /// <summary>依次释放 HTTP 客户端、停止并释放中转主机和中转服务，最后停止模拟上游。</summary>
     public async ValueTask DisposeAsync()
     {
-        Http.Dispose(); await App.StopAsync(); await App.DisposeAsync(); Relay.Dispose(); await Upstream.StopAsync(); await Upstream.DisposeAsync();
+        Http.Dispose(); await App.StopAsync(); await App.DisposeAsync(); await Services.DisposeAsync(); await Upstream.StopAsync(); await Upstream.DisposeAsync();
     }
 }
 

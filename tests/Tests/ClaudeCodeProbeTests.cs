@@ -90,7 +90,7 @@ static class ClaudeCodeProbeTests
         var rejectedReport = await service.TestCandidate(rejected, true, CancellationToken.None);
         Check(!rejectedReport.CanActivate && !JsonSerializer.Serialize(rejectedReport).Contains("fixture-probe-secret"));
         Check(mock.Calls.Skip(before).Count(call => call.Path.Contains("/messages")) == 1);
-        Check((await service.ReadActive()).Version == version && !web.Relay.Upstreams.Status(version).Paused);
+        Check((await service.ReadActive()).Version == version && !web.Pool.Status(version).Paused);
     }
 
     /// <summary>

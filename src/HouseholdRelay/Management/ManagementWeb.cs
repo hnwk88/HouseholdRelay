@@ -28,6 +28,8 @@ public static class ManagementWeb
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         { Args = [], ApplicationName = typeof(ManagementWeb).Assembly.FullName, ContentRootPath = AppContext.BaseDirectory, EnvironmentName = "Production" });
+        // 构建容器时就核对全部登记可解析、单例不持有作用域服务：漏登记在启动时报，不在第一个请求时静默降级。
+        builder.Host.UseDefaultServiceProvider(options => { options.ValidateOnBuild = true; options.ValidateScopes = true; });
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(options =>
         {

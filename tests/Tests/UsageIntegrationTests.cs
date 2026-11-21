@@ -58,7 +58,7 @@ static class UsageIntegrationTests
         await web.Identities.SetEnabled(a.UserId, false);
         using (var request = new HttpRequestMessage(HttpMethod.Get, web.Url + "/my-usage/data"))
         { request.Headers.Authorization = new("Bearer", rotated.Token); using var result = await web.Http.SendAsync(request); Check(result.StatusCode == HttpStatusCode.Unauthorized); }
-        Check(await Call(web, rotated.Token) == HttpStatusCode.Unauthorized && (await web.Relay.Usage!.Query(new())).Total == total);
+        Check(await Call(web, rotated.Token) == HttpStatusCode.Unauthorized && (await web.RelayUsage.Query(new())).Total == total);
         await web.Login(); using var page = await web.Http.GetAsync(web.Url + "/Usage?UserId=" + b.UserId);
         var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync()); Check(page.IsSuccessStatusCode && html.Contains("上游未提供"), "Page " + page.StatusCode + ": " + System.Text.RegularExpressions.Regex.Match(html, "validation-summary-errors[\\s\\S]*?</div>").Value);
         Check(!html.Contains(a.Token) && !html.Contains(rotated.Token) && !html.Contains("fixture-private-prompt") && !html.Contains("fixture-private-answer"));
@@ -75,14 +75,14 @@ static class UsageIntegrationTests
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
         var user = await web.Identities.Create("未知用量"); await upstream.Activate(web.Upstreams);
-        Check((await web.Relay.Usage!.Query(new())).Total == 0, "Administrative probes must not enter personal usage");
+        Check((await web.RelayUsage.Query(new())).Total == 0, "Administrative probes must not enter personal usage");
         upstream.Handler = context => context.Request.Path == "/v1/models"
             ? context.Response.WriteAsJsonAsync(new { data = Array.Empty<string>(), usage = new { input_tokens = 999, output_tokens = 999 } })
             : context.Request.Path == "/v1/messages/count_tokens" ? context.Response.WriteAsJsonAsync(new { input_tokens = 123 })
             : Json(context, context.Request.Query["case"].ToString() switch
             { "partial" => new { input_tokens = 15 } as object, "complete" => new { input_tokens = 2, output_tokens = 3, cache_read_input_tokens = 4, cache_creation_input_tokens = 5 }, _ => null });
         Check(await Call(web, user.Token, "missing") == HttpStatusCode.OK); await Settled(web, 1);
-        var unknown = await web.Relay.Usage.Query(new()); Check(unknown.Summary[0].Tokens.Input is null && unknown.Summary[0].Incomplete == 1);
+        var unknown = await web.RelayUsage.Query(new()); Check(unknown.Summary[0].Tokens.Input is null && unknown.Summary[0].Incomplete == 1);
         await web.Login(); var html = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + "/Usage"));
         Check(html.Contains("<strong>未知</strong>") && !html.Contains("<strong>0</strong>"), System.Text.RegularExpressions.Regex.Match(html, "validation-summary-errors[\\s\\S]*?</div>").Value);
         await Call(web, user.Token, "partial"); await Call(web, user.Token, "complete");
@@ -97,8 +97,8 @@ static class UsageIntegrationTests
         Check(report.Summary.Single(row => row.Kind == "estimate").Tokens.Input == 123);
         Check(report.Summary.Single(row => row.Kind == "models").Tokens == new UsageTokens());
         var complete = report.Rows.Single(row => row.Tokens.Output == 3);
-        await web.Relay.Usage.Finish(complete.RequestId, new("failed", true, 500, 500, 1, "partial", new(888, 999)));
-        Check((await web.Relay.Usage.Query(new())).Rows.Single(row => row.RequestId == complete.RequestId) == complete, "Duplicate completion must be idempotent");
+        await web.RelayUsage.Finish(complete.RequestId, new("failed", true, 500, 500, 1, "partial", new(888, 999)));
+        Check((await web.RelayUsage.Query(new())).Rows.Single(row => row.RequestId == complete.RequestId) == complete, "Duplicate completion must be idempotent");
         using (var connection = web.Database.Open())
         {
             var serialized = (string)RelayDatabase.Scalar(connection, null, "SELECT group_concat(model) FROM usage_requests")!;

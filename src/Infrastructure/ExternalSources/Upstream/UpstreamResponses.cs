@@ -2,30 +2,48 @@
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using Application.Interfaces.Relay;
+using Application.Interfaces.Upstream;
 using Core.Relay;
 using Core.Usage;
-using Microsoft.AspNetCore.Http;
 
 namespace Infrastructure.ExternalSources.Upstream;
 
-/// <summary>收紧响应头，并在有界 JSON 或完整 SSE 事件内消除已知上游秘密。</summary>
-public static class UpstreamResponses
+/// <summary>收紧响应头，并在有界 JSON 或完整 SSE 事件内消除已知上游秘密。转发服务经 <see cref="IUpstreamResponses"/> 用它；本层的探测与诊断直接用静态方法。</summary>
+public sealed class UpstreamResponses : IUpstreamResponses
 {
     private static readonly HashSet<string> _allowedHeaders = new(StringComparer.OrdinalIgnoreCase)
     { "request-id", "x-request-id", "retry-after", "x-should-retry", "anthropic-organization-id" };
 
-    /// <summary>把上游响应安全地转给家庭客户端：先按 Content-Encoding 解开压缩（见 <see cref="Decompress"/>），再做脱敏与计量，回给客户端的是解开后的明文；响应头只放行请求编号、重试和限流类白名单且值中不含秘密；附加禁止缓存、禁止代理缓冲和本次中转请求编号；SSE 逐事件脱敏转发，普通 JSON 在大小上限内（成功 16 MB、错误 1 MB）整体脱敏后写出；可选地把内容交给用量累加器统计。</summary>
-    public static async Task Copy(HttpResponseMessage upstream, HttpResponse response, string secret, string requestId, CancellationToken cancellation, UsageAccumulator? usage = null)
+    /// <summary>转给客户端并计量，见 <see cref="Copy(HttpResponseMessage, IRelayReply, string, string, UsageAccumulator?, CancellationToken)"/>。</summary>
+    Task IUpstreamResponses.Copy(HttpResponseMessage upstream, IRelayReply reply, string secret, string requestId, UsageAccumulator usage, CancellationToken cancellation) =>
+        Copy(upstream, reply, secret, requestId, usage, cancellation);
+
+    /// <summary>转给客户端，不计量。</summary>
+    Task IUpstreamResponses.Copy(HttpResponseMessage upstream, IRelayReply reply, string secret, string requestId, CancellationToken cancellation) =>
+        Copy(upstream, reply, secret, requestId, null, cancellation);
+
+    /// <summary>丢弃前读出错误说明，见 <see cref="Inspect"/>。</summary>
+    Task IUpstreamResponses.Inspect(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation) => Inspect(upstream, secret, usage, cancellation);
+
+    /// <summary>脱敏文本，见 <see cref="Redact"/>。</summary>
+    string IUpstreamResponses.Redact(string value, string secret) => Redact(value, secret);
+
+    /// <summary>限长读入，见 <see cref="ReadBounded"/>。</summary>
+    Task<byte[]> IUpstreamResponses.ReadBounded(Stream stream, int limit, CancellationToken cancellation) => ReadBounded(stream, limit, cancellation);
+
+    /// <summary>把上游响应安全地转给家庭客户端：先按 Content-Encoding 解开压缩（见 <see cref="Decompress"/>），再做脱敏与计量，回给客户端的是解开后的明文；响应头只放行请求编号、重试和限流类白名单且值中不含秘密；附加禁止缓存、禁止代理缓冲和本次中转请求编号；SSE 逐事件脱敏转发，普通 JSON 在大小上限内（成功 16 MB、错误 1 MB）整体脱敏后写出；<paramref name="usage"/> 不为空时把内容交给它统计。</summary>
+    internal static async Task Copy(HttpResponseMessage upstream, IRelayReply response, string secret, string requestId, UsageAccumulator? usage, CancellationToken cancellation)
     {
         var excluded = upstream.Headers.Connection.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var header in upstream.Headers)
         {
             if (excluded.Contains(header.Key) || !(_allowedHeaders.Contains(header.Key) || header.Key.StartsWith("anthropic-ratelimit-", StringComparison.OrdinalIgnoreCase))) continue;
             var values = header.Value.ToArray();
-            if (values.All(value => Redact(value, secret) == value)) response.Headers[header.Key] = values;
+            if (values.All(value => Redact(value, secret) == value)) response.SetHeader(header.Key, values);
         }
         response.StatusCode = (int)upstream.StatusCode;
-        response.Headers.CacheControl = "no-store"; response.Headers["X-Accel-Buffering"] = "no"; response.Headers["X-Relay-Request-Id"] = requestId;
+        response.SetHeader("Cache-Control", ["no-store"]); response.SetHeader("X-Accel-Buffering", ["no"]); response.SetHeader("X-Relay-Request-Id", [requestId]);
         await using var raw = await upstream.Content.ReadAsStreamAsync(cancellation);
         await using var stream = Decompress(raw, upstream.Content.Headers.ContentEncoding);
         if (upstream.Content.Headers.ContentType?.MediaType == "text/event-stream")
@@ -56,7 +74,7 @@ public static class UpstreamResponses
     /// 自动切换要丢弃这家的错误响应时，只为尝试记录读出错误类型与说明：正文限 1 MB 读入，脱敏后交给 <paramref name="usage"/>，不是 JSON 时标为无法解析；
     /// 一个字节也不写给客户端。读正文途中连接断了或超限时放弃，错误类型留给尝试记录按「格式不认识」读；总超时或客户端断开的取消照常抛出。
     /// </summary>
-    public static async Task Inspect(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation)
+    internal static async Task Inspect(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation)
     {
         byte[] bytes;
         try { bytes = await ReadDecoded(upstream, 1024 * 1024, cancellation); }
@@ -91,7 +109,7 @@ public static class UpstreamResponses
     /// 中转自己要解析上游回复（测试的最小调用、模型目录、账户资料、丢弃前的错误检查）时用它取正文：按 <c>Content-Encoding</c> 解开（见 <see cref="Decompress"/>）后在 <paramref name="limit"/> 内读入明文。
     /// 压缩数据损坏与不认识的编码一样抛 502 的 <see cref="RelayFailure"/>，调用方按「不支持的响应」读出，不把解压库的异常漏给页面。
     /// </summary>
-    public static async Task<byte[]> ReadDecoded(HttpResponseMessage upstream, int limit, CancellationToken cancellation)
+    internal static async Task<byte[]> ReadDecoded(HttpResponseMessage upstream, int limit, CancellationToken cancellation)
     {
         await using var raw = await upstream.Content.ReadAsStreamAsync(cancellation);
         try { await using var stream = Decompress(raw, upstream.Content.Headers.ContentEncoding); return await ReadBounded(stream, limit, cancellation); }
@@ -100,7 +118,7 @@ public static class UpstreamResponses
     }
 
     /// <summary>把流读入内存，累计超过 <paramref name="limit"/> 字节立即抛 502，防止异常大的上游响应耗尽内存；读缓冲取自共享数组池。</summary>
-    public static async Task<byte[]> ReadBounded(Stream stream, int limit, CancellationToken cancellation)
+    internal static async Task<byte[]> ReadBounded(Stream stream, int limit, CancellationToken cancellation)
     {
         using var memory = new MemoryStream(); var buffer = ArrayPool<byte>.Shared.Rent(32768);
         try
@@ -118,7 +136,7 @@ public static class UpstreamResponses
     }
 
     /// <summary>把文本中出现的上游凭据原文、URL 编码形式和 Base64 形式都替换为 <c>[redacted]</c>；凭据为空时原样返回。</summary>
-    public static string Redact(string value, string secret)
+    internal static string Redact(string value, string secret)
     {
         if (secret.Length == 0) return value;
         return value.Replace(secret, "[redacted]", StringComparison.Ordinal)
@@ -127,7 +145,7 @@ public static class UpstreamResponses
     }
 
     /// <summary>解析 JSON 后逐个属性名和字符串值脱敏再重新序列化；因为先解码转义再比对，能发现被 JSON 转义藏起来的秘密。正文不是合法 JSON 时抛 <see cref="JsonException"/>。</summary>
-    public static byte[] Json(byte[] bytes, string secret)
+    internal static byte[] Json(byte[] bytes, string secret)
     {
         using var document = JsonDocument.Parse(bytes);
         using var output = new MemoryStream(); using (var writer = new Utf8JsonWriter(output)) Write(document.RootElement, writer, secret);

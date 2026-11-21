@@ -20,15 +20,33 @@ using Microsoft.Extensions.Logging;
 namespace Infrastructure.ExternalSources.ClaudeCode;
 
 /// <summary>可选的隔离原生客户端诊断；只允许一次候选生成请求，真实凭据只留在中转进程。</summary>
-internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector protector, IUpstreamProxy proxy,
-    IClaudeConfigurationPreparation configuration, ISiteIdentityService siteIdentity, IOwnedClaudeProcesses ownedProcesses, IProtocolDiagnostics? diagnostics = null) : IClaudeCodeProbe
+internal sealed class ClaudeCodeProbe : IClaudeCodeProbe
 {
+    private readonly IClientLauncher _launcher;
+    private readonly ISecretProtector _protector;
+    private readonly IUpstreamProxy _proxy;
+    private readonly IClaudeConfigurationPreparation _configuration;
+    private readonly ISiteIdentityService _siteIdentity;
+    private readonly IOwnedClaudeProcesses _ownedProcesses;
+    private readonly IProtocolDiagnostics _diagnostics;
+
+    /// <summary>七个依赖全部必填，构造时当场判空：漏登记在启动时就报，不会静默少记诊断。</summary>
+    public ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector protector, IUpstreamProxy proxy,
+        IClaudeConfigurationPreparation configuration, ISiteIdentityService siteIdentity, IOwnedClaudeProcesses ownedProcesses, IProtocolDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(launcher); ArgumentNullException.ThrowIfNull(protector); ArgumentNullException.ThrowIfNull(proxy);
+        ArgumentNullException.ThrowIfNull(configuration); ArgumentNullException.ThrowIfNull(siteIdentity); ArgumentNullException.ThrowIfNull(ownedProcesses);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        _launcher = launcher; _protector = protector; _proxy = proxy; _configuration = configuration; _siteIdentity = siteIdentity;
+        _ownedProcesses = ownedProcesses; _diagnostics = diagnostics;
+    }
+
     /// <summary>本机能否找到原生 claude.exe；找不到时返回 false，不抛异常。</summary>
     public bool IsAvailable
     {
         get
         {
-            try { launcher.FindClaude(); return true; }
+            try { _launcher.FindClaude(); return true; }
             // 定位失败只说明本机没装，交给调用方决定是否改用实际客户端测试。
             catch (InvalidOperationException) { return false; }
         }
@@ -41,7 +59,7 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     public Task<ProbeReply> Run(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) =>
         Session<ProbeReply>(transport.Snapshot.Options.Model, null, new Uri(transport.Snapshot.Options.BaseUrl), transport.Snapshot.Options.OfficialAccount, async (context, completion) =>
         {
-            var attemptSite = siteIdentity.Current;
+            var attemptSite = _siteIdentity.Current;
             var official = transport.Snapshot.Options.OfficialAccount;
             var correlation = Guid.NewGuid().ToString("N");
             var dispatched = false;
@@ -50,11 +68,11 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
                 var body = await UpstreamResponses.ReadBounded(context.Request.Body, 1024 * 1024, cancellation);
                 using var request = transport.Request("/v1/messages", context.Request.QueryString.ToString(), body, "POST",
                     context.Request.Headers.UserAgent.ToString(), context.Request.Headers, identity, deviceId: attemptSite.DeviceId);
-                if (official) diagnostics?.Record(correlation, "assembled", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint);
-                if (official) diagnostics?.Record(correlation, "dispatch", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint);
+                if (official) _diagnostics.Record(correlation, "assembled", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint);
+                if (official) _diagnostics.Record(correlation, "dispatch", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint);
                 dispatched = true;
                 using var response = await transport.Send(request, cancellation);
-                if (official) diagnostics?.Record(correlation, "response", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint,
+                if (official) _diagnostics.Record(correlation, "response", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint,
                     (int)response.StatusCode, response.StatusCode switch { HttpStatusCode.Unauthorized => "authentication", HttpStatusCode.Forbidden => "forbidden", HttpStatusCode.TooManyRequests => "rate_limit", _ => null });
                 // 先按 Content-Encoding 解开：官方按客户端的 Accept-Encoding 回压缩正文，判定与转给本机客户端都用明文（副本不再带压缩编码）。
                 var bytes = await UpstreamResponses.ReadDecoded(response, 1024 * 1024, cancellation);
@@ -62,14 +80,14 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
                 // 用已有响应边界返回给本机客户端，防止错误正文中的上游秘密进入客户端临时文件。
                 using var copy = new HttpResponseMessage(response.StatusCode) { Content = new ByteArrayContent(bytes) };
                 copy.Content.Headers.ContentType = response.Content.Headers.ContentType;
-                await UpstreamResponses.Copy(copy, context.Response, transport.Snapshot.Credential!, "diagnostic", cancellation);
+                await UpstreamResponses.Copy(copy, new HttpResponseReply(context), transport.Snapshot.Credential!, "diagnostic", null, cancellation);
                 completion.TrySetResult(new(response.StatusCode, bytes, streaming));
             }
             // 只接住网络、读写、取消、中转失败和统一身份缺失：把原因交给等待方，并中断本机连接，避免客户端拿到半截响应后继续重试。
             catch (Exception error) when (error is HttpRequestException or IOException or OperationCanceledException or RelayFailure or ClaudeCodeIdentityUnavailableException)
             {
                 if (official && !dispatched && error is RelayFailure or ClaudeCodeIdentityUnavailableException)
-                    diagnostics?.Record(correlation, "local_rejection", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint, error: "local_rejection");
+                    _diagnostics.Record(correlation, "local_rejection", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint, error: "local_rejection");
                 completion.TrySetException(error); context.Abort();
             }
         }, reply => (int)reply.Status is >= 200 and < 300, cancellation);
@@ -93,12 +111,12 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
     /// </summary>
     private async Task<T> Session<T>(string? model, string? entrypoint, Uri target, bool officialOperation, Func<HttpContext, TaskCompletionSource<T>, Task> handle, Func<T, bool> settle, CancellationToken cancellation)
     {
-        using var operation = officialOperation ? siteIdentity.Enter() : null;
-        var executable = launcher.FindClaude();
-        var route = proxy.Resolve(target);
+        using var operation = officialOperation ? _siteIdentity.Enter() : null;
+        var executable = _launcher.FindClaude();
+        var route = _proxy.Resolve(target);
         var parent = Path.GetFullPath(Path.GetTempPath());
         var directory = Path.GetFullPath(Path.Combine(parent, "HouseholdRelay-diagnostic-" + Guid.NewGuid().ToString("N")));
-        protector.ProtectDirectory(directory);
+        _protector.ProtectDirectory(directory);
         var localToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously); var dispatched = 0;
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [], ContentRootPath = directory });
@@ -118,8 +136,8 @@ internal sealed class ClaudeCodeProbe(IClientLauncher launcher, ISecretProtector
         {
             await app.StartAsync(cancellation);
             var start = Start(executable, directory, app.Urls.Single(), localToken, model, route, entrypoint);
-            configuration.PrepareTransient(Path.Combine(directory, "config"));
-            owned = officialOperation ? ownedProcesses.Starting() : null;
+            _configuration.PrepareTransient(Path.Combine(directory, "config"));
+            owned = officialOperation ? _ownedProcesses.Starting() : null;
             Task output, errors;
             if (entrypoint == "cli")
             {

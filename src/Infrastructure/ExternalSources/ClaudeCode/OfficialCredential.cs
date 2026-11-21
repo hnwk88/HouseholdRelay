@@ -11,8 +11,6 @@ public sealed class OfficialCredential(string accessToken, DateTimeOffset? expir
     /// <summary>凭据文件名；Claude Code 在 Windows 上把官方登录凭据明文写在配置目录的这个文件里。</summary>
     public const string FileName = ".credentials.json";
 
-    /// <summary>导入的登录文件上限；Claude Code 写的凭据文件只有几 KB，超过的不是它。</summary>
-    public const int MaxFileBytes = 64 * 1024;
 
     /// <summary>当前访问令牌；只用于发往上游的 Authorization 头和脱敏。</summary>
     public string AccessToken { get; } = accessToken;

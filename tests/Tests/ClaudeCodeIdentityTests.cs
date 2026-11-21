@@ -53,7 +53,7 @@ static class ClaudeCodeIdentityTests
         await using var web = await Official(claude, mock, services => services.AddSingleton<IClaudeCodeIdentitySource>(provider =>
         {
             var launcher = new NativeCliIsolationLauncher();
-            return new ClaudeCodeIdentitySource(launcher, new ClaudeCodeProbe(launcher, provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<IUpstreamProxy>(), provider.GetRequiredService<IClaudeConfigurationPreparation>(), provider.GetRequiredService<ISiteIdentityService>(), provider.GetRequiredService<IOwnedClaudeProcesses>()), TimeProvider.System, provider.GetRequiredService<ISiteIdentityService>());
+            return new ClaudeCodeIdentitySource(launcher, new ClaudeCodeProbe(launcher, provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<IUpstreamProxy>(), provider.GetRequiredService<IClaudeConfigurationPreparation>(), provider.GetRequiredService<ISiteIdentityService>(), provider.GetRequiredService<IOwnedClaudeProcesses>(), provider.GetRequiredService<Application.Interfaces.Relay.IProtocolDiagnostics>()), TimeProvider.System, provider.GetRequiredService<ISiteIdentityService>());
         }));
         var study = await web.Identities.Create("书房"); var bedroom = await web.Identities.Create("卧室");
         var beforeBusiness = mock.Calls.Count;
@@ -165,7 +165,7 @@ static class ClaudeCodeIdentityTests
                 "The message carries the copyable switch command: " + said);
         }
         Check(mock.Calls.Count == before, "A switched-off Claude Code request never reaches the official upstream");
-        using var lease = await web.Relay.Upstreams.Acquire();
+        using var lease = await web.Pool.Acquire();
         Check(!lease.Paused && lease.CooldownSeconds == 0, "The local refusal does not pause or cool down the upstream");
         // 非 Claude Code 客户端（无 claude-cli User-Agent）不判这一条，照旧放行。
         using (var other = await Send(web, person.Token, new string('a', 64), ("User-Agent", "some-sdk/1.0")))
@@ -430,7 +430,7 @@ static class ClaudeCodeIdentityTests
     /// </summary>
     private static async Task Same(WebFixture web, string sentence)
     {
-        var state = web.Relay.Upstreams.Status((await web.Upstreams.ReadActive()).Version);
+        var state = web.Pool.Status((await web.Upstreams.ReadActive()).Version);
         Check(!state.Paused && state.CooldownSeconds == 0, "Refusing to send is not the official upstream's fault");
         var report = await Settled(web, 1); var row = report.Rows.Single(); var attempt = report.AttemptsOf(row.RequestId).Single();
         Check(row is { Outcome: "failed", Dispatched: false } && attempt.ErrorType == "identity_unavailable" && attempt.ErrorMessage == sentence, JsonSerializer.Serialize(attempt));

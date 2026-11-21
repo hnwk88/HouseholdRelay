@@ -57,6 +57,12 @@ sealed class WebFixture : IAsyncDisposable
     public IAdministratorService Administrators { get; }
     /// <summary>网页主机内的中转服务实例，释放夹具时需要单独释放。</summary>
     public RelayServer Relay { get; }
+    /// <summary>网页主机内的上游连接池，用于取租约、读暂停与冷却状态。</summary>
+    public IUpstreamPool Pool => App.Services.GetRequiredService<IUpstreamPool>();
+    /// <summary>网页主机内的准入控制，用于等活动与排队计数。</summary>
+    public Admission Admission => App.Services.GetRequiredService<Admission>();
+    /// <summary>网页主机内的用量服务，用于核对转发记下的用量。</summary>
+    public IUsageService RelayUsage => App.Services.GetRequiredService<IUsageService>();
     /// <summary>网页主机内的配置服务，用于读取网页保存后的配置。</summary>
     public IConfigurationService Settings => App.Services.GetRequiredService<IConfigurationService>();
     /// <summary>网页主机内的上游管理服务，用于核对网页配置、测试和激活的上游。</summary>
@@ -130,7 +136,7 @@ sealed class WebFixture : IAsyncDisposable
     }
     /// <summary>释放 HTTP 客户端，停止并释放网页主机和中转服务，最后删除临时数据目录。</summary>
     public async ValueTask DisposeAsync()
-    { Http.Dispose(); await App.StopAsync(); await App.DisposeAsync(); Relay.Dispose(); Home.Dispose(); }
+    { Http.Dispose(); await App.StopAsync(); await App.DisposeAsync(); Home.Dispose(); }
 }
 
 sealed class PausedUpload : HttpContent

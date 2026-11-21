@@ -1,12 +1,11 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Security.Cryptography;
+using Application.Contracts.Uploads;
 using Application.Interfaces.ClaudeCode;
 using Application.Interfaces.Identity;
 using Application.Interfaces.Upstream;
-using Application.Services.Upstream;
 using Core.Upstream;
-using Infrastructure.ExternalSources.ClaudeCode;
 
 namespace HouseholdRelay.Pages;
 
@@ -95,7 +94,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         {
             if (ImportFile is null || ImportFile.Length == 0) throw new InvalidOperationException("请先选择要导入的登录文件（.credentials.json），再按「导入登录文件」。");
             // 最多读到上限多一个字节：够判断超限，又不把超大的上传整份读进内存；是否超限由服务那一处判定、读出。
-            content = new byte[(int)Math.Min(ImportFile.Length, OfficialCredential.MaxFileBytes + 1)];
+            content = new byte[(int)Math.Min(ImportFile.Length, UploadLimits.OfficialCredentialBytes + 1)];
             await using (var input = ImportFile.OpenReadStream())
                 if (await input.ReadAtLeastAsync(content, content.Length, false, HttpContext.RequestAborted) < content.Length)
                     throw new InvalidOperationException("登录文件没有读完整，请重新选择后再按「导入登录文件」。");
@@ -193,7 +192,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         {
             if (UpstreamFile is null || UpstreamFile.Length == 0) throw new InvalidOperationException("请先选择旧电脑上导出的文件，再按「导入上游」。");
             // 最多读到上限多一个字节：够判断超限，又不把超大的上传整份读进内存；是否超限由服务那一处判定、读出。
-            content = new byte[(int)Math.Min(UpstreamFile.Length, UpstreamService.MaxImportBytes + 1)];
+            content = new byte[(int)Math.Min(UpstreamFile.Length, UploadLimits.UpstreamExportBytes + 1)];
             await using (var input = UpstreamFile.OpenReadStream())
                 if (await input.ReadAtLeastAsync(content, content.Length, false, HttpContext.RequestAborted) < content.Length)
                     throw new InvalidOperationException("导出文件没有读完整，请重新选择后再按「导入上游」。");

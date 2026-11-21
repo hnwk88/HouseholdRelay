@@ -67,7 +67,7 @@ static class ProxySettingsTests
         using var response = await fixture.Send(); var body = await response.Content.ReadAsStringAsync();
         Check((int)response.StatusCode == 502 && body.Contains("proxy is enabled but unavailable") && fixture.Calls.IsEmpty, body);
         await using var mock = await UpstreamFixture.Create();
-        var probe = new UpstreamProbe(new AbsentClaudeCode(), unavailable, new AbsentIdentity());
+        var probe = new UpstreamProbe(new AbsentClaudeCode(), unavailable, new AbsentIdentity(), new FixedSiteIdentity(new string('e', 64)));
         var catalog = await probe.Discover(new UpstreamSnapshot(1, mock.Options() with { AuthenticationManual = false }, "fixture-proxy-secret"), CancellationToken.None);
         Check(catalog.Status == "failed" && catalog.Message.Contains("已选择自动检测系统代理") && mock.Calls.IsEmpty, catalog.Message);
     }

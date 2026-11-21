@@ -13,8 +13,20 @@ namespace Infrastructure.ExternalSources.Upstream;
 /// 独立诊断已保存上游：读模型目录时探测认证方式，最小调用被拒时按需改用 Claude Code；仅完成有效 Messages 调用后允许切换。
 /// 官方账户读模型目录与测试都只带本机 Claude Code 的统一身份，测试直接用真 Claude Code，不发标准调用。
 /// </summary>
-internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy proxy, IClaudeCodeIdentitySource identities, ISiteIdentityService? siteIdentity = null) : IUpstreamProbe
+internal sealed class UpstreamProbe : IUpstreamProbe
 {
+    private readonly IClaudeCodeProbe _claudeCode;
+    private readonly IUpstreamProxy _proxy;
+    private readonly IClaudeCodeIdentitySource _identities;
+    private readonly ISiteIdentityService _siteIdentity;
+
+    /// <summary>四个依赖全部必填，构造时当场判空：站点身份不再可省，发往官方的探测一律进站点维护许可。</summary>
+    public UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy proxy, IClaudeCodeIdentitySource identities, ISiteIdentityService siteIdentity)
+    {
+        ArgumentNullException.ThrowIfNull(claudeCode); ArgumentNullException.ThrowIfNull(proxy); ArgumentNullException.ThrowIfNull(identities); ArgumentNullException.ThrowIfNull(siteIdentity);
+        _claudeCode = claudeCode; _proxy = proxy; _identities = identities; _siteIdentity = siteIdentity;
+    }
+
     /// <summary>失败读句里引用上游原话的最大字符数（含截断时补的省略号）。</summary>
     private const int QuoteLimit = 200;
 
@@ -22,11 +34,11 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     public async Task<ModelCatalog> Discover(UpstreamSnapshot snapshot, CancellationToken cancellation)
     {
         using var timeout = Limit(cancellation, 30);
-        using var operation = snapshot.Options.OfficialAccount ? siteIdentity?.Enter() : null;
+        using var operation = snapshot.Options.OfficialAccount ? _siteIdentity.Enter() : null;
         var options = snapshot.Options;
         try
         {
-            var identity = options.OfficialAccount ? await identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token) : null;
+            var identity = options.OfficialAccount ? await _identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token) : null;
             var catalog = await Catalog(snapshot, UpstreamDetection.AuthenticationOrder(options), identity, timeout.Token);
             var manual = options.AuthenticationManual && options.Mode != "oauth" ? "（手动指定）" : "";
             return catalog.Status switch
@@ -62,7 +74,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     /// </summary>
     public async Task<ProbeResult> Run(UpstreamSnapshot snapshot, CancellationToken cancellation)
     {
-        using var operation = snapshot.Options.OfficialAccount ? siteIdentity?.Enter() : null;
+        using var operation = snapshot.Options.OfficialAccount ? _siteIdentity.Enter() : null;
         var options = snapshot.Options; var used = options;
         var connection = "unverified"; var authentication = "unverified"; var discovery = "unverified";
         var models = Array.Empty<string>(); string? verifiedModel = null; var checkedAt = DateTimeOffset.UtcNow;
@@ -71,7 +83,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         using var timeout = Limit(cancellation, 60);
         try
         {
-            var identity = options.OfficialAccount ? await identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token) : null;
+            var identity = options.OfficialAccount ? await _identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token) : null;
             var order = UpstreamDetection.AuthenticationOrder(options);
             // 获取模型已确认的认证方式排在最前，其余按固定顺序在后。
             order = [.. order.Where(item => item == options.Authentication), .. order.Where(item => item != options.Authentication)];
@@ -84,7 +96,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
             foreach (var method in catalog.Authentication is { } accepted ? UpstreamDetection.StartingFrom(order, accepted) : order)
             {
                 var attempt = options with { Authentication = method };
-                using var transport = new UpstreamConnection(new(snapshot.Version, attempt, snapshot.Credential, accountUuid: snapshot.AccountUuid), proxy, 1);
+                using var transport = new UpstreamConnection(new(snapshot.Version, attempt, snapshot.Credential, accountUuid: snapshot.AccountUuid), _proxy, 1);
                 var (reply, diagnostic, triedClaude) = await Call(transport, attempt, identity, timeout.Token);
                 used = attempt with { Diagnostic = diagnostic };
                 // 401/403 说明这种认证方式不被接受，换下一种；全部用完再判失败。
@@ -127,12 +139,12 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     public async Task<OfficialAccountProfile> Profile(UpstreamSnapshot snapshot, CancellationToken cancellation)
     {
         using var timeout = Limit(cancellation, 30);
-        using var operation = siteIdentity?.Enter();
+        using var operation = _siteIdentity.Enter();
         const string next = "这个官方账户没有取得账户编号，中转不会用它转发。";
         try
         {
-            var identity = await identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token);
-            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options, snapshot.Credential), proxy, 1);
+            var identity = await _identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token);
+            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options, snapshot.Credential), _proxy, 1);
             using var request = transport.ProfileRequest(identity.Version);
             using var response = await transport.Send(request, timeout.Token);
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) throw new InvalidOperationException(next + "官方拒绝了这个账户的登录凭据，请重新登录官方账户。");
@@ -176,8 +188,8 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         for (var index = 0; index < order.Length; index++)
         {
             var method = order[index];
-            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options with { Authentication = method }, snapshot.Credential, accountUuid: snapshot.AccountUuid), proxy, 1);
-            using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0", identity: identity, deviceId: siteIdentity?.Current.DeviceId);
+            using var transport = new UpstreamConnection(new(snapshot.Version, snapshot.Options with { Authentication = method }, snapshot.Credential, accountUuid: snapshot.AccountUuid), _proxy, 1);
+            using var request = transport.Request("/v1/models", "?limit=100", [], "GET", "HouseholdRelay/1.0", identity: identity, deviceId: _siteIdentity.Current.DeviceId);
             using var response = await transport.Send(request, cancellation);
             var refused = response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
             if (refused && index + 1 < order.Length) continue;
@@ -207,13 +219,13 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     /// </summary>
     private async Task<(ProbeReply Reply, string Diagnostic, bool TriedClaude)> Call(UpstreamConnection transport, UpstreamOptions attempt, ClaudeCodeIdentity? identity, CancellationToken cancellation)
     {
-        if (attempt.OfficialAccount) return (await claudeCode.Run(transport, identity, cancellation), "claude-code", false);
-        if (attempt.DiagnosticManual && attempt.Diagnostic == "claude-code") return (await claudeCode.Run(transport, null, cancellation), "claude-code", true);
+        if (attempt.OfficialAccount) return (await _claudeCode.Run(transport, identity, cancellation), "claude-code", false);
+        if (attempt.DiagnosticManual && attempt.Diagnostic == "claude-code") return (await _claudeCode.Run(transport, null, cancellation), "claude-code", true);
         var standard = await StandardCall(transport, cancellation);
         if (attempt.DiagnosticManual || Accepted(standard, transport.Snapshot.Credential!) || standard.Status is HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
             return (standard, "messages", false);
-        if (!claudeCode.IsAvailable) return (standard, "messages", false);
-        return (await claudeCode.Run(transport, null, cancellation), "claude-code", true);
+        if (!_claudeCode.IsAvailable) return (standard, "messages", false);
+        return (await _claudeCode.Run(transport, null, cancellation), "claude-code", true);
     }
 
     /// <summary>标准调用是否已经成功：2xx 且正文是真实的 Messages 回复；正文无法解析时视为未成功。</summary>
@@ -234,7 +246,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
         : attempt.DiagnosticManual && diagnostic == "messages" ? $"最小模型调用返回 HTTP {status}，请检查模型权限和上游配置。若这家只接受 Claude Code，可在高级设置把检测方式改回自动判断。"
         : attempt.DiagnosticManual || attempt.OfficialAccount ? $"Claude Code 实际调用返回 HTTP {status}，请检查模型名称和权限。"
         : triedClaude ? $"标准 Messages 和 Claude Code 实际调用都没有通过（最后一次 HTTP {status}），请检查模型名称和权限。"
-        : claudeCode.IsAvailable ? $"最小模型调用返回 HTTP {status}，请检查模型名称和权限。"
+        : _claudeCode.IsAvailable ? $"最小模型调用返回 HTTP {status}，请检查模型名称和权限。"
         : $"标准 Messages 调用被上游拒绝（HTTP {status}），本机没有安装 Claude Code，无法再用实际客户端测试。请检查模型权限，或在本机安装 Claude Code 后重试。";
 
     /// <summary>标准 Messages 检测：用候选配置的模型发一次非流式、最多 16 个令牌的最小调用，读回有界正文（上限 1 MB）交给调用方校验；请求与响应在方法内释放。</summary>
@@ -284,7 +296,7 @@ internal sealed class UpstreamProbe(IClaudeCodeProbe claudeCode, IUpstreamProxy 
     }
 
     /// <summary>上游回 5xx 时的原因与下一步：可能是上游暂时故障，也可能是按地区屏蔽了当前网络出口；附上当前代理方式，指向「查代理出口」而不是「查地址」。</summary>
-    private string Unavailable() => $"上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：{proxy.Describe()}请检查代理出口后重试。";
+    private string Unavailable() => $"上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：{_proxy.Describe()}请检查代理出口后重试。";
 
     /// <summary>获取模型失败时的结果：认证方式未确定，目录为空。</summary>
     private static ModelCatalog Failed(string message) => new("failed", null, [], message);

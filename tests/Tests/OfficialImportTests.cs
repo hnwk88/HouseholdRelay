@@ -82,7 +82,7 @@ static class OfficialImportTests
     /// <summary>文件超过 64 KB：在解析之前就拒绝。</summary>
     public static Task ImportOversize() => Refused("success", JsonSerializer.SerializeToUtf8Bytes(new
     {
-        claudeAiOauth = new { accessToken = ImportedToken, refreshToken = "fixture-refresh-token" }, padding = new string('x', OfficialCredential.MaxFileBytes)
+        claudeAiOauth = new { accessToken = ImportedToken, refreshToken = "fixture-refresh-token" }, padding = new string('x', Application.Contracts.Uploads.UploadLimits.OfficialCredentialBytes)
     }), "选的文件超过 64 KB，不是 Claude Code 的登录文件。");
 
     /// <summary>本机没装 Claude Code：拒绝导入（续期要靠它），不建账户目录。</summary>

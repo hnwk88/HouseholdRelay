@@ -31,7 +31,7 @@ static class UsageConcurrencyTests
         var management = Task.Run(async () =>
         {
             for (var index = 0; index < 10; index++)
-            { await web.Identities.Rename(a.UserId, "并发甲" + index); _ = await web.Relay.Usage!.Query(new(a.UserId)); await Task.Delay(10); }
+            { await web.Identities.Rename(a.UserId, "并发甲" + index); _ = await web.RelayUsage.Query(new(a.UserId)); await Task.Delay(10); }
         });
         // 等 48 个并发请求和并行的管理写入、查询全部结束，验证用量写入与管理事务交错时互不阻塞、不丢记录。
         var statuses = await Task.WhenAll(requests); await management;
@@ -39,18 +39,18 @@ static class UsageConcurrencyTests
         var report = await Settled(web, 48); var elapsed = timer.Elapsed;
         Check(elapsed < TimeSpan.FromSeconds(20), "Small deployment load exceeded the bounded test budget");
         Check(report.Total == 48 && report.Rows.Count == 25 && report.Summary[0].Tokens == new UsageTokens(96, 144));
-        var second = await web.Relay.Usage!.Query(new(Page: 2)); Check(second.Rows.Count == 23 && !second.Rows.Select(row => row.RequestId).Intersect(report.Rows.Select(row => row.RequestId)).Any());
+        var second = await web.RelayUsage.Query(new(Page: 2)); Check(second.Rows.Count == 23 && !second.Rows.Select(row => row.RequestId).Intersect(report.Rows.Select(row => row.RequestId)).Any());
         var filter = new UsageFilter(a.UserId, before, DateTimeOffset.UtcNow.AddSeconds(1), "inference", "fixture-model", "succeeded");
-        Check((await web.Relay.Usage.Query(filter)).Total == 24 && (await web.Relay.Usage.Query(filter with { Model = "absent" })).Total == 0);
-        Check((await web.Relay.Usage.Query(filter with { Until = before })).Total == 0);
+        Check((await web.RelayUsage.Query(filter)).Total == 24 && (await web.RelayUsage.Query(filter with { Model = "absent" })).Total == 0);
+        Check((await web.RelayUsage.Query(filter with { Until = before })).Total == 0);
         using (var connection = web.Database.Open())
         {
             using var command = RelayDatabase.Command(connection, null, "EXPLAIN QUERY PLAN SELECT request_id FROM usage_requests WHERE user_id=$user AND request_started_at >= $cutoff ORDER BY request_started_at DESC,request_id DESC LIMIT 25", ("$user", a.UserId), ("$cutoff", DateTimeOffset.UtcNow.AddDays(-40).UtcTicks));
             using var reader = command.ExecuteReader(); var plan = new List<string>(); while (reader.Read()) plan.Add(reader.GetString(3));
             Check(plan.Any(line => line.Contains("SEARCH") && line.Contains("usage_user_time")), "Personal window queries must use their covering index");
         }
-        var removed = await web.Relay.Usage.Cleanup(); Check(removed == 10000 && (await web.Relay.Usage.Query(new())).Total == 48);
-        Check(upstream.Calls.Count == 50 && web.Relay.Usage.PersistenceFailures == 0);
+        var removed = await web.RelayUsage.Cleanup(); Check(removed == 10000 && (await web.RelayUsage.Query(new())).Total == 48);
+        Check(upstream.Calls.Count == 50 && web.RelayUsage.PersistenceFailures == 0);
         Console.WriteLine($"USAGE LOAD: 48 concurrent requests + 10 management writes/queries, {elapsed.TotalMilliseconds:F0} ms; deleted {removed} old rows in batches; index=usage_user_time");
     }
 
@@ -65,7 +65,7 @@ static class UsageConcurrencyTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         upstream.Handler = async context => { entered.TrySetResult(); await release.Task.WaitAsync(context.RequestAborted); await Json(context, new { input_tokens = 5, output_tokens = 6 }); };
         var first = Call(web, user.Token); await entered.Task;
-        var second = Call(web, user.Token); await Until(() => web.Relay.Admission.Queued == 1);
+        var second = Call(web, user.Token); await Until(() => web.Admission.Queued == 1);
         var rotated = await web.Identities.Rotate(user.UserId); release.TrySetResult();
         Check((int)await first == 200 && (int)await second == 401);
         var report = await Settled(web, 2);

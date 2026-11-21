@@ -160,8 +160,8 @@ static partial class FoundationTests
             return await fixture.Http.SendAsync(request);
         }
         var first = Send(a.Token); await entered.Task;
-        var second = Send(b.Token); await Until(() => fixture.Relay.Admission.Active == 2);
-        var queued = Send(a.Token); await Until(() => fixture.Relay.Admission.Queued == 1);
+        var second = Send(b.Token); await Until(() => fixture.Admission.Active == 2);
+        var queued = Send(a.Token); await Until(() => fixture.Admission.Queued == 1);
         var external = new TestProcess(home.Path).Identities; var rotated = await external.Rotate(a.UserId);
         release.TrySetResult();
         using var r1 = await first; using var r2 = await second; using var rq = await queued;
@@ -171,7 +171,7 @@ static partial class FoundationTests
         using var upload = new PausedUpload(); using var uploadRequest = fixture.Request();
         uploadRequest.Content = upload; uploadRequest.Headers.Authorization = new("Bearer", b.Token);
         var response = fixture.Http.SendAsync(uploadRequest); await upload.Started.Task;
-        await Until(() => fixture.Relay.Admission.Active == 1);
+        await Until(() => fixture.Admission.Active == 1);
         await external.SetEnabled(b.UserId, false); upload.Continue.TrySetResult();
         using var rejected = await response; Check(rejected.StatusCode == HttpStatusCode.Unauthorized && fixture.Calls.Count == 3);
         // 改名后仍共享同一人的并发槽；不能通过新显示名绕过排队。

@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.Json;
 using Application.Contracts.Upstream;
+using Application.Contracts.Uploads;
 using Application.DependencyInjection;
 using Application.Interfaces.Configuration;
 using Application.Interfaces.Security;
@@ -21,9 +22,6 @@ namespace Application.Services.Upstream;
 /// </summary>
 public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts, IPasswordCipher cipher, ISiteIdentityService siteIdentity) : IUpstreamService
 {
-    /// <summary>导出文件的大小上限；几十家上游连同登录文件也远小于它，再大就不是导出文件。</summary>
-    public const int MaxImportBytes = 1024 * 1024;
-
     /// <summary>
     /// 读取活动上游组成快照（含关联的已保存上游主键与名称）：官方登录上游读它配置目录里的最新令牌，其余解密库中凭据；
     /// 活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>，未配置凭据（或登录凭据已不在）时快照的凭据为 null。
@@ -306,12 +304,12 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// <summary>
     /// 用 <paramref name="password"/> 解开导出文件，按文件里的顺序逐家加成未测试上游，排在已有上游后面：API 密钥与账户令牌走 <see cref="SaveCandidate"/>，
     /// 官方账户的登录文件走 <see cref="ImportOfficial"/>（同一套校验、各自的账户目录），名称照文件。
-    /// 文件超过 <see cref="MaxImportBytes"/>、不是导出文件、格式版本不认识、密码不对、文件被改过、读不懂或活动版本已变化时抛出 <see cref="InvalidOperationException"/>，一家都不写；
+    /// 文件超过 <see cref="UploadLimits.UpstreamExportBytes"/>、不是导出文件、格式版本不认识、密码不对、文件被改过、读不懂或活动版本已变化时抛出 <see cref="InvalidOperationException"/>，一家都不写；
     /// 解开以后某一家被拒（例如本机没装 Claude Code）只记在它自己的结果里，其余照导。解开的正文和登录文件用完清零。
     /// </summary>
     public async Task<IReadOnlyList<UpstreamImportOutcome>> Import(long expectedVersion, byte[] file, string password, CancellationToken cancellation)
     {
-        if (file.Length > MaxImportBytes) throw new InvalidOperationException("选的文件超过 1 MB，不是上游导出文件。请选旧电脑上按「导出加密文件」下载的那个文件。");
+        if (file.Length > UploadLimits.UpstreamExportBytes) throw new InvalidOperationException("选的文件超过 1 MB，不是上游导出文件。请选旧电脑上按「导出加密文件」下载的那个文件。");
         if (password.Length is 0 or > 128) throw new InvalidOperationException("请输入导出时设的那个密码（12 至 128 个字符），再按「导入上游」。");
         var plain = cipher.Open(file, password);
         UpstreamArchive? archive;

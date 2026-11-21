@@ -50,13 +50,13 @@ static class UsageMoneyTests
         var count = 0;
         foreach (var (scenario, money) in expected)
         { Check((int)await Call(web, user.Token, scenario) == 200); Check((await Settled(web, ++count)).Rows[0].Money == money, scenario + " money source/amount"); }
-        var summary = (await web.Relay.Usage!.Query(new())).Summary[0];
+        var summary = (await web.RelayUsage.Query(new())).Summary[0];
         Check(summary.Money.Single(item => item.Currency == "USD" && item.Source == "reported").Amount == 0.243456789m);
         Check(summary.Money.Count == 3 && summary.UnknownAmounts == 0);
         Check((await Personal(web, user.Token)).Summary[0].Money.Count == 3);
         await web.Login(); var html = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + "/Usage"));
         Check(html.Contains("0.243456789 USD") && html.Contains("1.25 CNY") && html.Contains("估算"));
-        Check((await web.Relay.Usage.Query(new())).Periods.Sum(period => period.Summary.Requests) == 5);
+        Check((await web.RelayUsage.Query(new())).Periods.Sum(period => period.Summary.Requests) == 5);
     }
 
     /// <summary>

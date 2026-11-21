@@ -1,16 +1,16 @@
 ﻿using System.Security.Cryptography;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Application.Contracts.Uploads;
 using Application.Interfaces.Certificates;
 using Application.Interfaces.Configuration;
 using Core.Certificates;
 using HouseholdRelay.Relay;
-using Infrastructure.ExternalSources.Upstream;
 
 namespace HouseholdRelay.Pages;
 
 /// <summary>创建私有证书或导入 PFX，统一验证地址并保护秘密输入。</summary>
-public sealed class HttpsModel(IConfigurationService settings, ICertificateService certificates, RelayServer relay) : PageModel
+public sealed class HttpsModel(IConfigurationService settings, ICertificateService certificates, IHttpsListener relay) : PageModel
 {
     /// <summary>表单回传的设置版本号，用于乐观并发：保存时与当前版本不一致即拒绝，防止覆盖他人在别的标签页刚做的修改；保存成功后刷新为新版本。</summary>
     [BindProperty] public long Version { get; set; }
@@ -44,9 +44,11 @@ public sealed class HttpsModel(IConfigurationService settings, ICertificateServi
         {
             if (ModelState.IsValid)
             {
-                if (CertificateFile is null || CertificateFile.Length is 0 or > 1024 * 1024) throw new InvalidOperationException("请选择小于 1 MB 的 PFX 证书文件。");
-                await using var input = CertificateFile.OpenReadStream();
-                var bytes = await UpstreamResponses.ReadBounded(input, 1024 * 1024, HttpContext.RequestAborted);
+                if (CertificateFile is null || CertificateFile.Length is 0 or > UploadLimits.CertificateBytes) throw new InvalidOperationException("请选择小于 1 MB 的 PFX 证书文件。");
+                var bytes = new byte[(int)CertificateFile.Length];
+                await using (var input = CertificateFile.OpenReadStream())
+                    if (await input.ReadAtLeastAsync(bytes, bytes.Length, false, HttpContext.RequestAborted) < bytes.Length)
+                    { CryptographicOperations.ZeroMemory(bytes); throw new InvalidOperationException("证书文件没有读完整，请重新选择后再导入。"); }
                 try { await certificates.Import(Version, PublicUrl, ListenPort, bytes, Password); }
                 // PFX 字节里含服务器私钥，导入成功或失败都立即清零，不让私钥留在托管内存里等待回收。
                 finally { CryptographicOperations.ZeroMemory(bytes); }

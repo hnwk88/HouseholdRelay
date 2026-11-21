@@ -34,8 +34,8 @@ static class UsageFixture
     /// <summary>等待用量记录总数达到 count 且没有待写入的记录，再返回全量报表；约 2 秒内未收敛即判失败。</summary>
     public static async Task<UsageReport> Settled(WebFixture web, long count)
     {
-        await Until(async () => { var report = await web.Relay.Usage!.Query(new()); return report.Total == count && report.Summary.All(row => row.Pending == 0); });
-        return await web.Relay.Usage!.Query(new());
+        await Until(async () => { var report = await web.RelayUsage.Query(new()); return report.Total == count && report.Summary.All(row => row.Pending == 0); });
+        return await web.RelayUsage.Query(new());
     }
     /// <summary>以个人令牌查询 /my-usage/data，要求成功并返回反序列化后的个人用量报表。</summary>
     public static async Task<UsageReport> Personal(WebFixture web, string token)

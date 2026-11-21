@@ -10,12 +10,39 @@ namespace Infrastructure.ExternalSources.Upstream;
 /// 按数据库活动版本更换在用那一家的连接，旧请求的租约继续使用原地址、凭据和状态；备用上游按已保存上游主键各持一个连接，凭据、暂停、冷却、暂避各管各的。
 /// 活动版本换了，在用与备用的连接都随新版本重建。
 /// </summary>
-internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfiguration config, IUpstreamProxy proxy, TimeProvider clock, ISiteIdentityService? siteIdentity = null) : IUpstreamPool
+internal sealed class UpstreamPool : IUpstreamPool
 {
+    private readonly IActiveUpstreamSource _source;
+    private readonly IUpstreamProxy _proxy;
+    private readonly TimeProvider _clock;
+    /// <summary>此刻能否发往官方账户：正式服务问站点身份（维护中为假），独立中转没有站点身份，恒为真。</summary>
+    private readonly Func<bool> _officialAvailable;
+
+    /// <summary>正式服务：五个依赖全部必填，构造时当场判空；官方账户能否发由站点身份决定。</summary>
+    public UpstreamPool(IActiveUpstreamSource source, RelayConfiguration config, IUpstreamProxy proxy, TimeProvider clock, ISiteIdentityService siteIdentity)
+        : this(source, config, proxy, clock, Available(siteIdentity)) { }
+
+    /// <summary>独立中转（不连数据库、没有站点身份）：官方账户恒可发，与站点身份无关。</summary>
+    public static UpstreamPool Standalone(IActiveUpstreamSource source, RelayConfiguration config, IUpstreamProxy proxy, TimeProvider clock) =>
+        new(source, config, proxy, clock, () => true);
+
+    /// <summary>两个入口的汇合处。</summary>
+    private UpstreamPool(IActiveUpstreamSource source, RelayConfiguration config, IUpstreamProxy proxy, TimeProvider clock, Func<bool> officialAvailable)
+    {
+        ArgumentNullException.ThrowIfNull(source); ArgumentNullException.ThrowIfNull(config); ArgumentNullException.ThrowIfNull(proxy); ArgumentNullException.ThrowIfNull(clock);
+        _source = source; _proxy = proxy; _clock = clock; _officialAvailable = officialAvailable; _maxConnections = config.MaxConcurrent;
+    }
+
+    /// <summary>站点身份判空后读成「此刻能否发往官方」。</summary>
+    private static Func<bool> Available(ISiteIdentityService siteIdentity)
+    {
+        ArgumentNullException.ThrowIfNull(siteIdentity);
+        return () => siteIdentity.Available;
+    }
     /// <summary>换掉的那一家暂避多久。</summary>
     internal static readonly TimeSpan AvoidFor = TimeSpan.FromMinutes(5);
     private readonly object _sync = new();
-    private readonly int _maxConnections = config.MaxConcurrent;
+    private readonly int _maxConnections;
     private UpstreamConnection? current;
     /// <summary>备用上游的连接，按已保存上游主键；<see cref="order"/> 记最近一次读到的上游页顺序。</summary>
     private readonly Dictionary<long, UpstreamConnection> _standby = [];
@@ -35,12 +62,12 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     /// 取得这次请求的尝试顺序：先只读在用那一家，备用上游等真要用时才读。开关取这次新读的快照：
     /// 连接只在版本或凭据变化时重建，沿用的连接里记的是旧快照，开关保存后不重建连接也要立即生效。
     /// </summary>
-    public async Task<IUpstreamRoute> Route() { var (active, failover) = await Active(); return new UpstreamRoute(this, active, failover, clock); }
+    public async Task<IUpstreamRoute> Route() { var (active, failover) = await Active(); return new UpstreamRoute(this, active, failover, _clock); }
 
     /// <summary>此刻的走法：最近一次接住请求的那家，以及在用与备用里暂停、冷却、暂避中的各家（在用的排前，备用按上游页顺序）。</summary>
     public UpstreamRouting Routing()
     {
-        var now = clock.GetUtcNow();
+        var now = _clock.GetUtcNow();
         // 读在用与备用连接要和替换它们的 Active、Standby 互斥，否则可能读到刚被释放、正被换下的连接。
         lock (_sync)
         {
@@ -53,7 +80,7 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     private async Task<(UpstreamConnection Connection, bool Failover)> Active()
     {
         var read = Interlocked.Increment(ref reads);
-        var snapshot = await source.ReadActive(); var failover = snapshot.Failover;
+        var snapshot = await _source.ReadActive(); var failover = snapshot.Failover;
         // 比较、替换连接和增加引用必须在同一把锁里完成，否则并发请求可能拿到刚被释放的旧连接或各自建出重复连接。
         lock (_sync)
         {
@@ -68,7 +95,7 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
             if (current is null || read > installed && (current.Snapshot.Version != snapshot.Version || !string.Equals(current.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
                 || !string.Equals(current.Snapshot.AccountUuid, snapshot.AccountUuid, StringComparison.Ordinal)))
             {
-                var replacement = new UpstreamConnection(snapshot, proxy, _maxConnections, () => siteIdentity?.Available ?? true);
+                var replacement = new UpstreamConnection(snapshot, _proxy, _maxConnections, _officialAvailable);
                 var previous = current; current = replacement; installed = read; previous?.Dispose();
             }
             else if (read > installed) { installed = read; current.SetIdentityReadBlocked(snapshot.BlockedByIdentity, snapshot.BlockedReason); }
@@ -83,7 +110,7 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     internal async Task<IReadOnlyList<UpstreamConnection>> Standby()
     {
         var read = Interlocked.Increment(ref reads);
-        var snapshots = (await source.ReadStandby()).Where(snapshot => snapshot.UpstreamCandidateId is not null).ToArray();
+        var snapshots = (await _source.ReadStandby()).Where(snapshot => snapshot.UpstreamCandidateId is not null).ToArray();
         // 与在用连接同一把锁：比较、替换、删除和增加引用一起完成，并发请求不会拿到刚释放的连接或各自建出重复连接。
         lock (_sync)
         {
@@ -97,7 +124,7 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
                 if (!stale && !keepBlocked && (connection is null || connection.Snapshot.Version != snapshot.Version || connection.Snapshot.Options != snapshot.Options
                     || !string.Equals(connection.Snapshot.Credential, snapshot.Credential, StringComparison.Ordinal)
                     || !string.Equals(connection.Snapshot.AccountUuid, snapshot.AccountUuid, StringComparison.Ordinal)))
-                { connection?.Dispose(); connection = new UpstreamConnection(snapshot, proxy, _maxConnections, () => siteIdentity?.Available ?? true); _standby[id] = connection; }
+                { connection?.Dispose(); connection = new UpstreamConnection(snapshot, _proxy, _maxConnections, _officialAvailable); _standby[id] = connection; }
                 if (connection is not null)
                 {
                     if (!stale) connection.SetIdentityReadBlocked(snapshot.BlockedByIdentity, snapshot.BlockedReason);
@@ -115,13 +142,13 @@ internal sealed class UpstreamPool(IActiveUpstreamSource source, RelayConfigurat
     internal void Avoid(UpstreamConnection connection, UpstreamAttempt attempt)
     {
         if (!attempt.Avoids) return;
-        connection.Avoid(new(connection.Snapshot.UpstreamCandidateId, "avoid", clock.GetUtcNow() + AvoidFor, attempt.UpstreamStatus, attempt.ErrorType, attempt.ConnectFailure));
+        connection.Avoid(new(connection.Snapshot.UpstreamCandidateId, "avoid", _clock.GetUtcNow() + AvoidFor, attempt.UpstreamStatus, attempt.ErrorType, attempt.ConnectFailure));
     }
 
     /// <summary>记下最近一次把成功响应交给客户端的那一家与时刻。</summary>
     internal void Served(UpstreamConnection connection)
     // 主键与时刻成对写入，页面读出时不会配错。
-    { lock (_sync) { servedId = connection.Snapshot.UpstreamCandidateId; servedAt = clock.GetUtcNow(); } }
+    { lock (_sync) { servedId = connection.Snapshot.UpstreamCandidateId; servedAt = _clock.GetUtcNow(); } }
 
     /// <summary>指定版本的暂停与冷却状态。</summary>
     public (bool Paused, int CooldownSeconds) Status(long version)

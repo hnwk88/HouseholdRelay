@@ -34,9 +34,9 @@ static class UsageStorageTests
         using (var locked = connection.BeginTransaction())
         {
             Check(await Call(web, user.Token) == HttpStatusCode.ServiceUnavailable);
-            Check(upstream.Calls.Count == calls && (await web.Relay.Usage!.Query(new())).Total == 0, "Failed start must not send or invent a record");
+            Check(upstream.Calls.Count == calls && (await web.RelayUsage.Query(new())).Total == 0, "Failed start must not send or invent a record");
         }
-        var client = (await web.Identities.Clients.Authenticate(user.Token))!; var usage = web.Relay.Usage!;
+        var client = (await web.Identities.Clients.Authenticate(user.Token))!; var usage = web.RelayUsage;
         var completed = new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(12, 9));
         await usage.Start("finish-retry", client, "inference"); await usage.Dispatch("finish-retry", 2, null, "fixture-model");
         Task<bool> finish;

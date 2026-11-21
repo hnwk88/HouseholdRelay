@@ -64,7 +64,7 @@ static class UpstreamVersionTests
             using var after = await UpstreamFixture.RelayRequest(web, a.Token, "after-old-error"); Check(after.IsSuccessStatusCode);
             Check(first.Calls.Last().Headers["x-api-key"] == "fixture-old-secret" && second.Calls.Last().Headers["x-api-key"] == "fixture-fresh-secret");
             Check(first.Calls.Count == 3, "Old dispatch must never be replayed to the new upstream");
-            Check(!web.Relay.Upstreams.Status((await service.ReadActive()).Version).Paused && web.Relay.Upstreams.Status((await service.ReadActive()).Version).CooldownSeconds == 0);
+            Check(!web.Pool.Status((await service.ReadActive()).Version).Paused && web.Pool.Status((await service.ReadActive()).Version).CooldownSeconds == 0);
         }
         // 断言提前失败时也放行旧上游的挂起请求，避免夹具释放时卡住。
         finally { release.TrySetResult(); }

@@ -32,15 +32,23 @@ public static class CompositionRoot
         return services;
     }
 
-    /// <summary>登记中转端点及其准入控制；启动配置、鉴权名单、上游连接池和事件日志由其他登记提供。</summary>
+    /// <summary>正式服务的中转：转发服务的十二个依赖全部由容器交进来，漏登记任何一个在构建容器时就报；启动配置、鉴权名单、上游连接池和事件日志由其他登记提供。</summary>
     public static IServiceCollection AddRelayServer(this IServiceCollection services)
+    {
+        services.AddSingleton<IRelayForwarder, RelayForwarder>();
+        return services.AddRelayHost();
+    }
+
+    /// <summary>两种模式共用的中转宿主：准入控制与 HTTP 绑定；管理页经 <see cref="IHttpsListener"/> 读对外 HTTPS 是否已启动。</summary>
+    private static IServiceCollection AddRelayHost(this IServiceCollection services)
     {
         services.AddSingleton<Admission>();
         services.AddSingleton<RelayServer>();
+        services.AddSingleton<IHttpsListener>(provider => provider.GetRequiredService<RelayServer>());
         return services;
     }
 
-    /// <summary>不连数据库的独立中转：固定配置、固定凭据与可选的本机模拟上游，不记录用量。</summary>
+    /// <summary>不连数据库的独立中转：固定配置、固定凭据与可选的本机模拟上游；转发服务走 <see cref="RelayForwarder.Standalone"/>，明确不记用量、不发往官方账户。</summary>
     public static IServiceCollection AddStandaloneRelay(this IServiceCollection services, RelayConfiguration config, string? credential,
         Uri? testUpstream = null, ClientRegistry? clients = null)
     {
@@ -48,11 +56,13 @@ public static class CompositionRoot
         services.AddSingleton(clients ?? new ClientRegistry(config.Clients));
         services.AddSingleton<IActiveUpstreamSource>(FixedUpstreamSource.ForLegacy(config, credential, testUpstream));
         services.TryAddSingleton<IRelayEventLog, NullRelayEventLog>();
-        services.AddUpstreamConnections();
-        return services.AddRelayServer();
+        services.AddStandaloneUpstreamConnections();
+        services.AddSingleton<IRelayForwarder>(provider => RelayForwarder.Standalone(provider.GetRequiredService<RelayConfiguration>(), provider.GetRequiredService<ClientRegistry>(),
+            provider.GetRequiredService<Admission>(), provider.GetRequiredService<IUpstreamPool>(), provider.GetRequiredService<IRelayEventLog>(), provider.GetRequiredService<IUpstreamResponses>()));
+        return services.AddRelayHost();
     }
 
-    /// <summary>命令行子命令（init、account、clients、client）使用的容器；构建时校验全部登记可解析。</summary>
+    /// <summary>命令行子命令（init、account、clients、client）使用的容器；构建时校验全部登记可解析，并校验单例不持有作用域服务。</summary>
     public static ServiceProvider BuildCommandServices(string home) =>
-        new ServiceCollection().AddHouseholdRelay(options => options.Home = home).BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+        new ServiceCollection().AddHouseholdRelay(options => options.Home = home).BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
 }
