@@ -17,12 +17,12 @@ public static class UsageMoneyRules
     /// 否则用发送时的单价快照 JSON（每百万计数单价）按四类计数估算，保留 9 位小数。没有单价快照或所有需要计费的项都缺数据时返回未知金额；
     /// 部分计数或单价缺失时只累加已知部分并标记为部分完整。
     /// </summary>
-    public static UsageMoney Calculate(string kind, UsageEnd end, string? priceJson)
+    public static UsageMoney Calculate(UsageKind kind, UsageEnd end, string? priceJson)
     {
-        if (!end.Dispatched || kind != "inference") return new(Source: "not_applicable", Completeness: "not_applicable");
-        var complete = end.Outcome == "succeeded" && end.Completeness == "complete";
+        if (!end.Dispatched || kind != UsageKind.Inference) return new(Source: MoneySource.NotApplicable, Completeness: MoneyCompleteness.NotApplicable);
+        var complete = end.Outcome == UsageOutcome.Succeeded && end.Completeness == UsageCompleteness.Complete;
         if (end.ReportedMoney is { Amount: not null } reported)
-            return reported with { Completeness = end.Outcome == "succeeded" && reported.Completeness == "complete" ? "complete" : "partial" };
+            return reported with { Completeness = end.Outcome == UsageOutcome.Succeeded && reported.Completeness == MoneyCompleteness.Complete ? MoneyCompleteness.Complete : MoneyCompleteness.Partial };
         if (priceJson is null) return new();
         var price = JsonSerializer.Deserialize<UsagePrice>(priceJson)!;
         decimal? amount = null; var missing = false;
@@ -34,7 +34,7 @@ public static class UsageMoneyRules
             if (tokens is null || rate is null) { missing = true; continue; }
             amount = (amount ?? 0) + tokens.Value * rate.Value / 1000000m;
         }
-        return amount is null ? new() : new(decimal.Round(amount.Value, 9, MidpointRounding.AwayFromZero), price.Currency, "estimated", complete && !missing ? "complete" : "partial");
+        return amount is null ? new() : new(decimal.Round(amount.Value, 9, MidpointRounding.AwayFromZero), price.Currency, MoneySource.Estimated, complete && !missing ? MoneyCompleteness.Complete : MoneyCompleteness.Partial);
     }
 
     /// <summary>从 usage 对象读取上游明确报告的金额：优先 <c>cost_usd</c>（按美元），其次带合法币种的 <c>cost.amount</c> + <c>cost.currency</c>；都没有或不合法时返回 null。</summary>
@@ -42,12 +42,12 @@ public static class UsageMoneyRules
     {
         if (usage.ValueKind != JsonValueKind.Object) return null;
         // Anthropic Messages 没有标准金额字段；这些是明确带币种的可选兼容扩展，不推测无单位 cost 的币种。
-        if (usage.TryGetProperty("cost_usd", out var usd) && Amount(usd) is { } dollars) return new(dollars, "USD", "reported");
+        if (usage.TryGetProperty("cost_usd", out var usd) && Amount(usd) is { } dollars) return new(dollars, "USD", MoneySource.Reported);
         if (!usage.TryGetProperty("cost", out var cost) || cost.ValueKind != JsonValueKind.Object
             || !cost.TryGetProperty("amount", out var value) || Amount(value) is not { } amount
             || !cost.TryGetProperty("currency", out var code) || code.ValueKind != JsonValueKind.String) return null;
         var currency = code.GetString()?.ToUpperInvariant();
-        return ValidCurrency(currency) ? new(amount, currency, "reported") : null;
+        return ValidCurrency(currency) ? new(amount, currency, MoneySource.Reported) : null;
     }
     /// <summary>把数字或数字字符串解析为金额，只接受 0 到 10 亿之间的值并四舍五入到 9 位小数；无法解析、为负或超出范围时返回 null。</summary>
     private static decimal? Amount(JsonElement value)

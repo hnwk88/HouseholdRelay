@@ -172,7 +172,7 @@ public static class DeviceMetadataPathTests
                     content = new[] { new { type = "text", text = "OK" } }, stop_reason = "end_turn" }));
             var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).Version, options, FakeClaude.Credential("fixture-compressed-" + encoding + (streaming ? "-sse" : "-json"), 60), "模拟官方", CancellationToken.None);
             var catalog = await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
-            Check(catalog.Status == "passed" && catalog.Models.SequenceEqual(["fixture-model"]), label + " catalog decoded: " + catalog.Message);
+            Check(catalog.Status == Core.Upstream.CatalogStatus.Passed && catalog.Models.SequenceEqual(["fixture-model"]), label + " catalog decoded: " + catalog.Message);
             var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(candidate)).Uid, ".claude.json");
             using (var recorded = JsonDocument.Parse(File.ReadAllBytes(configuration)))
                 Check(recorded.RootElement.GetProperty("oauthAccount").GetProperty("accountUuid").GetString() == FakeClaude.AccountUuid, label + " profile decoded and recorded");

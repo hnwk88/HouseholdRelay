@@ -38,22 +38,22 @@ public sealed class UpstreamAttempt(int number, long? candidateId, long version,
     /// <summary>上游给的 error.message，已去掉上游凭据与个人令牌并截到 <see cref="MessageLimit"/> 字以内；没有时为 null。</summary>
     public string? ErrorMessage { get; private set; }
     /// <summary>连接失败分类：dns、refused、tls、connect_timeout、proxy、other；不是连接失败时为 null。</summary>
-    public string? ConnectFailure { get; private set; }
+    public ConnectFailure? ConnectFailure { get; private set; }
     /// <summary>这次尝试的去向：client（结果交给客户端）或 next（换下一家）。</summary>
-    public string Disposition { get; private set; } = "client";
+    public AttemptDisposition Disposition { get; private set; } = AttemptDisposition.Client;
 
     /// <summary>
     /// 自动切换时这一次失败该不该换下一家（只在还没向客户端写出任何字节时问）：连不上（含建连超时、TLS 失败）、上游 5xx（含 529）、429、401、403 换；
     /// 代理不可用不换（代理是全局的，换一家也一样连不上），400、404、413 等请求本身的问题和中转自己的拒绝也不换。
     /// 官方账户取不到本机 Claude Code 的统一身份时换（这一家根本没发出，别家不受影响），但不暂避、不暂停、不冷却。
     /// </summary>
-    public bool Switchable => ErrorType == "connection_failed" ? ConnectFailure != "proxy" : ErrorType == "identity_unavailable" || UpstreamStatus is >= 500 and < 600 or 429 or 401 or 403;
+    public bool Switchable => ErrorType == "connection_failed" ? ConnectFailure != Usage.ConnectFailure.Proxy : ErrorType == "identity_unavailable" || UpstreamStatus is >= 500 and < 600 or 429 or 401 or 403;
 
     /// <summary>换掉这一家时要不要让它暂避 5 分钟：连不上与 5xx 要；429 沿用 Retry-After 冷却、401 与 403 沿用认证暂停，不另加暂避。</summary>
     public bool Avoids => ErrorType == "connection_failed" || UpstreamStatus is >= 500 and < 600;
 
     /// <summary>把去向改成「换下一家」：这一次的结果不交给客户端，转去试顺序里的下一家。</summary>
-    public void PassOn() => Disposition = "next";
+    public void PassOn() => Disposition = AttemptDisposition.Next;
 
     /// <summary>收到上游响应头：记下到响应头耗时、状态码，以及格式合规且不含秘密的上游请求编号。</summary>
     public void Headers(int status, string? requestId, Func<string, string> redact)
@@ -76,12 +76,12 @@ public sealed class UpstreamAttempt(int number, long? candidateId, long version,
         DurationMs = Elapsed;
         (ErrorType, ConnectFailure) = error switch
         {
-            OperationCanceledException when clientAborted => ("cancelled", null),
+            OperationCanceledException when clientAborted => ("cancelled", (ConnectFailure?)null),
             ClaudeCodeIdentityUnavailableException => ("identity_unavailable", null),
-            _ when Find<UpstreamProxyUnavailableException>(error) is not null => ("connection_failed", "proxy"),
+            _ when Find<UpstreamProxyUnavailableException>(error) is not null => ("connection_failed", Usage.ConnectFailure.Proxy),
             // SocketsHttpHandler 的建连超时（含 TLS 握手）抛出带 TimeoutException 的取消；中转自己的总超时不带。
-            OperationCanceledException when Find<TimeoutException>(error) is not null => ("connection_failed", "connect_timeout"),
-            OperationCanceledException => ("timeout", null),
+            OperationCanceledException when Find<TimeoutException>(error) is not null => ("connection_failed", Usage.ConnectFailure.ConnectTimeout),
+            OperationCanceledException => ("timeout", (ConnectFailure?)null),
             HttpRequestException request => ("connection_failed", Classify(request)),
             IOException => ("interrupted", null),
             RelayFailure => ("protocol", null),
@@ -92,16 +92,16 @@ public sealed class UpstreamAttempt(int number, long? candidateId, long version,
     }
 
     /// <summary>从 HTTP 建连异常链里分出域名解析、拒绝连接、TLS、建连超时，其余归「其他」。</summary>
-    private static string Classify(HttpRequestException error)
+    private static ConnectFailure Classify(HttpRequestException error)
     {
-        if (error.HttpRequestError == HttpRequestError.SecureConnectionError || Find<AuthenticationException>(error) is not null) return "tls";
-        if (error.HttpRequestError == HttpRequestError.NameResolutionError) return "dns";
+        if (error.HttpRequestError == HttpRequestError.SecureConnectionError || Find<AuthenticationException>(error) is not null) return Usage.ConnectFailure.Tls;
+        if (error.HttpRequestError == HttpRequestError.NameResolutionError) return Usage.ConnectFailure.Dns;
         return Find<SocketException>(error)?.SocketErrorCode switch
         {
-            SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain => "dns",
-            SocketError.ConnectionRefused => "refused",
-            SocketError.TimedOut => "connect_timeout",
-            _ => "other"
+            SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain => Usage.ConnectFailure.Dns,
+            SocketError.ConnectionRefused => Usage.ConnectFailure.Refused,
+            SocketError.TimedOut => Usage.ConnectFailure.ConnectTimeout,
+            _ => Usage.ConnectFailure.Other
         };
     }
 

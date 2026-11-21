@@ -47,7 +47,12 @@ internal static class PersonalUsage
         }
         var page = 1;
         if (query.ContainsKey("page") && !int.TryParse(Value("page"), out page)) throw new RelayFailure(400, "Invalid query page.");
-        var filter = new UsageFilter(self, Date("from"), Date("until"), Value("kind"), Value("model"), Value("outcome"), page,
+        var from = Date("from"); var until = Date("until");
+        UsageKind? kind; UsageOutcome? outcome;
+        try { kind = UsageFilter.Closed<UsageKind>(Value("kind")); outcome = UsageFilter.Closed<UsageOutcome>(Value("outcome")); }
+        // 类别或结果不认识：和筛选校验同一口径，统一转成 400 和固定英文消息。
+        catch (InvalidOperationException) { throw new RelayFailure(400, "Invalid usage query."); }
+        var filter = new UsageFilter(self, from, until, kind, Value("model"), outcome, page,
             query.ContainsKey("granularity") ? Value("granularity").ToString() : "day", query.ContainsKey("timezone") ? Value("timezone").ToString() : "UTC");
         try { filter.Validate(); }
         // 筛选校验的中文提示是写给管理页的，这里统一转成 400 和固定英文消息，不向外部客户端透露校验细节。

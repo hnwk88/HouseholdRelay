@@ -37,7 +37,7 @@ static class UsageStreamingTests
             for (var index = 0; index < bytes.Length; index++)
             { await context.Response.Body.WriteAsync(bytes.AsMemory(index, 1), context.RequestAborted); await context.Response.Body.FlushAsync(context.RequestAborted); }
         };
-        var expected = new[] { ("complete", "succeeded", "complete", 9L), ("truncated", "interrupted", "partial", 4L), ("error", "failed", "partial", 4L), ("tail", "interrupted", "partial", 9L) };
+        var expected = new[] { ("complete", Core.Usage.UsageOutcome.Succeeded, Core.Usage.UsageCompleteness.Complete, 9L), ("truncated", Core.Usage.UsageOutcome.Interrupted, Core.Usage.UsageCompleteness.Partial, 4L), ("error", Core.Usage.UsageOutcome.Failed, Core.Usage.UsageCompleteness.Partial, 4L), ("tail", Core.Usage.UsageOutcome.Interrupted, Core.Usage.UsageCompleteness.Partial, 9L) };
         var count = 0;
         foreach (var (scenario, outcome, completeness, output) in expected)
         {
@@ -90,7 +90,7 @@ static class UsageStreamingTests
             else { try { await stream.CopyToAsync(Stream.Null); } catch (IOException) { /* 超时后中转会中断响应，读取剩余内容时出现 IO 异常属于预期，结论以用量记录为准。 */ } }
             await released.Task.WaitAsync(TimeSpan.FromSeconds(4));
             var report = await Settled(web, 1); var row = report.Rows[0];
-            Check(row.Outcome == (cancel ? "cancelled" : "failed") && row.Completeness == "partial", $"cancel={cancel}, outcome={row.Outcome}, completeness={row.Completeness}");
+            Check(row.Outcome == (cancel ? Core.Usage.UsageOutcome.Cancelled : Core.Usage.UsageOutcome.Failed) && row.Completeness == Core.Usage.UsageCompleteness.Partial, $"cancel={cancel}, outcome={row.Outcome}, completeness={row.Completeness}");
             Check(row.Tokens.Input == 11 && row.Tokens.Output == 4 && row.Dispatched);
             Check(web.Admission.Active == 0 && upstream.Calls.Count == 3);
         }
@@ -115,7 +115,7 @@ static class UsageStreamingTests
         using (var request = Request(web, user.Token))
         using (var response = await web.Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
         { await response.Content.CopyToAsync(Stream.Null); Check(response.IsSuccessStatusCode); }
-        Check((await Settled(web, 1)).Rows[0].Completeness == "complete");
+        Check((await Settled(web, 1)).Rows[0].Completeness == Core.Usage.UsageCompleteness.Complete);
         upstream.Handler = async context =>
         {
             context.Response.ContentType = "text/event-stream";
@@ -129,6 +129,6 @@ static class UsageStreamingTests
             catch (HttpRequestException) { }
         }
         var row = (await Settled(web, 2)).Rows[0];
-        Check(row.Outcome == "failed" && row.Completeness == "partial" && row.Tokens.Input == 11);
+        Check(row.Outcome == Core.Usage.UsageOutcome.Failed && row.Completeness == Core.Usage.UsageCompleteness.Partial && row.Tokens.Input == 11);
     }
 }

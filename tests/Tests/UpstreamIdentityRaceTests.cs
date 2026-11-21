@@ -119,7 +119,7 @@ public static class UpstreamIdentityRaceTests
         using var restored = await web.Pool.Acquire();
         Check(ReferenceEquals(original, restored) && !((UpstreamConnection)restored).IdentityReadBlocked && !restored.Paused && restored.CooldownSeconds == 0,
             "A successful credential reread clears only the local block without replacing the connection.");
-        Check((await web.Upstreams.ReadCandidate(api)).State == "passed");
+        Check((await web.Upstreams.ReadCandidate(api)).State == Core.Upstream.CandidateState.Passed);
     }
 
     /// <summary>导入并测试独立假官方账户；不改变当前活动上游。</summary>

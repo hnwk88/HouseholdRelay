@@ -40,7 +40,7 @@ static class UsageConcurrencyTests
         Check(elapsed < TimeSpan.FromSeconds(20), "Small deployment load exceeded the bounded test budget");
         Check(report.Total == 48 && report.Rows.Count == 25 && report.Summary[0].Tokens == new UsageTokens(96, 144));
         var second = await web.RelayUsage.Query(new(Page: 2)); Check(second.Rows.Count == 23 && !second.Rows.Select(row => row.RequestId).Intersect(report.Rows.Select(row => row.RequestId)).Any());
-        var filter = new UsageFilter(a.UserId, before, DateTimeOffset.UtcNow.AddSeconds(1), "inference", "fixture-model", "succeeded");
+        var filter = new UsageFilter(a.UserId, before, DateTimeOffset.UtcNow.AddSeconds(1), Core.Usage.UsageKind.Inference, "fixture-model", Core.Usage.UsageOutcome.Succeeded);
         Check((await web.RelayUsage.Query(filter)).Total == 24 && (await web.RelayUsage.Query(filter with { Model = "absent" })).Total == 0);
         Check((await web.RelayUsage.Query(filter with { Until = before })).Total == 0);
         using (var connection = web.Database.Open())
@@ -69,14 +69,14 @@ static class UsageConcurrencyTests
         var rotated = await web.Identities.Rotate(user.UserId); release.TrySetResult();
         Check((int)await first == 200 && (int)await second == 401);
         var report = await Settled(web, 2);
-        Check(report.Rows.All(row => row.UserId == user.UserId) && report.Rows.Count(row => !row.Dispatched && row.Completeness == "not_applicable") == 1);
+        Check(report.Rows.All(row => row.UserId == user.UserId) && report.Rows.Count(row => !row.Dispatched && row.Completeness == Core.Usage.UsageCompleteness.NotApplicable) == 1);
         var calls = upstream.Calls.Count;
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             CREATE TRIGGER reject_usage_dispatch BEFORE UPDATE ON usage_requests WHEN NEW.dispatched=1
             BEGIN SELECT RAISE(ABORT,'fixture-dispatch-failure'); END
             """));
         Check((int)await Call(web, rotated.Token) == 503);
-        var row = (await Settled(web, 3)).Rows[0]; Check(!row.Dispatched && row.Outcome == "failed" && row.Completeness == "not_applicable");
+        var row = (await Settled(web, 3)).Rows[0]; Check(!row.Dispatched && row.Outcome == Core.Usage.UsageOutcome.Failed && row.Completeness == Core.Usage.UsageCompleteness.NotApplicable);
         Check(upstream.Calls.Count == calls);
     }
 }

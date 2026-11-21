@@ -6,7 +6,7 @@
 /// </summary>
 public sealed record UpstreamAttemptRow(int Number, long? UpstreamCandidateId, string? Name, long Version, DateTimeOffset StartedAt,
     long? HeadersMs, long DurationMs, int? UpstreamStatus, string? UpstreamRequestId, string? ErrorType, string? ErrorMessage,
-    string? ConnectFailure, string Disposition)
+    ConnectFailure? ConnectFailure, AttemptDisposition Disposition)
 {
     /// <summary>那一家此刻已被删除（停用）；读句在名字后面加「（已删除）」。</summary>
     public bool Deleted { get; init; }

@@ -9,9 +9,6 @@ namespace Core.Usage;
 /// </summary>
 public sealed class UsageRequest : BaseEntity
 {
-    /// <summary>仍处于开始状态（还没写结束结果）的结果值。</summary>
-    public const string StartedOutcome = "started";
-
     /// <summary>请求编号（32 位十六进制 GUID）。</summary>
     public string RequestId { get; set; } = "";
 
@@ -31,13 +28,13 @@ public sealed class UsageRequest : BaseEntity
     public long? EndedAt { get; set; }
 
     /// <summary>接口类别：inference、estimate、models。</summary>
-    public string Kind { get; set; } = "";
+    public UsageKind Kind { get; set; }
 
     /// <summary>请求的模型名；模型查询等没有模型时为空。</summary>
     public string? Model { get; set; }
 
     /// <summary>结果：started、succeeded、failed、cancelled、interrupted。</summary>
-    public string Outcome { get; set; } = StartedOutcome;
+    public UsageOutcome Outcome { get; set; } = UsageOutcome.Started;
 
     /// <summary>是否已发往上游。</summary>
     public bool Dispatched { get; set; }
@@ -52,7 +49,7 @@ public sealed class UsageRequest : BaseEntity
     public long? DurationMs { get; set; }
 
     /// <summary>用量完整性：complete、partial、not_provided、not_applicable。</summary>
-    public string Completeness { get; set; } = "partial";
+    public UsageCompleteness Completeness { get; set; } = UsageCompleteness.Partial;
 
     /// <summary>输入计数。</summary>
     public long? InputTokens { get; set; }
@@ -76,10 +73,10 @@ public sealed class UsageRequest : BaseEntity
     public string? Currency { get; set; }
 
     /// <summary>金额来源：reported、estimated、not_applicable、unknown。</summary>
-    public string MoneySource { get; set; } = "unknown";
+    public MoneySource MoneySource { get; set; } = MoneySource.Unknown;
 
     /// <summary>金额完整性：complete、partial、not_applicable、unknown。</summary>
-    public string MoneyCompleteness { get; set; } = "unknown";
+    public MoneyCompleteness MoneyCompleteness { get; set; } = MoneyCompleteness.Unknown;
 
     /// <summary>记账的那一家已保存上游主键；不是从已保存上游发出的为空。</summary>
     public long? UpstreamCandidateId { get; set; }
@@ -88,7 +85,7 @@ public sealed class UsageRequest : BaseEntity
     public string? UpstreamName { get; set; }
 
     /// <summary>仍处于开始状态。</summary>
-    public bool IsStarted => Outcome == StartedOutcome;
+    public bool IsStarted => Outcome == UsageOutcome.Started;
 
     /// <summary>新建一条开始记录；归属必须来自已鉴权的使用者与令牌，内存夹具没有主键时抛出，按存储故障处理、请求不发出。</summary>
     /// <param name="requestId">请求编号。</param>
@@ -97,7 +94,7 @@ public sealed class UsageRequest : BaseEntity
     /// <param name="upstreamVersion">此刻的活动上游版本。</param>
     /// <param name="startedAtTicks">开始时刻（UTC 刻度）。</param>
     /// <param name="kind">接口类别。</param>
-    public static UsageRequest Start(string requestId, long? userId, long? tokenId, long? upstreamVersion, long startedAtTicks, string kind) => new()
+    public static UsageRequest Start(string requestId, long? userId, long? tokenId, long? upstreamVersion, long startedAtTicks, UsageKind kind) => new()
     {
         RequestId = requestId,
         UserId = userId ?? throw new InvalidOperationException("Usage owner unavailable."),
@@ -149,6 +146,6 @@ public sealed class UsageRequest : BaseEntity
     public void Interrupt(long nowTicks)
     {
         if (!IsStarted) return;
-        Outcome = "interrupted"; Completeness = "partial"; MoneyCompleteness = "partial"; EndedAt = nowTicks;
+        Outcome = UsageOutcome.Interrupted; Completeness = UsageCompleteness.Partial; MoneyCompleteness = MoneyCompleteness.Partial; EndedAt = nowTicks;
     }
 }

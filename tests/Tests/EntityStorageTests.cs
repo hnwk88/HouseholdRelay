@@ -129,8 +129,8 @@ static class EntityStorageTests
         var version = (await process.Upstreams.ReadOverview()).Version;
         foreach (var id in new[] { "old-1", "old-2", "fresh" })
         {
-            await process.Usage.Start(id, user, "inference"); await process.Usage.Dispatch(id, version, null, "m");
-            Check(await process.Usage.Finish(id, new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(1, 2)) { Attempts = [new UpstreamAttempt(1, null, version, DateTimeOffset.UtcNow)] }));
+            await process.Usage.Start(id, user, UsageKind.Inference); await process.Usage.Dispatch(id, version, null, "m");
+            Check(await process.Usage.Finish(id, new UsageEnd(UsageOutcome.Succeeded, true, 200, 200, 1, UsageCompleteness.Complete, new(1, 2)) { Attempts = [new UpstreamAttempt(1, null, version, DateTimeOffset.UtcNow)] }));
         }
         using (var connection = process.Database.Open())
             RelayDatabase.Execute(connection, null, "UPDATE usage_requests SET request_started_at=$old WHERE request_id LIKE 'old-%'", ("$old", DateTimeOffset.UtcNow.AddDays(-41).UtcTicks));

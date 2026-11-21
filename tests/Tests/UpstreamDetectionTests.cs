@@ -39,7 +39,7 @@ static class UpstreamDetectionTests
         }
         accepted = "x-api-key";
         var key = await Detect("只认密钥头");
-        Check(key.Catalog.Status == "passed" && key.Catalog.Authentication == "x-api-key" && key.Catalog.Message.StartsWith("已获取 1 个模型，认证用 x-api-key", StringComparison.Ordinal));
+        Check(key.Catalog.Status == Core.Upstream.CatalogStatus.Passed && key.Catalog.Authentication == "x-api-key" && key.Catalog.Message.StartsWith("已获取 1 个模型，认证用 x-api-key", StringComparison.Ordinal));
         Check(key.Report.CanActivate && key.Report.Message.StartsWith("认证用 x-api-key，按标准 Messages 方式通过，模型 fixture-model。", StringComparison.Ordinal) && key.Candidate.Options.Authentication == "x-api-key");
         accepted = "bearer";
         var bearer = await Detect("只认 Bearer");
@@ -51,13 +51,13 @@ static class UpstreamDetectionTests
         badRequest = false;
         accepted = null; var before = mock.Calls.Count(call => call.Path.Contains("/messages"));
         var rejected = await Detect("两种都拒");
-        Check(rejected.Catalog.Status == "rejected" && rejected.Catalog.Message.Contains("两种认证方式（x-api-key、Bearer）都试过"));
-        Check(!rejected.Report.CanActivate && rejected.Report.Authentication == "reconnect" && rejected.Report.Message.Contains("两种认证方式"));
+        Check(rejected.Catalog.Status == Core.Upstream.CatalogStatus.Rejected && rejected.Catalog.Message.Contains("两种认证方式（x-api-key、Bearer）都试过"));
+        Check(!rejected.Report.CanActivate && rejected.Report.Authentication == Core.Upstream.CheckStatus.Reconnect && rejected.Report.Message.Contains("两种认证方式"));
         Check(mock.Calls.Count(call => call.Path.Contains("/messages")) == before, "Rejected keys must not reach a billable model call");
         accepted = "bearer"; catalog = false;
         var absent = await Detect("没有目录");
-        Check(absent.Catalog.Status == "unsupported" && absent.Catalog.Message == "上游不提供模型目录，请手填模型名。" && absent.Catalog.Authentication is null);
-        Check(absent.Report.CanActivate && absent.Report.ModelDiscovery == "unsupported" && absent.Candidate.Options.Authentication == "bearer");
+        Check(absent.Catalog.Status == Core.Upstream.CatalogStatus.Unsupported && absent.Catalog.Message == "上游不提供模型目录，请手填模型名。" && absent.Catalog.Authentication is null);
+        Check(absent.Report.CanActivate && absent.Report.ModelDiscovery == Core.Upstream.CheckStatus.Unsupported && absent.Candidate.Options.Authentication == "bearer");
         using var page = await web.Http.GetAsync(web.Url + "/Upstream?candidateId=" + absent.Candidate.Id);
         var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
         Check(html.Contains("模型名称（上游没有提供模型目录，请手填）") && html.Contains("<input id=\"test-model\" name=\"model\" value=\"fixture-model\""), "No catalog must offer a text box");
@@ -75,7 +75,7 @@ static class UpstreamDetectionTests
         var options = new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model", Authentication = "x-api-key", AuthenticationManual = true };
         var forced = await service.SaveCandidate((await service.ReadActive()).Version, options, "fixture-manual-secret", "手动密钥头");
         var catalog = await service.DiscoverModels(forced, CancellationToken.None);
-        Check(catalog.Status == "rejected" && catalog.Message.Contains("手动指定为 x-api-key"), catalog.Message);
+        Check(catalog.Status == Core.Upstream.CatalogStatus.Rejected && catalog.Message.Contains("手动指定为 x-api-key"), catalog.Message);
         var report = await service.TestCandidate(forced, true, CancellationToken.None);
         var kept = (await service.ReadCandidate(forced)).Options;
         Check(!report.CanActivate && kept.Authentication == "x-api-key" && kept.AuthenticationManual, "Detection must never overwrite a manual choice");
@@ -191,7 +191,7 @@ static class UpstreamDetectionTests
         Check(!listing.Contains("删除「卡住的」") && !listing.Contains("删除「在用的」"), "A candidate under test offers no delete button");
         using (var connection = web.Database.Open())
             RelayDatabase.Execute(connection, null, "UPDATE upstream_candidates SET test_started_at=$at WHERE id=$id", ("$at", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 121), ("$id", stuck));
-        Check(await service.ReadCandidate(stuck) is { State: "testing", Deletable: true } && !(await service.ReadCandidate(active)).Deletable);
+        Check(await service.ReadCandidate(stuck) is { State: Core.Upstream.CandidateState.Testing, Deletable: true } && !(await service.ReadCandidate(active)).Deletable);
         using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
         Check(listing.Contains("删除「卡住的」") && !listing.Contains("删除「在用的」"), "An interrupted test must offer the delete button the service accepts");
         var delete = new Dictionary<string, string> { ["candidateId"] = stuck.ToString(CultureInfo.InvariantCulture), ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
@@ -232,13 +232,13 @@ static class UpstreamDetectionTests
             Check(html.Contains("已重新获取「在用的」的模型。已获取 2 个模型") && html.Contains("测试通过") && html.Contains("<option value=\"fixture-model-new\""), html);
         }
         var after = await service.ReadCandidate(active);
-        Check(after.State == "passed" && after.Report is { CanActivate: true } report && report.VerifiedModel == before.Report!.VerifiedModel
+        Check(after.State == Core.Upstream.CandidateState.Passed && after.Report is { CanActivate: true } report && report.VerifiedModel == before.Report!.VerifiedModel
             && report.Models.SequenceEqual(["fixture-model", "fixture-model-new"]) && JsonSerializer.Serialize(after.Options) == JsonSerializer.Serialize(before.Options), "The active upstream keeps its verdict");
         mock.Handler = context => Status(context, 503);
         await service.DiscoverModels(active, CancellationToken.None);
-        Check(await service.ReadCandidate(active) is { State: "passed", Report.Models.Length: 2 }, "A failed rediscovery leaves the active upstream as it was");
+        Check(await service.ReadCandidate(active) is { State: Core.Upstream.CandidateState.Passed, Report.Models.Length: 2 }, "A failed rediscovery leaves the active upstream as it was");
         await service.DiscoverModels(idle, CancellationToken.None);
-        Check((await service.ReadCandidate(idle)).State == "untested", "An idle upstream still reads as untested after rediscovery");
+        Check((await service.ReadCandidate(idle)).State == Core.Upstream.CandidateState.Untested, "An idle upstream still reads as untested after rediscovery");
     }
 
     /// <summary>

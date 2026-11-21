@@ -60,7 +60,7 @@ static class ClaudeCodeProbeTests
         var options = mock.Options("/v1/cc", authentication: "bearer") with { Model = "claude-opus-5-5" };
         var standard = await service.SaveCandidate((await service.ReadActive()).Version, options, "fixture-probe-secret");
         var failed = await service.TestCandidate(standard, true, CancellationToken.None);
-        Check(failed.Authentication == "passed" && !failed.CanActivate && failed.Message.Contains("400"));
+        Check(failed.Authentication == Core.Upstream.CheckStatus.Passed && !failed.CanActivate && failed.Message.Contains("400"));
         Check(mock.Calls.Count(call => call.Path.Contains("/messages")) == 1, "Rejected generation must not replay or silently switch diagnostics");
         var id = await service.SaveCandidate((await service.ReadActive()).Version, options with { Diagnostic = "claude-code" }, "fixture-probe-secret");
         var report = await service.TestCandidate(id, true, CancellationToken.None);
@@ -114,7 +114,7 @@ static class ClaudeCodeProbeTests
         };
         var id = await service.SaveCandidate((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url + "/v1/cc", AllowPrivateNetwork = true }, "fixture-auto-secret", "自动探测");
         var catalog = await service.DiscoverModels(id, CancellationToken.None);
-        Check(catalog.Status == "passed" && catalog.Authentication == "bearer", catalog.Message);
+        Check(catalog.Status == Core.Upstream.CatalogStatus.Passed && catalog.Authentication == "bearer", catalog.Message);
         await service.ChooseModel(id, "claude-opus-5-5");
         var report = await service.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate && report.Message.StartsWith("认证用 Bearer，按 Claude Code 方式通过，模型 claude-opus-5-5。", StringComparison.Ordinal), report.Message);
@@ -150,7 +150,7 @@ static class ClaudeCodeProbeTests
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(20)); cancellation.Cancel();
         var report = await pending.WaitAsync(TimeSpan.FromSeconds(10));
         await released.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        Check(report.Call == "cancelled" && !report.CanActivate && (await service.ReadActive()).Version == version, report.Call + ": " + report.Message);
+        Check(report.Call == Core.Upstream.CheckStatus.Cancelled && !report.CanActivate && (await service.ReadActive()).Version == version, report.Call + ": " + report.Message);
         Check(mock.Calls.Count(call => call.Path.Contains("/messages")) == 1);
     }
 

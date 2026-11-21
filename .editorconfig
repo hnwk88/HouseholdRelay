@@ -4,6 +4,9 @@
 [*.cs]
 # 命令行构建只认诊断级别的严重度，下面各条命名规则自带的 severity 只在编辑器里生效；这一行让 IDE1006（命名违规）在构建时报错（本工程加，中康原版没有）。
 dotnet_diagnostic.IDE1006.severity = error
+# 封闭取值（枚举）的 switch 写全具名取值即可，不写兜底分支：漏了具名取值的 CS8509 照样报错；只关掉「未命名的数值没处理」的 CS8524，
+# 那种值只能靠强制转换造出来，真出现时运行时抛 SwitchExpressionException，不会被兜底读成别的状态（本工程加）。
+dotnet_diagnostic.CS8524.severity = none
 
 # 接口统一使用 I 前缀；类型和公开成员统一 PascalCase。
 dotnet_naming_rule.interfaces_must_start_with_i.symbols = interfaces

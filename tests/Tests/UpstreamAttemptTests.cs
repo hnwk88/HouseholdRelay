@@ -37,11 +37,11 @@ static class UpstreamAttemptTests
             Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && await response.Content.ReadAsStringAsync() == body, "503 body must reach the client verbatim");
             Check(response.Content.Headers.ContentType?.ToString() == "application/json; charset=utf-8" && response.Headers.GetValues("request-id").Single() == "req_fixture_503");
         }
-        var report = await Settled(web, 2); var success = report.AttemptsOf(report.Rows.Single(row => row.Outcome == "succeeded").RequestId).Single();
-        var failure = report.AttemptsOf(report.Rows.Single(row => row.Outcome == "failed").RequestId).Single();
+        var report = await Settled(web, 2); var success = report.AttemptsOf(report.Rows.Single(row => row.Outcome == Core.Usage.UsageOutcome.Succeeded).RequestId).Single();
+        var failure = report.AttemptsOf(report.Rows.Single(row => row.Outcome == Core.Usage.UsageOutcome.Failed).RequestId).Single();
         Check(success.UpstreamCandidateId == candidate && success.Name == "顺丰中转" && success.UpstreamStatus == 200 && success.ErrorType is null && success.HeadersMs is not null);
         Check(failure.UpstreamCandidateId == candidate && failure.Number == 1 && failure.UpstreamStatus == 503 && failure.ErrorType == "overloaded_error"
-            && failure.ErrorMessage == "Overloaded" && failure.ConnectFailure is null && failure.Disposition == "client" && failure.UpstreamRequestId == "req_fixture_503"
+            && failure.ErrorMessage == "Overloaded" && failure.ConnectFailure is null && failure.Disposition == Core.Usage.AttemptDisposition.Client && failure.UpstreamRequestId == "req_fixture_503"
             && failure.Version == (await web.Upstreams.ReadActive()).Version && failure.HeadersMs <= failure.DurationMs, "503 attempt fields");
         var events = Events(logs);
         Check(events.Last().EnumerateObject().Select(item => item.Name).SequenceEqual(["time", "requestId", "client", "route", "status", "outcome", "durationMs", "upstream", "attempts", "error"]),
@@ -86,7 +86,7 @@ static class UpstreamAttemptTests
             Check(response.StatusCode == HttpStatusCode.GatewayTimeout && await response.Content.ReadAsStringAsync()
                 == """{"type":"error","error":{"type":"api_error","message":"Upstream request timed out."}}""", "Connect timeout body unchanged");
         var attempt = Only(await Settled(web, 1));
-        Check(attempt.ErrorType == "connection_failed" && attempt.ConnectFailure == "connect_timeout" && attempt.UpstreamStatus is null && attempt.HeadersMs is null
+        Check(attempt.ErrorType == "connection_failed" && attempt.ConnectFailure == Core.Usage.ConnectFailure.ConnectTimeout && attempt.UpstreamStatus is null && attempt.HeadersMs is null
             && attempt.DurationMs >= 14000, $"Connect timeout attempt: {attempt}");
         Check(Events(logs).Last().GetProperty("upstream").GetString() == "沉默上游");
         Check((await UsagePage(web)).Contains("沉默上游，无响应，连不上上游：建连超时，"));
@@ -109,14 +109,14 @@ static class UpstreamAttemptTests
         using (var response = await web.Http.SendAsync(request))
             Check(response.StatusCode == HttpStatusCode.BadGateway && await response.Content.ReadAsStringAsync() == failed && untrusted.Calls.IsEmpty, "TLS failure body unchanged");
         var tls = Only(await Settled(web, 1));
-        Check(tls.ErrorType == "connection_failed" && tls.ConnectFailure == "tls" && tls.UpstreamStatus is null, $"TLS attempt: {tls}");
+        Check(tls.ErrorType == "connection_failed" && tls.ConnectFailure == Core.Usage.ConnectFailure.Tls && tls.UpstreamStatus is null, $"TLS attempt: {tls}");
         var closed = new TcpListener(IPAddress.Loopback, 0); closed.Start(); var port = ((IPEndPoint)closed.LocalEndpoint).Port; closed.Stop();
         await ForceActive(web, upstream.Options() with { BaseUrl = "http://127.0.0.1:" + port }, "没人监听");
         using (var request = Request(web, user.Token))
         using (var response = await web.Http.SendAsync(request))
             Check(response.StatusCode == HttpStatusCode.BadGateway && await response.Content.ReadAsStringAsync() == failed, "Refused body unchanged");
         var refused = (await Settled(web, 2)).Attempts.Values.Select(list => list.Single()).Single(item => item.Name == "没人监听");
-        Check(refused.ErrorType == "connection_failed" && refused.ConnectFailure == "refused", $"Refused attempt: {refused}");
+        Check(refused.ErrorType == "connection_failed" && refused.ConnectFailure == Core.Usage.ConnectFailure.Refused, $"Refused attempt: {refused}");
         Check((await UsagePage(web)).Contains("证书不受信，无响应，连不上上游：TLS 握手失败，"));
     }
 
@@ -155,8 +155,8 @@ static class UpstreamAttemptTests
         var now = new DateTimeOffset(2026, 11, 2, 6, 30, 0, TimeSpan.Zero); var clock = new UsageClock(now); var usage = new TestProcess(home.Path, clock).Usage;
         foreach (var (id, time) in new[] { ("expired", now.AddDays(-40).AddTicks(-1)), ("boundary", now.AddDays(-40)) })
         {
-            clock.Set(time); await usage.Start(id, user, "inference"); await usage.Dispatch(id, 1, candidate, "fixture-model");
-            Check(await usage.Finish(id, new UsageEnd("failed", true, 503, 503, 1, "partial", new()) { Attempts = [new UpstreamAttempt(1, candidate, 1, time)] }));
+            clock.Set(time); await usage.Start(id, user, Core.Usage.UsageKind.Inference); await usage.Dispatch(id, 1, candidate, "fixture-model");
+            Check(await usage.Finish(id, new UsageEnd(Core.Usage.UsageOutcome.Failed, true, 503, 503, 1, Core.Usage.UsageCompleteness.Partial, new()) { Attempts = [new UpstreamAttempt(1, candidate, 1, time)] }));
         }
         int Count(string sql) { using var connection = process.Database.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
         Check(Count("SELECT COUNT(*) FROM usage_attempts") == 2);
@@ -189,15 +189,15 @@ static class UpstreamAttemptTests
     {
         static UpstreamAttempt Fail(Exception error, bool aborted = false)
         { var attempt = new UpstreamAttempt(1, null, 1, DateTimeOffset.UtcNow); attempt.Failed(error, aborted, value => value); return attempt; }
-        var cases = new (Exception Error, bool Aborted, string Type, string? Connect)[]
+        var cases = new (Exception Error, bool Aborted, string Type, Core.Usage.ConnectFailure? Connect)[]
         {
-            (new HttpRequestException("x", new SocketException((int)SocketError.HostNotFound)), false, "connection_failed", "dns"),
-            (new HttpRequestException("x", new HttpRequestException("y", new SocketException((int)SocketError.ConnectionRefused))), false, "connection_failed", "refused"),
-            (new HttpRequestException("x", new UpstreamProxyUnavailableException("proxy")), false, "connection_failed", "proxy"),
-            (new HttpRequestException(HttpRequestError.SecureConnectionError, "x"), false, "connection_failed", "tls"),
-            (new HttpRequestException("x", new System.Security.Authentication.AuthenticationException("y")), false, "connection_failed", "tls"),
-            (new TaskCanceledException("x", new TimeoutException()), false, "connection_failed", "connect_timeout"),
-            (new HttpRequestException("x"), false, "connection_failed", "other"),
+            (new HttpRequestException("x", new SocketException((int)SocketError.HostNotFound)), false, "connection_failed", Core.Usage.ConnectFailure.Dns),
+            (new HttpRequestException("x", new HttpRequestException("y", new SocketException((int)SocketError.ConnectionRefused))), false, "connection_failed", Core.Usage.ConnectFailure.Refused),
+            (new HttpRequestException("x", new UpstreamProxyUnavailableException("proxy")), false, "connection_failed", Core.Usage.ConnectFailure.Proxy),
+            (new HttpRequestException(HttpRequestError.SecureConnectionError, "x"), false, "connection_failed", Core.Usage.ConnectFailure.Tls),
+            (new HttpRequestException("x", new System.Security.Authentication.AuthenticationException("y")), false, "connection_failed", Core.Usage.ConnectFailure.Tls),
+            (new TaskCanceledException("x", new TimeoutException()), false, "connection_failed", Core.Usage.ConnectFailure.ConnectTimeout),
+            (new HttpRequestException("x"), false, "connection_failed", Core.Usage.ConnectFailure.Other),
             (new OperationCanceledException(), false, "timeout", null),
             (new OperationCanceledException(), true, "cancelled", null),
             (new IOException("x"), false, "interrupted", null),
@@ -210,7 +210,7 @@ static class UpstreamAttemptTests
         }
         var redirect = Fail(new RelayFailure(502, "Upstream redirect rejected."));
         Check(redirect.ErrorType == "protocol" && redirect.ErrorMessage == "Upstream redirect rejected.");
-        var row = new UpstreamAttemptRow(1, 999, null, 3, DateTimeOffset.UtcNow, null, 15240, null, null, "connection_failed", null, "connect_timeout", "client");
+        var row = new UpstreamAttemptRow(1, 999, null, 3, DateTimeOffset.UtcNow, null, 15240, null, null, "connection_failed", null, Core.Usage.ConnectFailure.ConnectTimeout, Core.Usage.AttemptDisposition.Client);
         Check(UsageLabels.Attempts([row]) == "已删除的上游，无响应，连不上上游：建连超时，15.2 秒" && UsageLabels.Attempts([]) == "未发往上游");
         return Task.CompletedTask;
     }

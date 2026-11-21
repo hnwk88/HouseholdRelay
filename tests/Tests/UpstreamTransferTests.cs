@@ -49,7 +49,7 @@ static class UpstreamTransferTests
         Check(html.Contains("已导入 3 家上游：「甲」「乙」「官方」，都排在已有上游后面，尚未测试。下一步：逐家按「选择模型并测试」"), html);
         var saved = await target.Upstreams.ListCandidates();
         Check(saved.Select(item => item.Name).SequenceEqual(["原有", "甲", "乙", "官方"]), string.Join(",", saved.Select(item => item.Name)));
-        Check(saved.Skip(1).All(item => item.State == "untested" && item.Report is null && item.ExportedAt is null), "Imported upstreams start untested");
+        Check(saved.Skip(1).All(item => item.State == CandidateState.Untested && item.Report is null && item.ExportedAt is null), "Imported upstreams start untested");
         var official = saved.Single(item => item.Name == "官方");
         Check(official.Options is { OfficialLogin: true, Mode: "oauth" } && File.ReadAllBytes(Path.Combine(target.Home.Path, ".state", "official-accounts", official.Uid, OfficialCredential.FileName)).SequenceEqual(login),
             "The login file must arrive byte for byte");

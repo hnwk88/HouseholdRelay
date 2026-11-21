@@ -27,7 +27,7 @@ public sealed class UpstreamCandidate : BaseEntity
     public byte[] Credential { get; set; } = [];
 
     /// <summary>检测状态：untested、testing、passed、failed。</summary>
-    public string State { get; set; } = "untested";
+    public CandidateState State { get; set; } = CandidateState.Untested;
 
     /// <summary>最近一次检测报告（<see cref="UpstreamReport"/>）的 JSON；检测中或从没检测过为空。</summary>
     public string? ReportJson { get; set; }
@@ -43,7 +43,7 @@ public sealed class UpstreamCandidate : BaseEntity
 
     /// <summary>不在检测窗口内：不是检测中，或检测已开始超过 <see cref="TestWindowSeconds"/> 秒。</summary>
     /// <param name="nowSeconds">此刻（Unix 秒）。</param>
-    public bool Idle(long nowSeconds) => State != "testing" || TestStartedAt < nowSeconds - TestWindowSeconds;
+    public bool Idle(long nowSeconds) => State != CandidateState.Testing || TestStartedAt < nowSeconds - TestWindowSeconds;
 
     /// <summary>此刻能不能删除（停用）：不在检测窗口内，也不是活动上游的来源。列表里的「能不能删」与删除时用同一句。</summary>
     /// <param name="nowSeconds">此刻（Unix 秒）。</param>
@@ -55,14 +55,14 @@ public sealed class UpstreamCandidate : BaseEntity
     public void BeginTest(long nowSeconds)
     {
         if (!Idle(nowSeconds)) throw new InvalidOperationException("这个上游正在检测，请稍后刷新页面查看结果。");
-        State = "testing"; ReportJson = null; TestStartedAt = nowSeconds;
+        State = CandidateState.Testing; ReportJson = null; TestStartedAt = nowSeconds;
     }
 
     /// <summary>写回检测结论、报告与实际采用的配置。与 <see cref="BeginTest"/> 成对；获取模型时在用的那一家写回它原来的状态。</summary>
     /// <param name="state">检测结论或原状态。</param>
     /// <param name="reportJson">检测报告 JSON。</param>
     /// <param name="optionsJson">实际采用的配置 JSON。</param>
-    public void FinishTest(string state, string reportJson, string optionsJson)
+    public void FinishTest(CandidateState state, string reportJson, string optionsJson)
     {
         State = state; ReportJson = reportJson; OptionsJson = optionsJson;
     }
@@ -72,7 +72,7 @@ public sealed class UpstreamCandidate : BaseEntity
     /// <param name="reportJson">新报告 JSON，可为空。</param>
     public void ResetToUntested(string optionsJson, string? reportJson)
     {
-        OptionsJson = optionsJson; ReportJson = reportJson; State = "untested";
+        OptionsJson = optionsJson; ReportJson = reportJson; State = CandidateState.Untested;
     }
 
     /// <summary>记下导出搬走的时刻；已记过的保留最早那次。</summary>
@@ -97,7 +97,7 @@ public sealed class UpstreamCandidate : BaseEntity
     {
         if (ExportedAt is not null)
             throw new InvalidOperationException("这个官方账户已经导出搬走，本机不再用它，不能切换过去。要在本机继续用，请删除它后重新登录或导入登录文件。");
-        if (State != "passed" || ReportJson is null) throw NotTested();
+        if (State != CandidateState.Passed || ReportJson is null) throw NotTested();
         if (!(JsonSerializer.Deserialize<UpstreamReport>(ReportJson, ConfigurationFiles.Json) ?? throw new InvalidOperationException("上游配置损坏。")).CanActivate)
             throw new InvalidOperationException("这个上游的测试没有通过，不能切换。");
     }

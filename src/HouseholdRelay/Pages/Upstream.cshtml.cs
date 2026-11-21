@@ -289,7 +289,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         if (string.IsNullOrWhiteSpace(Login.BaseUrl)) Login.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         if (string.IsNullOrWhiteSpace(Import.BaseUrl)) Import.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         // 已导出搬走的不再获取模型、测试，不作为正在设置的上游。
-        Working = (workingId is null ? Saved.LastOrDefault(item => item.State != "passed") : Saved.FirstOrDefault(item => item.Id == workingId)) is { ExportedAt: null } chosen ? chosen : null;
+        Working = (workingId is null ? Saved.LastOrDefault(item => item.State != CandidateState.Passed) : Saved.FirstOrDefault(item => item.Id == workingId)) is { ExportedAt: null } chosen ? chosen : null;
         var current = Saved.FirstOrDefault(item => item.Id == Active.UpstreamCandidateId);
         MovedText = current?.ExportedAt is null ? null : MovedSentence(current.Name, Active.Failover);
         ExportWarning = current is { ExportedAt: null, Options.OfficialLogin: true }
@@ -323,7 +323,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
 
     /// <summary>列表与第二步里「认证方式」的读法：手动指定或已被上游确认时读出方式，否则读「尚未确认」。</summary>
     public static string AuthenticationText(UpstreamCandidateView item) =>
-        item.Options.AuthenticationManual || item.Options.Mode == "oauth" || item.Report?.Authentication == "passed"
+        item.Options.AuthenticationManual || item.Options.Mode == "oauth" || item.Report?.Authentication == CheckStatus.Passed
             ? UpstreamDetection.AuthenticationLabel(item.Options.Authentication) + (item.Options.AuthenticationManual ? "（手动指定）" : "")
             : "尚未确认";
 
@@ -332,9 +332,9 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         ? $"已导出搬走（{moved.ToLocalTime():yyyy-MM-dd HH:mm}）：本机不再用它转发、不再续期。不再需要时可以删除。"
         : item.State switch
     {
-        "passed" => $"测试通过（{item.Report?.CheckedAt.ToLocalTime():yyyy-MM-dd HH:mm}）。{item.Report?.Message}",
-        "failed" => "测试未通过：" + item.Report?.Message,
-        "testing" => "正在检测，可稍后刷新页面",
-        _ => item.Report?.Message ?? "尚未测试"
+        CandidateState.Passed => $"测试通过（{item.Report?.CheckedAt.ToLocalTime():yyyy-MM-dd HH:mm}）。{item.Report?.Message}",
+        CandidateState.Failed => "测试未通过：" + item.Report?.Message,
+        CandidateState.Testing => "正在检测，可稍后刷新页面",
+        CandidateState.Untested => item.Report?.Message ?? "尚未测试"
     };
 }

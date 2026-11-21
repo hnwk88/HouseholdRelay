@@ -19,7 +19,7 @@ public interface IUsageService
     DateTimeOffset Cutoff { get; }
 
     /// <summary>记录请求开始；保存失败时以 503 拒绝请求，不发往上游。</summary>
-    Task Start(string requestId, ClientAccess client, string kind);
+    Task Start(string requestId, ClientAccess client, UsageKind kind);
 
     /// <summary>记录即将发送与首先要试的那一家（已保存上游主键）；保存失败时以 503 拒绝请求，不发往上游。</summary>
     Task Dispatch(string requestId, long version, long? upstreamCandidateId, string? model);

@@ -3,7 +3,7 @@
 namespace Core.Usage;
 
 /// <summary>只保留计数和终止状态；SSE 解析使用响应层已经划分好的有界事件。</summary>
-public sealed class UsageAccumulator(string kind)
+public sealed class UsageAccumulator(UsageKind kind)
 {
     private long? input, output, cacheRead, cacheWrite;
     private bool started, finalDelta, stopped, stream, jsonComplete;
@@ -42,8 +42,8 @@ public sealed class UsageAccumulator(string kind)
         if (root.ValueKind != JsonValueKind.Object) return;
         Error = Text(root, "type") == "error";
         ReadError(root);
-        if (kind == "estimate") input = Number(root, "input_tokens") ?? input;
-        else if (kind == "inference" && root.TryGetProperty("usage", out var usage)) Update(usage);
+        if (kind == UsageKind.Estimate) input = Number(root, "input_tokens") ?? input;
+        else if (kind == UsageKind.Inference && root.TryGetProperty("usage", out var usage)) Update(usage);
         jsonComplete = true;
     }
 
@@ -82,13 +82,13 @@ public sealed class UsageAccumulator(string kind)
     /// 给出本次请求用量记录的完整性：未发往上游或模型查询为 <c>not_applicable</c>；成功、协议完整且有输入计数（推理还需输出计数）为 <c>complete</c>；
     /// 有任何计数、失败或协议不完整为 <c>partial</c>；其余（成功但上游未给任何计数）为 <c>not_provided</c>。
     /// </summary>
-    public string Completeness(bool dispatched, bool succeeded)
+    public UsageCompleteness Completeness(bool dispatched, bool succeeded)
     {
-        if (!dispatched || kind == "models") return "not_applicable";
+        if (!dispatched || kind == UsageKind.Models) return UsageCompleteness.NotApplicable;
         var any = input.HasValue || output.HasValue || cacheRead.HasValue || cacheWrite.HasValue;
-        if (succeeded && ProtocolComplete && input.HasValue && (kind == "estimate" || output.HasValue)) return "complete";
-        if (any || !succeeded || !ProtocolComplete) return "partial";
-        return "not_provided";
+        if (succeeded && ProtocolComplete && input.HasValue && (kind == UsageKind.Estimate || output.HasValue)) return UsageCompleteness.Complete;
+        if (any || !succeeded || !ProtocolComplete) return UsageCompleteness.Partial;
+        return UsageCompleteness.NotProvided;
     }
 
     /// <summary>响应层发现上游错误正文（或流里的错误事件）不是合法 JSON、已换成固定错误正文时调用：错误类型记为 unreadable，不留说明。须在交出替换正文之后调用，替换正文不能盖掉它。</summary>
@@ -104,7 +104,7 @@ public sealed class UsageAccumulator(string kind)
     /// <summary>从推理接口的 usage 对象更新各项计数与上游报告金额；缺失或非法的字段保留原值，因此流中后到的部分 usage 不会清掉先到的计数。</summary>
     private void Update(JsonElement usage)
     {
-        if (kind != "inference" || usage.ValueKind != JsonValueKind.Object) return;
+        if (kind != UsageKind.Inference || usage.ValueKind != JsonValueKind.Object) return;
         input = Number(usage, "input_tokens") ?? input;
         output = Number(usage, "output_tokens") ?? output;
         cacheRead = Number(usage, "cache_read_input_tokens") ?? cacheRead;

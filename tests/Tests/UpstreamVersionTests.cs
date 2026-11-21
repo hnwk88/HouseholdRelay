@@ -93,7 +93,7 @@ static class UpstreamVersionTests
             ? NotFound(context) : UpstreamFixture.Success(context);
         var absent = await service.SaveCandidate((await service.ReadActive()).Version, bad.Options(), "fixture-no-model-catalog");
         var accepted = await service.TestCandidate(absent, true, CancellationToken.None);
-        Check(accepted.CanActivate && accepted.ModelDiscovery == "unsupported" && accepted.Authentication == "passed");
+        Check(accepted.CanActivate && accepted.ModelDiscovery == Core.Upstream.CheckStatus.Unsupported && accepted.Authentication == Core.Upstream.CheckStatus.Passed);
         bad.Handler = context => context.Response.WriteAsJsonAsync(new { status = "ok" });
         var fake = await service.SaveCandidate((await service.ReadActive()).Version, bad.Options(), "fixture-invalid-protocol");
         Check(!(await service.TestCandidate(fake, true, CancellationToken.None)).CanActivate, "HTTP 200 alone must not validate a model call");

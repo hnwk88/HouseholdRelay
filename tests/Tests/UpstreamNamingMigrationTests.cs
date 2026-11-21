@@ -43,7 +43,7 @@ static class UpstreamNamingMigrationTests
         var upgraded = new TestProcess(home.Path); var settings = (await upgraded.Settings.Read()).Value;
         Check(settings.ProxyMode == "manual" && settings.ProxyUrl == "http://127.0.0.1:7897");
         var saved = await upgraded.Upstreams.ListCandidates();
-        Check(saved.Select(item => (item.Uid, item.Name, item.State)).SequenceEqual([("old-candidate", "aitoll.net", "passed"), ("newer-candidate", "api.sftoken.top", "passed")]));
+        Check(saved.Select(item => (item.Uid, item.Name, item.State)).SequenceEqual([("old-candidate", "aitoll.net", CandidateState.Passed), ("newer-candidate", "api.sftoken.top", CandidateState.Passed)]));
         var active = await upgraded.Upstreams.ReadActive();
         Check(active.UpstreamCandidateId == saved[0].Id && active.Name == "aitoll.net" && active.Credential == "fixture-migrated-secret" && active.Options.Diagnostic == "claude-code");
         using (var connection = upgraded.Database.Open())
@@ -71,7 +71,7 @@ static class UpstreamNamingMigrationTests
         // 迁移只核对原有加密凭据；未准备官方身份的测试进程不通过活动读取开放转发。
         Check(active.UpstreamCandidateId is not null && active.Name == "api.anthropic.com" && upgraded.ActiveCredential() == "fixture-orphan-secret");
         var created = await upgraded.Upstreams.ReadCandidate(active.UpstreamCandidateId!.Value);
-        Check(created.State == "untested" && created.Options.Mode == "oauth" && created.Uid.Length == 32 && (await upgraded.Upstreams.ListCandidates()).Count == 1);
+        Check(created.State == Core.Upstream.CandidateState.Untested && created.Options.Mode == "oauth" && created.Uid.Length == 32 && (await upgraded.Upstreams.ListCandidates()).Count == 1);
         Check((await upgraded.Settings.Read()).Value.ProxyMode == "none" && (await upgraded.Settings.Read()).Version.ToString(CultureInfo.InvariantCulture) == version);
     }
 

@@ -84,8 +84,8 @@ static class SiteIdentityFlowTests
         foreach (var person in people)
         {
             var report = await Personal(web, person.Token);
-            Check(report.Rows.All(row => row.UserId == person.UserId) && report.Rows.Count(row => row.Outcome == "succeeded") >= 2);
-            Check(report.Rows.Where(row => row.Outcome == "succeeded" && row.Tokens.Input == 10).All(row => row.Tokens.Output == 11));
+            Check(report.Rows.All(row => row.UserId == person.UserId) && report.Rows.Count(row => row.Outcome == Core.Usage.UsageOutcome.Succeeded) >= 2);
+            Check(report.Rows.Where(row => row.Outcome == Core.Usage.UsageOutcome.Succeeded && row.Tokens.Input == 10).All(row => row.Tokens.Output == 11));
             Check((await web.Identities.Clients.Authenticate(person.Token))?.UserId == person.UserId);
         }
     }
@@ -185,7 +185,7 @@ static class SiteIdentityFlowTests
             }
         Check(warm == 8 && official.Calls.Count == calls + 9, "A validated account must not reopen its private configuration on every request");
         var report = await Settled(web, (await web.RelayUsage.Query(new())).Total);
-        Check(report.Rows.All(row => row.Outcome != "interrupted"), "A local configuration block is not an interrupted upstream response");
+        Check(report.Rows.All(row => row.Outcome != Core.Usage.UsageOutcome.Interrupted), "A local configuration block is not an interrupted upstream response");
         Console.WriteLine($"cold_occupied_status=503; official_calls_while_cold_occupied=0; failover_api_calls=1; warm_occupied_ok={warm}/8; claude_json_opens_per_warm_request=0");
     }
 

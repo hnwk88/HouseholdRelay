@@ -58,7 +58,7 @@
             <button type="submit" class="secondary">测试（会消耗少量上游额度）</button>
             <small>这是管理员诊断，不计入个人用量；测试不会切换当前上游。</small>
         </form>
-        @if (working.State == "passed" && working.Id != Model.Active.UpstreamCandidateId)
+        @if (working.State == CandidateState.Passed && working.Id != Model.Active.UpstreamCandidateId)
         { <form method="post" asp-page-handler="Activate"><input type="hidden" asp-for="Version" /><input type="hidden" name="candidateId" value="@working.Id" /><button type="submit">切换到「@working.Name」</button></form> }
     </section>
 }
@@ -75,7 +75,7 @@
                     <dt>最近一次检测</dt><dd>@UpstreamModel.ResultText(item)</dd></dl>
                 @if (item.ExportedAt is null)
                 {
-                    if (item.State == "passed" && item.Id != Model.Active.UpstreamCandidateId && item.Id != Model.Working?.Id)
+                    if (item.State == CandidateState.Passed && item.Id != Model.Active.UpstreamCandidateId && item.Id != Model.Working?.Id)
                     { <form method="post" asp-page-handler="Activate"><input type="hidden" asp-for="Version" /><input type="hidden" name="candidateId" value="@item.Id" /><button type="submit">切换到「@item.Name」</button></form> }
                     <a asp-page="/Upstream" asp-route-candidateId="@item.Id" asp-fragment="test">选择模型并测试「@item.Name」</a>
                     <form method="post" asp-page-handler="Rediscover"><input type="hidden" name="candidateId" value="@item.Id" />

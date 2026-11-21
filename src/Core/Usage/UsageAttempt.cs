@@ -42,10 +42,10 @@ public sealed class UsageAttempt : BaseEntity
     public string? ErrorMessage { get; set; }
 
     /// <summary>连接失败分类。</summary>
-    public string? ConnectFailure { get; set; }
+    public ConnectFailure? ConnectFailure { get; set; }
 
     /// <summary>去向：client 或 next。</summary>
-    public string Disposition { get; set; } = "client";
+    public AttemptDisposition Disposition { get; set; } = AttemptDisposition.Client;
 
     /// <summary>记账那一刻那一家的名称快照。</summary>
     public string? UpstreamName { get; set; }

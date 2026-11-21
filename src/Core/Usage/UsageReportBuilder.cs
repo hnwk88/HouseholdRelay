@@ -1,4 +1,5 @@
 ﻿using Core.Upstream;
+using Core.Values;
 
 namespace Core.Usage;
 
@@ -36,11 +37,11 @@ public static class UsageReportBuilder
     {
         var zone = TimeZoneInfo.FindSystemTimeZoneById(filter.TimeZone);
         var totals = Money(rows, _ => 0L);
-        var summary = rows.GroupBy(row => row.Kind).OrderBy(group => group.Key, StringComparer.Ordinal)
+        var summary = rows.GroupBy(row => row.Kind).OrderBy(group => Wire<UsageKind>.Name(group.Key), StringComparer.Ordinal)
             .Select(group => Summary(group.Key, group) with { Money = totals.Where(total => total.Kind == group.Key).Select(total => total.Value).ToArray() }).ToArray();
         long Bucket(UsageRequest row) => UsageReportBuilder.Bucket(row.RequestStartedAt, filter.Granularity, zone);
         var timed = Money(rows, Bucket);
-        var periods = rows.GroupBy(row => (Bucket: Bucket(row), row.Kind)).OrderByDescending(group => group.Key.Bucket).ThenBy(group => group.Key.Kind, StringComparer.Ordinal)
+        var periods = rows.GroupBy(row => (Bucket: Bucket(row), row.Kind)).OrderByDescending(group => group.Key.Bucket).ThenBy(group => Wire<UsageKind>.Name(group.Key.Kind), StringComparer.Ordinal)
             .Select(group => new UsagePeriod(TimeZoneInfo.ConvertTime(new DateTimeOffset(group.Key.Bucket, TimeSpan.Zero), zone), Summary(group.Key.Kind, group) with
             { Money = timed.Where(total => total.Bucket == group.Key.Bucket && total.Kind == group.Key.Kind).Select(total => total.Value).ToArray() })).ToArray();
         var details = page.Select(row => new UsageRow(row.RequestId, row.UserId, displayNames[row.UserId], row.TokenId, row.UpstreamVersion,
@@ -73,15 +74,15 @@ public static class UsageReportBuilder
     }
 
     /// <summary>一组记录的分类汇总：请求数、各结果笔数、未发送、不完整、四项计数合计（全为空时为空）与金额来源未知的推理笔数。</summary>
-    private static UsageSummary Summary(string kind, IEnumerable<UsageRequest> group)
+    private static UsageSummary Summary(UsageKind kind, IEnumerable<UsageRequest> group)
     {
         var rows = group.ToArray();
         long Count(Func<UsageRequest, bool> predicate) => rows.LongCount(predicate);
-        return new UsageSummary(kind, rows.LongLength, Count(row => row.Outcome == "succeeded"), Count(row => row.Outcome == "failed"), Count(row => row.Outcome == "cancelled"),
-            Count(row => row.Outcome == "interrupted"), Count(row => row.Outcome == UsageRequest.StartedOutcome), Count(row => !row.Dispatched),
-            Count(row => row.Completeness is "partial" or "not_provided"),
+        return new UsageSummary(kind, rows.LongLength, Count(row => row.Outcome == UsageOutcome.Succeeded), Count(row => row.Outcome == UsageOutcome.Failed), Count(row => row.Outcome == UsageOutcome.Cancelled),
+            Count(row => row.Outcome == UsageOutcome.Interrupted), Count(row => row.Outcome == UsageOutcome.Started), Count(row => !row.Dispatched),
+            Count(row => row.Completeness is UsageCompleteness.Partial or UsageCompleteness.NotProvided),
             new UsageTokens(Sum(rows, row => row.InputTokens), Sum(rows, row => row.OutputTokens), Sum(rows, row => row.CacheReadTokens), Sum(rows, row => row.CacheWriteTokens)))
-            { UnknownAmounts = Count(row => row.Kind == "inference" && row.MoneySource == "unknown") };
+            { UnknownAmounts = Count(row => row.Kind == UsageKind.Inference && row.MoneySource == MoneySource.Unknown) };
     }
 
     /// <summary>可空计数求和：全为空时为空（与 SQL 的 SUM 同口径），否则只加有值的。</summary>
@@ -93,12 +94,12 @@ public static class UsageReportBuilder
     }
 
     /// <summary>有金额的记录按（时间段、类别、币种、来源）分组合计，按币种、来源排序；<paramref name="bucket"/> 不分时间段时恒为 0。</summary>
-    private static List<(long Bucket, string Kind, MoneyTotal Value)> Money(IEnumerable<UsageRequest> rows, Func<UsageRequest, long> bucket) =>
+    private static List<(long Bucket, UsageKind Kind, MoneyTotal Value)> Money(IEnumerable<UsageRequest> rows, Func<UsageRequest, long> bucket) =>
         rows.Where(row => row.Amount is not null)
             .GroupBy(row => (Bucket: bucket(row), row.Kind, Currency: row.Currency ?? "", Source: row.MoneySource))
-            .OrderBy(group => group.Key.Currency, StringComparer.Ordinal).ThenBy(group => group.Key.Source, StringComparer.Ordinal)
+            .OrderBy(group => group.Key.Currency, StringComparer.Ordinal).ThenBy(group => Wire<MoneySource>.Name(group.Key.Source), StringComparer.Ordinal)
             .Select(group => (group.Key.Bucket, group.Key.Kind, new MoneyTotal(group.Key.Currency, group.Key.Source, group.Sum(row => row.Amount!.Value),
-                group.LongCount(), group.LongCount(row => row.MoneyCompleteness != "complete")))).ToList();
+                group.LongCount(), group.LongCount(row => row.MoneyCompleteness != MoneyCompleteness.Complete)))).ToList();
 
     /// <summary>一次尝试的读出结果：名称先取记账时的快照，旧记录没有快照时按候选主键现查（停用的上游照样查得到），并带出它此刻是否已停用。</summary>
     private static UpstreamAttemptRow Attempt(UsageAttempt attempt, IReadOnlyDictionary<long, UpstreamCandidate> candidates)

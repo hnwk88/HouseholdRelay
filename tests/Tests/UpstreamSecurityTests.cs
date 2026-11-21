@@ -27,17 +27,17 @@ static class UpstreamSecurityTests
         }
         // localhost 也走真实 DNS 和连接前地址校验，不能以 HTTPS 绕过私网显式选择。
         var denied = await service.SaveCandidate((await service.ReadActive()).Version, plain.Options() with { BaseUrl = plain.Url.Replace("127.0.0.1", "localhost").Replace("http:", "https:"), AllowPrivateNetwork = false }, "fixture-private-secret");
-        var refused = await service.TestCandidate(denied, true, CancellationToken.None); Check(refused.Connection == "failed" && plain.Calls.IsEmpty);
+        var refused = await service.TestCandidate(denied, true, CancellationToken.None); Check(refused.Connection == Core.Upstream.CheckStatus.Failed && plain.Calls.IsEmpty);
         using var generated = TestProcess.CertificateFactory.CreateCertificate("localhost", out _);
         using var certificate = TestProcess.CertificateFactory.LoadServerCertificate(generated.Export(X509ContentType.Pfx));
         await using var untrusted = await UpstreamFixture.Create(certificate);
         var tls = await service.SaveCandidate((await service.ReadActive()).Version, untrusted.Options(), "fixture-tls-secret");
         var failedTls = await service.TestCandidate(tls, true, CancellationToken.None);
-        Check(failedTls.Connection == "failed" && untrusted.Calls.IsEmpty, "Untrusted TLS must fail before sending credentials");
+        Check(failedTls.Connection == Core.Upstream.CheckStatus.Failed && untrusted.Calls.IsEmpty, "Untrusted TLS must fail before sending credentials");
         plain.Handler = async context => { try { await Task.Delay(Timeout.Infinite, context.RequestAborted); } catch (OperationCanceledException) { /* 模拟永不应答的上游；诊断取消后请求中止属于预期，安静结束即可。 */ } };
         var slow = await service.SaveCandidate((await service.ReadActive()).Version, plain.Options(), "fixture-slow-secret");
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-        var cancelled = await service.TestCandidate(slow, true, cancel.Token); Check(cancelled.Call == "cancelled" && (await service.ReadCandidate(slow)).State == "failed");
+        var cancelled = await service.TestCandidate(slow, true, cancel.Token); Check(cancelled.Call == Core.Upstream.CheckStatus.Cancelled && (await service.ReadCandidate(slow)).State == Core.Upstream.CandidateState.Failed);
         Check(!(await service.ReadActive()).Configured);
     }
 

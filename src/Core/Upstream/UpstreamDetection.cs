@@ -37,6 +37,20 @@ public static class UpstreamDetection
         : options.AuthenticationManual ? $"密钥被上游拒绝（认证方式手动指定为 {AuthenticationLabel(options.Authentication)}）。请核对密钥，或在高级设置里改回自动判断。"
         : "密钥被上游拒绝，两种认证方式（x-api-key、Bearer）都试过。请核对密钥后重新填写。";
 
+    /// <summary>「获取模型」的结论在检测报告「认证」一格里记什么：拿到目录记通过，认证都被拒记需重新接入，其余（不提供目录、限流、失败）都还没确认认证，记未检测。</summary>
+    public static CheckStatus AuthenticationCheck(CatalogStatus status) => status switch
+    {
+        CatalogStatus.Passed => CheckStatus.Passed, CatalogStatus.Rejected => CheckStatus.Reconnect,
+        CatalogStatus.Unsupported or CatalogStatus.Cooldown or CatalogStatus.Failed => CheckStatus.Unverified
+    };
+
+    /// <summary>「获取模型」的结论在检测报告「模型目录」一格里记什么：拿到目录记通过，不提供目录记未提供，其余（被拒、限流、失败）记失败。获取模型与测试共用这一份。</summary>
+    public static CheckStatus DiscoveryCheck(CatalogStatus status) => status switch
+    {
+        CatalogStatus.Passed => CheckStatus.Passed, CatalogStatus.Unsupported => CheckStatus.Unsupported,
+        CatalogStatus.Rejected or CatalogStatus.Cooldown or CatalogStatus.Failed => CheckStatus.Failed
+    };
+
     /// <summary>手动指定时追加的说明文字；自动探测时为空。</summary>
     private static string Manual(bool manual) => manual ? "（手动指定）" : "";
 }

@@ -19,9 +19,9 @@ public sealed record UpstreamRouting(long? ServedId, DateTimeOffset? ServedAt, I
         if (Held.Count == 0) return now + "没有上游在暂避。";
         return now + string.Concat(Held.Select(item => item.Kind switch
         {
-            "paused" => $"「{name(item.UpstreamCandidateId)}」认证失败已暂停，重新测试并切换后恢复。",
-            "cooldown" => $"「{name(item.UpstreamCandidateId)}」限流冷却到 {item.Until?.ToLocalTime():HH:mm:ss}。",
-            _ => $"「{name(item.UpstreamCandidateId)}」暂避到 {item.Until?.ToLocalTime():HH:mm:ss}，原因：{Reason(item)}。"
+            AvoidanceKind.Paused => $"「{name(item.UpstreamCandidateId)}」认证失败已暂停，重新测试并切换后恢复。",
+            AvoidanceKind.Cooldown => $"「{name(item.UpstreamCandidateId)}」限流冷却到 {item.Until?.ToLocalTime():HH:mm:ss}。",
+            AvoidanceKind.Avoid => $"「{name(item.UpstreamCandidateId)}」暂避到 {item.Until?.ToLocalTime():HH:mm:ss}，原因：{Reason(item)}。"
         }));
     }
 

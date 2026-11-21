@@ -43,13 +43,13 @@ internal sealed class UpstreamProbe : IUpstreamProbe
             var manual = options.AuthenticationManual && options.Mode != "oauth" ? "（手动指定）" : "";
             return catalog.Status switch
             {
-                "passed" when catalog.Models.Length > 0 => catalog with { Message = $"已获取 {catalog.Models.Length} 个模型，认证用 {UpstreamDetection.AuthenticationLabel(catalog.Authentication!)}{manual}。请在下面选择模型，再按测试。" },
-                "passed" => catalog with { Message = $"上游接受了密钥（认证用 {UpstreamDetection.AuthenticationLabel(catalog.Authentication!)}{manual}），但模型目录是空的，请手填模型名。" },
-                "unsupported" => catalog with { Message = "上游不提供模型目录，请手填模型名。" },
-                "rejected" => catalog with { Message = UpstreamDetection.Rejected(options) },
-                "cooldown" => catalog with { Message = "上游请求过多，请稍后再获取模型。" },
-                _ when catalog.Message.StartsWith('5') => catalog with { Message = $"获取模型失败，上游返回 HTTP {catalog.Message}。{Unavailable()}" },
-                _ => catalog with { Message = $"获取模型失败，上游返回 HTTP {catalog.Message}。请检查地址是否填对。" }
+                CatalogStatus.Passed when catalog.Models.Length > 0 => catalog with { Message = $"已获取 {catalog.Models.Length} 个模型，认证用 {UpstreamDetection.AuthenticationLabel(catalog.Authentication!)}{manual}。请在下面选择模型，再按测试。" },
+                CatalogStatus.Passed => catalog with { Message = $"上游接受了密钥（认证用 {UpstreamDetection.AuthenticationLabel(catalog.Authentication!)}{manual}），但模型目录是空的，请手填模型名。" },
+                CatalogStatus.Unsupported => catalog with { Message = "上游不提供模型目录，请手填模型名。" },
+                CatalogStatus.Rejected => catalog with { Message = UpstreamDetection.Rejected(options) },
+                CatalogStatus.Cooldown => catalog with { Message = "上游请求过多，请稍后再获取模型。" },
+                CatalogStatus.Failed when catalog.UpstreamStatus is >= 500 and < 600 => catalog with { Message = $"获取模型失败，上游返回 HTTP {catalog.UpstreamStatus}。{Unavailable()}" },
+                CatalogStatus.Failed => catalog with { Message = $"获取模型失败，上游返回 HTTP {catalog.UpstreamStatus}。请检查地址是否填对。" }
             };
         }
         // 官方账户取不到本机 Claude Code 的统一身份：不发请求，读出原因与下一步。
@@ -76,9 +76,9 @@ internal sealed class UpstreamProbe : IUpstreamProbe
     {
         using var operation = snapshot.Options.OfficialAccount ? _siteIdentity.Enter() : null;
         var options = snapshot.Options; var used = options;
-        var connection = "unverified"; var authentication = "unverified"; var discovery = "unverified";
+        var connection = CheckStatus.Unverified; var authentication = CheckStatus.Unverified; var discovery = CheckStatus.Unverified;
         var models = Array.Empty<string>(); string? verifiedModel = null; var checkedAt = DateTimeOffset.UtcNow;
-        ProbeResult Result(string call, string message) => new(new(checkedAt, connection, authentication, discovery, call, models, verifiedModel, message), used);
+        ProbeResult Result(CheckStatus call, string message) => new(new(checkedAt, connection, authentication, discovery, call, models, verifiedModel, message), used);
         // 链接调用方的取消并另加上限：管理员取消或上游无响应时都能及时结束检测，后续所有网络和子进程操作都用这个令牌。
         using var timeout = Limit(cancellation, 60);
         try
@@ -88,11 +88,11 @@ internal sealed class UpstreamProbe : IUpstreamProbe
             // 获取模型已确认的认证方式排在最前，其余按固定顺序在后。
             order = [.. order.Where(item => item == options.Authentication), .. order.Where(item => item != options.Authentication)];
             var catalog = await Catalog(snapshot, order, identity, timeout.Token);
-            connection = "passed"; models = catalog.Models;
-            discovery = catalog.Status switch { "passed" => "passed", "unsupported" => "unsupported", _ => "failed" };
-            if (catalog.Status == "rejected") { authentication = "reconnect"; return Result("failed", UpstreamDetection.Rejected(options)); }
-            if (catalog.Status == "cooldown") return Result("cooldown", "上游请求过多；诊断没有改变活动配置的冷却状态。");
-            if (catalog.Authentication is not null) authentication = "passed";
+            connection = CheckStatus.Passed; models = catalog.Models;
+            discovery = UpstreamDetection.DiscoveryCheck(catalog.Status);
+            if (catalog.Status == CatalogStatus.Rejected) { authentication = CheckStatus.Reconnect; return Result(CheckStatus.Failed, UpstreamDetection.Rejected(options)); }
+            if (catalog.Status == CatalogStatus.Cooldown) return Result(CheckStatus.Cooldown, "上游请求过多；诊断没有改变活动配置的冷却状态。");
+            if (catalog.Authentication is not null) authentication = CheckStatus.Passed;
             foreach (var method in catalog.Authentication is { } accepted ? UpstreamDetection.StartingFrom(order, accepted) : order)
             {
                 var attempt = options with { Authentication = method };
@@ -101,35 +101,35 @@ internal sealed class UpstreamProbe : IUpstreamProbe
                 used = attempt with { Diagnostic = diagnostic };
                 // 401/403 说明这种认证方式不被接受，换下一种；全部用完再判失败。
                 if (reply.Status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) continue;
-                authentication = "passed";
-                if (reply.Status == HttpStatusCode.TooManyRequests) return Result("cooldown", "最小模型调用受到上游限流，请稍后重新测试。" + Quote(reply, snapshot.Credential!));
-                if ((int)reply.Status is < 200 or >= 300) return Result("failed", Refused((int)reply.Status, attempt, diagnostic, triedClaude) + Quote(reply, snapshot.Credential!));
+                authentication = CheckStatus.Passed;
+                if (reply.Status == HttpStatusCode.TooManyRequests) return Result(CheckStatus.Cooldown, "最小模型调用受到上游限流，请稍后重新测试。" + Quote(reply, snapshot.Credential!));
+                if ((int)reply.Status is < 200 or >= 300) return Result(CheckStatus.Failed, Refused((int)reply.Status, attempt, diagnostic, triedClaude) + Quote(reply, snapshot.Credential!));
                 verifiedModel = ProbeMessage.Read(reply.Body, reply.Streaming, snapshot.Credential!);
-                if (verifiedModel is null) return Result("failed", "上游未返回有效的 Anthropic Messages 回复，不能标记调用成功。");
-                return Result("passed", UpstreamDetection.Passed(used, verifiedModel)
+                if (verifiedModel is null) return Result(CheckStatus.Failed, "上游未返回有效的 Anthropic Messages 回复，不能标记调用成功。");
+                return Result(CheckStatus.Passed, UpstreamDetection.Passed(used, verifiedModel)
                     + (diagnostic == "claude-code" && !options.OfficialAccount ? "Claude Code 能调用不代表通用 API 请求也被这家接受。" : "") + "此检测为管理员诊断，不计入个人业务用量；凭据到期时间未知。");
             }
-            authentication = "reconnect"; used = options;
-            return Result("failed", UpstreamDetection.Rejected(options));
+            authentication = CheckStatus.Reconnect; used = options;
+            return Result(CheckStatus.Failed, UpstreamDetection.Rejected(options));
         }
         // 官方账户取不到本机 Claude Code 的统一身份：一个请求都没发，读出原因与下一步，候选不激活。
-        catch (ClaudeCodeIdentityUnavailableException error) { used = options; return Result("failed", error.Message); }
+        catch (ClaudeCodeIdentityUnavailableException error) { used = options; return Result(CheckStatus.Failed, error.Message); }
         // 区分调用方主动取消与超时，两种情况都只返回报告、不激活候选，也不把异常抛给管理页。
-        catch (OperationCanceledException) { used = options; return Result(cancellation.IsCancellationRequested ? "cancelled" : "failed", "检测已取消或超时，这个上游没有切换。"); }
+        catch (OperationCanceledException) { used = options; return Result(cancellation.IsCancellationRequested ? CheckStatus.Cancelled : CheckStatus.Failed, "检测已取消或超时，这个上游没有切换。"); }
         // 建连、地址校验、TLS 或代理失败：标记连接未通过，读出代理原因或固定说明。
-        catch (HttpRequestException error) { used = options; connection = "failed"; return Result("failed", ConnectionMessage(error)); }
+        catch (HttpRequestException error) { used = options; connection = CheckStatus.Failed; return Result(CheckStatus.Failed, ConnectionMessage(error)); }
         // 中转自身拒绝（如重定向、响应超限）：报告里只给固定说明，不回显可能含秘密的原始信息。
-        catch (RelayFailure error) { used = options; return Result("failed", error.Status == 502 ? "上游返回跳转、过大或不支持的响应，这个上游没有切换。" : "上游检测失败。"); }
+        catch (RelayFailure error) { used = options; return Result(CheckStatus.Failed, error.Status == 502 ? "上游返回跳转、过大或不支持的响应，这个上游没有切换。" : "上游检测失败。"); }
         // 最小调用响应无法解析为 JSON：视为调用未成功，候选不能激活。
-        catch (JsonException) { used = options; return Result("failed", "最小调用返回的 JSON 无效，这个上游没有切换。"); }
+        catch (JsonException) { used = options; return Result(CheckStatus.Failed, "最小调用返回的 JSON 无效，这个上游没有切换。"); }
         // 读取响应时连接中断：结果不完整，按失败处理。
-        catch (IOException) { used = options; return Result("failed", "上游响应中断，这个上游没有切换。"); }
+        catch (IOException) { used = options; return Result(CheckStatus.Failed, "上游响应中断，这个上游没有切换。"); }
         // Claude Code 检测前解析代理失败：读出代理原因，子进程没有启动。
-        catch (UpstreamProxyUnavailableException error) { used = options; connection = "failed"; return Result("failed", error.Message); }
+        catch (UpstreamProxyUnavailableException error) { used = options; connection = CheckStatus.Failed; return Result(CheckStatus.Failed, error.Message); }
         // Claude Code 检测未找到客户端或会话未完成时抛出此异常，转成可操作的提示。
-        catch (InvalidOperationException) { used = options; return Result("failed", "Claude Code 检测未完成，请确认本机已安装可用的原生客户端；这个上游没有切换。"); }
+        catch (InvalidOperationException) { used = options; return Result(CheckStatus.Failed, "Claude Code 检测未完成，请确认本机已安装可用的原生客户端；这个上游没有切换。"); }
         // 系统无法启动 claude.exe 进程（如文件损坏或被拦截）：单独提示，候选不激活。
-        catch (System.ComponentModel.Win32Exception) { used = options; return Result("failed", "无法启动本机 Claude Code，这个上游没有切换。"); }
+        catch (System.ComponentModel.Win32Exception) { used = options; return Result(CheckStatus.Failed, "无法启动本机 Claude Code，这个上游没有切换。"); }
     }
 
     /// <summary>
@@ -180,7 +180,7 @@ internal sealed class UpstreamProbe : IUpstreamProbe
     /// <summary>
     /// 读模型目录：按 <paramref name="order"/> 逐个认证方式请求 <c>/v1/models</c>，第一个被接受的就是结果。照 MyCoAI 的判断：
     /// 400、401、403 且还有下一种方式时换下一种（部分中转缺认证头时回 400）；最后一种也是 401/403、或试过两种以上仍是 400 时判为都被拒。
-    /// 404/405 视为不提供目录；其余非 2xx 为 <c>failed</c>（此时 <see cref="ModelCatalog.Message"/> 暂存状态码，由调用方改写成句子）。
+    /// 404/405 视为不提供目录；其余非 2xx 为 <c>failed</c>，状态码放在 <see cref="ModelCatalog.UpstreamStatus"/>，由调用方读成句子。
     /// 官方账户的目录请求只带 <paramref name="identity"/> 这份统一身份，其余上游为 null、照旧用中转自己的 User-Agent。
     /// </summary>
     private async Task<ModelCatalog> Catalog(UpstreamSnapshot snapshot, string[] order, ClaudeCodeIdentity? identity, CancellationToken cancellation)
@@ -193,22 +193,22 @@ internal sealed class UpstreamProbe : IUpstreamProbe
             using var response = await transport.Send(request, cancellation);
             var refused = response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
             if (refused && index + 1 < order.Length) continue;
-            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden || refused && order.Length > 1) return new("rejected", null, [], "");
-            if (response.StatusCode == HttpStatusCode.TooManyRequests) return new("cooldown", null, [], "");
-            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed) return new("unsupported", null, [], "");
-            if (!response.IsSuccessStatusCode) return new("failed", null, [], ((int)response.StatusCode).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden || refused && order.Length > 1) return new(CatalogStatus.Rejected, null, [], "");
+            if (response.StatusCode == HttpStatusCode.TooManyRequests) return new(CatalogStatus.Cooldown, null, [], "");
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed) return new(CatalogStatus.Unsupported, null, [], "");
+            if (!response.IsSuccessStatusCode) return new(CatalogStatus.Failed, null, [], "") { UpstreamStatus = (int)response.StatusCode };
             var bytes = await UpstreamResponses.ReadDecoded(response, 1024 * 1024, cancellation);
             try
             {
                 using var body = JsonDocument.Parse(bytes);
                 if (body.RootElement.ValueKind != JsonValueKind.Object || !body.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
-                    return new("unsupported", method, [], "");
+                    return new(CatalogStatus.Unsupported, method, [], "");
                 var models = data.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object && item.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
                     .Select(item => item.GetProperty("id").GetString()!).Where(model => ProbeMessage.SafeModel(model, snapshot.Credential!)).Distinct().Take(100).ToArray();
-                return new("passed", method, models, "");
+                return new(CatalogStatus.Passed, method, models, "");
             }
             // 模型目录不是合法 JSON 只说明上游不支持目录查询；2xx 已说明这种认证方式被接受。
-            catch (JsonException) { return new("unsupported", method, [], ""); }
+            catch (JsonException) { return new(CatalogStatus.Unsupported, method, [], ""); }
         }
         throw new InvalidOperationException("至少要有一种认证方式。");
     }
@@ -299,7 +299,7 @@ internal sealed class UpstreamProbe : IUpstreamProbe
     private string Unavailable() => $"上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：{_proxy.Describe()}请检查代理出口后重试。";
 
     /// <summary>获取模型失败时的结果：认证方式未确定，目录为空。</summary>
-    private static ModelCatalog Failed(string message) => new("failed", null, [], message);
+    private static ModelCatalog Failed(string message) => new(CatalogStatus.Failed, null, [], message);
 
     /// <summary>链接调用方的取消并加上 <paramref name="seconds"/> 秒上限。</summary>
     private static CancellationTokenSource Limit(CancellationToken cancellation, int seconds)

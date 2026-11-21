@@ -41,17 +41,17 @@ static class UsageMoneyTests
         };
         var expected = new[]
         {
-            ("reported", new UsageMoney(0.123456789m, "USD", "reported", "complete")),
-            ("without_tokens", new UsageMoney(0.03m, "USD", "reported", "complete")),
-            ("currency", new UsageMoney(1.25m, "CNY", "reported", "complete")),
-            ("invalid", new UsageMoney(0.00005m, "USD", "estimated", "complete")),
-            ("stream", new UsageMoney(0.09m, "USD", "reported", "complete"))
+            ("reported", new UsageMoney(0.123456789m, "USD", Core.Usage.MoneySource.Reported, Core.Usage.MoneyCompleteness.Complete)),
+            ("without_tokens", new UsageMoney(0.03m, "USD", Core.Usage.MoneySource.Reported, Core.Usage.MoneyCompleteness.Complete)),
+            ("currency", new UsageMoney(1.25m, "CNY", Core.Usage.MoneySource.Reported, Core.Usage.MoneyCompleteness.Complete)),
+            ("invalid", new UsageMoney(0.00005m, "USD", Core.Usage.MoneySource.Estimated, Core.Usage.MoneyCompleteness.Complete)),
+            ("stream", new UsageMoney(0.09m, "USD", Core.Usage.MoneySource.Reported, Core.Usage.MoneyCompleteness.Complete))
         };
         var count = 0;
         foreach (var (scenario, money) in expected)
         { Check((int)await Call(web, user.Token, scenario) == 200); Check((await Settled(web, ++count)).Rows[0].Money == money, scenario + " money source/amount"); }
         var summary = (await web.RelayUsage.Query(new())).Summary[0];
-        Check(summary.Money.Single(item => item.Currency == "USD" && item.Source == "reported").Amount == 0.243456789m);
+        Check(summary.Money.Single(item => item.Currency == "USD" && item.Source == Core.Usage.MoneySource.Reported).Amount == 0.243456789m);
         Check(summary.Money.Count == 3 && summary.UnknownAmounts == 0);
         Check((await Personal(web, user.Token)).Summary[0].Money.Count == 3);
         await web.Login(); var html = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + "/Usage"));
@@ -78,12 +78,12 @@ static class UsageMoneyTests
         for (var index = 0; index < dates.Length; index++)
         {
             clock.Set(dates[index]); var id = "priced-" + index;
-            await store.Start(id, client, "inference"); await store.Dispatch(id, 1, priced, "priced");
+            await store.Start(id, client, Core.Usage.UsageKind.Inference); await store.Dispatch(id, 1, priced, "priced");
             if (index == 0) await prices.Save(priced, "priced", "USD", 100, 200, 0, 0);
-            await store.Finish(id, new("succeeded", true, 200, 200, 1, "complete", new(10000, 10000)));
+            await store.Finish(id, new(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(10000, 10000)));
         }
-        clock.Set(now); await store.Start("unknown", client, "inference"); await store.Dispatch("unknown", 1, priced, "no-price");
-        await store.Finish("unknown", new("succeeded", true, 200, 200, 1, "complete", new(2, 3)));
+        clock.Set(now); await store.Start("unknown", client, Core.Usage.UsageKind.Inference); await store.Dispatch("unknown", 1, priced, "no-price");
+        await store.Finish("unknown", new(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(2, 3)));
         var hours = await store.Query(new(Granularity: "hour", TimeZone: "America/New_York"));
         Check(hours.Rows.Single(row => row.RequestId == "priced-0").Money.Amount == 0.03m, "Dispatch must snapshot the old price before later changes");
         Check(hours.Summary[0].Money.Single().Amount == 6.03m && hours.Summary[0].UnknownAmounts == 1);
@@ -95,11 +95,11 @@ static class UsageMoneyTests
         Check(range.Total == 1 && range.Periods.Single().Summary.Money.Single().Amount == 0.03m);
         var reopened = new TestProcess(home.Path, clock).Usage; Check((await reopened.Query(new())).Summary[0].Money.Single().Amount == 6.03m);
         await prices.Save(priced, "partial", "CNY", 2, null, null, null);
-        await store.Start("partial", client, "inference"); await store.Dispatch("partial", 1, priced, "partial");
-        await store.Finish("partial", new("cancelled", true, 200, 200, 1, "partial", new(1000)));
-        Check((await store.Query(new(Model: "partial"))).Rows.Single().Money == new UsageMoney(0.002m, "CNY", "estimated", "partial"));
-        await store.Start("no-usage", client, "inference"); await store.Dispatch("no-usage", 1, priced, "priced");
-        await store.Finish("no-usage", new("succeeded", true, 200, 200, 1, "not_provided", new()));
+        await store.Start("partial", client, Core.Usage.UsageKind.Inference); await store.Dispatch("partial", 1, priced, "partial");
+        await store.Finish("partial", new(Core.Usage.UsageOutcome.Cancelled, true, 200, 200, 1, Core.Usage.UsageCompleteness.Partial, new(1000)));
+        Check((await store.Query(new(Model: "partial"))).Rows.Single().Money == new UsageMoney(0.002m, "CNY", Core.Usage.MoneySource.Estimated, Core.Usage.MoneyCompleteness.Partial));
+        await store.Start("no-usage", client, Core.Usage.UsageKind.Inference); await store.Dispatch("no-usage", 1, priced, "priced");
+        await store.Finish("no-usage", new(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.NotProvided, new()));
         Check((await store.Query(new())).Rows.Single(row => row.RequestId == "no-usage").Money.Amount is null, "Zero-priced cache must not turn entirely unknown consumption into zero cost");
         var untouched = (await prices.List(priced)).Count; clock.Advance(TimeSpan.FromDays(41)); await store.Cleanup(); Check((await prices.List(priced)).Count == untouched);
     }

@@ -38,7 +38,7 @@ public sealed class UsageModel(IUsageService usage, IIdentityService identities)
         Granularity ??= "day"; TimeZone ??= TimeZoneInfo.Local.Id;
         Users = await identities.List();
         if (!ModelState.IsValid) return;
-        try { Report = await usage.Query(new(UserId, From, Until, Kind, ModelName, Outcome, PageNumber, Granularity, TimeZone)); }
+        try { Report = await usage.Query(new(UserId, From, Until, UsageFilter.Closed<UsageKind>(Kind), ModelName, UsageFilter.Closed<UsageOutcome>(Outcome), PageNumber, Granularity, TimeZone)); }
         // 筛选条件不合法（时间倒置、未知类别或时区等）时抛 InvalidOperationException，只显示为页面错误，不展示报告。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
     }

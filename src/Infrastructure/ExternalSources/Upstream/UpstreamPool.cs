@@ -142,7 +142,7 @@ internal sealed class UpstreamPool : IUpstreamPool
     internal void Avoid(UpstreamConnection connection, UpstreamAttempt attempt)
     {
         if (!attempt.Avoids) return;
-        connection.Avoid(new(connection.Snapshot.UpstreamCandidateId, "avoid", _clock.GetUtcNow() + AvoidFor, attempt.UpstreamStatus, attempt.ErrorType, attempt.ConnectFailure));
+        connection.Avoid(new(connection.Snapshot.UpstreamCandidateId, AvoidanceKind.Avoid, _clock.GetUtcNow() + AvoidFor, attempt.UpstreamStatus, attempt.ErrorType, attempt.ConnectFailure));
     }
 
     /// <summary>记下最近一次把成功响应交给客户端的那一家与时刻。</summary>

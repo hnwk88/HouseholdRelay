@@ -44,7 +44,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         await using (var scope = scopes.CreateAsyncScope())
         {
             active = await scope.Repository<ActiveUpstream>().GetByIdAsync(ActiveUpstream.SingletonId);
-            rows = await scope.Repository<UpstreamCandidate>().FindAsync(item => item.State == "passed" && item.ExportedAt == null);
+            rows = await scope.Repository<UpstreamCandidate>().FindAsync(item => item.State == CandidateState.Passed && item.ExportedAt == null);
         }
         if (active is null) return [];
         var snapshots = new List<UpstreamSnapshot>();
@@ -208,13 +208,12 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         catch when (kept is not null) { await FinishTest(id, candidate.State, Serialize(kept), Serialize(candidate.Options)); throw; }
         if (kept is not null)
         {
-            await FinishTest(id, candidate.State, Serialize(catalog.Status == "passed" ? kept with { Models = catalog.Models } : kept), Serialize(candidate.Options));
+            await FinishTest(id, candidate.State, Serialize(catalog.Status == CatalogStatus.Passed ? kept with { Models = catalog.Models } : kept), Serialize(candidate.Options));
             return catalog;
         }
         var options = catalog.Authentication is { } accepted && !candidate.Options.AuthenticationManual ? candidate.Options with { Authentication = accepted } : candidate.Options;
-        var report = new UpstreamReport(DateTimeOffset.UtcNow, catalog.Status == "failed" ? "failed" : "passed",
-            catalog.Status switch { "passed" => "passed", "rejected" => "reconnect", _ => "unverified" },
-            catalog.Status switch { "passed" => "passed", "unsupported" => "unsupported", _ => "failed" }, "unverified", catalog.Models, null, catalog.Message);
+        var report = new UpstreamReport(DateTimeOffset.UtcNow, catalog.Status == CatalogStatus.Failed ? CheckStatus.Failed : CheckStatus.Passed,
+            UpstreamDetection.AuthenticationCheck(catalog.Status), UpstreamDetection.DiscoveryCheck(catalog.Status), CheckStatus.Unverified, catalog.Models, null, catalog.Message);
         await ResetToUntested(id, Serialize(options), Serialize(report));
         return catalog;
     }
@@ -227,7 +226,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         var candidate = await ReadCandidate(id);
         if (candidate.Options.Model == model) return;
         var options = (candidate.Options with { Model = model }).Validated();
-        var report = candidate.Report is { } previous ? previous with { Call = "unverified", VerifiedModel = null, Message = $"模型已改为 {model}，尚未测试。" } : null;
+        var report = candidate.Report is { } previous ? previous with { Call = CheckStatus.Unverified, VerifiedModel = null, Message = $"模型已改为 {model}，尚未测试。" } : null;
         await ResetToUntested(id, Serialize(options), report is null ? null : Serialize(report));
     }
 
@@ -246,7 +245,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         var secret = await BeginTest(id);
         // 网络等待不占用写事务，也不接触当前服务的暂停和冷却状态。
         var result = await probe.Run(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation);
-        await FinishTest(id, result.Report.CanActivate ? "passed" : "failed", Serialize(result.Report), Serialize(result.Used));
+        await FinishTest(id, result.Report.CanActivate ? CandidateState.Passed : CandidateState.Failed, Serialize(result.Report), Serialize(result.Used));
         return result.Report;
     }
 
@@ -383,7 +382,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
             var active = await scope.Repository<ActiveUpstream>().GetByIdAsync(ActiveUpstream.SingletonId);
             if (active is null) throw new InvalidOperationException("活动配置已改变，请重新加载后再保存。");
             active.EnsureVersion(expectedVersion, "活动配置已改变，请重新加载后再保存。");
-            var candidate = new UpstreamCandidate { Uid = uid, ExpectedVersion = expectedVersion, OptionsJson = optionsJson, Credential = protectedCredential, State = "untested", Name = name };
+            var candidate = new UpstreamCandidate { Uid = uid, ExpectedVersion = expectedVersion, OptionsJson = optionsJson, Credential = protectedCredential, State = CandidateState.Untested, Name = name };
             await candidates.AddAsync(candidate);
             await candidates.SaveChangesAsync();
             return candidate.Id;
@@ -405,7 +404,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     }
 
     /// <summary>保存检测结果状态、报告与实际采用的配置；那一家这期间被停用了就什么都不写。</summary>
-    private async Task FinishTest(long id, string state, string reportJson, string optionsJson)
+    private async Task FinishTest(long id, CandidateState state, string reportJson, string optionsJson)
     {
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();

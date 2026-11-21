@@ -37,8 +37,8 @@ static class UsageStorageTests
             Check(upstream.Calls.Count == calls && (await web.RelayUsage.Query(new())).Total == 0, "Failed start must not send or invent a record");
         }
         var client = (await web.Identities.Clients.Authenticate(user.Token))!; var usage = web.RelayUsage;
-        var completed = new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(12, 9));
-        await usage.Start("finish-retry", client, "inference"); await usage.Dispatch("finish-retry", 2, null, "fixture-model");
+        var completed = new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(12, 9));
+        await usage.Start("finish-retry", client, Core.Usage.UsageKind.Inference); await usage.Dispatch("finish-retry", 2, null, "fixture-model");
         Task<bool> finish;
         using (var connection = web.Database.Open())
         using (var locked = connection.BeginTransaction())
@@ -47,18 +47,18 @@ static class UsageStorageTests
             await Task.Delay(1200); // 首次忙等待失败，下一次独立保存仍应成功。
         }
         Check(await finish.WaitAsync(TimeSpan.FromSeconds(5)));
-        Check((await usage.Query(new())).Rows.Single().Completeness == "complete");
-        await usage.Start("finish-failed", client, "inference");
+        Check((await usage.Query(new())).Rows.Single().Completeness == Core.Usage.UsageCompleteness.Complete);
+        await usage.Start("finish-failed", client, Core.Usage.UsageKind.Inference);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             CREATE TRIGGER reject_usage_finish BEFORE UPDATE ON usage_requests BEGIN SELECT RAISE(ABORT,'fixture-write-failure'); END
             """));
         var timer = Stopwatch.StartNew(); Check(!await usage.Finish("finish-failed", completed));
         Check(timer.Elapsed < TimeSpan.FromSeconds(5) && usage.PersistenceFailures == 2);
-        Check((await usage.Query(new())).Rows.Single(row => row.RequestId == "finish-failed").Outcome == "started");
+        Check((await usage.Query(new())).Rows.Single(row => row.RequestId == "finish-failed").Outcome == Core.Usage.UsageOutcome.Started);
         await web.Login(); Check((await web.Http.GetStringAsync(web.Url + "/Usage")).Contains("待写入记录不能视为完整统计"));
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TRIGGER reject_usage_finish"));
         await usage.Recover(); var restored = (await usage.Query(new())).Rows.Single(row => row.RequestId == "finish-failed");
-        Check(restored.Outcome == "interrupted" && restored.Completeness == "partial" && restored.Tokens.Input is null);
+        Check(restored.Outcome == Core.Usage.UsageOutcome.Interrupted && restored.Completeness == Core.Usage.UsageCompleteness.Partial && restored.Tokens.Input is null);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             CREATE TRIGGER reject_usage_start BEFORE INSERT ON usage_requests BEGIN SELECT RAISE(ABORT,'fixture-readonly'); END
             """));
@@ -75,13 +75,13 @@ static class UsageStorageTests
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities;
         var token = await identities.Create("保留窗口"); var user = (await identities.Clients.Authenticate(token.Token))!;
         var now = new DateTimeOffset(2026, 11, 2, 6, 30, 0, TimeSpan.Zero); var clock = new UsageClock(now); var usage = new TestProcess(home.Path, clock).Usage;
-        var end = new UsageEnd("succeeded", true, 200, 200, 1, "complete", new(2, 3));
+        var end = new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(2, 3));
         foreach (var (id, time) in new[] { ("expired", now.AddDays(-40).AddTicks(-1)), ("boundary", now.AddDays(-40)), ("inside", now.AddDays(-40).AddTicks(1)), ("recent", now.AddHours(-1)) })
-        { clock.Set(time); await usage.Start(id, user, "inference"); await usage.Finish(id, end); }
-        clock.Set(now); await usage.Start("unfinished", user, "inference"); await usage.Dispatch("unfinished", 1, null, "fixture-model");
+        { clock.Set(time); await usage.Start(id, user, Core.Usage.UsageKind.Inference); await usage.Finish(id, end); }
+        clock.Set(now); await usage.Start("unfinished", user, Core.Usage.UsageKind.Inference); await usage.Dispatch("unfinished", 1, null, "fixture-model");
         Check((await usage.Query(new())).Total == 4, "Queries must filter expired data before deletion runs");
         var reopenedProcess = new TestProcess(home.Path, clock); var reopened = reopenedProcess.Database; var resumed = reopenedProcess.Usage;
-        Check((await resumed.Query(new())).Rows.Single(row => row.RequestId == "unfinished").Outcome == "started", "Opening for queries must not recover live requests");
+        Check((await resumed.Query(new())).Rows.Single(row => row.RequestId == "unfinished").Outcome == Core.Usage.UsageOutcome.Started, "Opening for queries must not recover live requests");
         using (var maintenance = reopenedProcess.Get<UsageMaintenance>())
         {
             await maintenance.StartAsync(CancellationToken.None);
@@ -92,7 +92,7 @@ static class UsageStorageTests
                 Check(rejected, "A second server must not recover the first server's active records");
             }
             var report = await resumed.Query(new()); Check(report.Total == 4);
-            Check(report.Rows.Single(row => row.RequestId == "unfinished").Outcome == "interrupted");
+            Check(report.Rows.Single(row => row.RequestId == "unfinished").Outcome == Core.Usage.UsageOutcome.Interrupted);
             Check(report.Rows.Single(row => row.RequestId == "boundary").Tokens == new UsageTokens(2, 3));
             using (var connection = reopened.Open()) Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_requests")) == 4);
             // 模拟跨过小时和夏令时回拨后的运行期；时区表示不改变 UTC 截止点。

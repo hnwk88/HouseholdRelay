@@ -57,8 +57,8 @@ static class ProxySettingsTests
             switchable.ProxyMode = "auto";
             using (var refused = await UpstreamFixture.RelayRequest(web, person.Token)) Check((int)refused.StatusCode == 502 && target.Calls.Count == calls);
             var usage = web.App.Services.GetRequiredService<IUsageService>(); UsageRow? row = null;
-            await Until(async () => (row = (await usage.Query(new())).Rows.SingleOrDefault()) is { Outcome: not "started" });
-            Check(row is { Outcome: "failed", Dispatched: false, UpstreamStatus: null, StatusCode: 502 } && row.Money.Source == "not_applicable", JsonSerializer.Serialize(row));
+            await Until(async () => (row = (await usage.Query(new())).Rows.SingleOrDefault()) is { Outcome: not Core.Usage.UsageOutcome.Started });
+            Check(row is { Outcome: Core.Usage.UsageOutcome.Failed, Dispatched: false, UpstreamStatus: null, StatusCode: 502 } && row.Money.Source == Core.Usage.MoneySource.NotApplicable, JsonSerializer.Serialize(row));
         }
 
         var config = new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "auto" };
@@ -69,7 +69,7 @@ static class ProxySettingsTests
         await using var mock = await UpstreamFixture.Create();
         var probe = new UpstreamProbe(new AbsentClaudeCode(), unavailable, new AbsentIdentity(), new FixedSiteIdentity(new string('e', 64)));
         var catalog = await probe.Discover(new UpstreamSnapshot(1, mock.Options() with { AuthenticationManual = false }, "fixture-proxy-secret"), CancellationToken.None);
-        Check(catalog.Status == "failed" && catalog.Message.Contains("已选择自动检测系统代理") && mock.Calls.IsEmpty, catalog.Message);
+        Check(catalog.Status == Core.Upstream.CatalogStatus.Failed && catalog.Message.Contains("已选择自动检测系统代理") && mock.Calls.IsEmpty, catalog.Message);
     }
 
     /// <summary>

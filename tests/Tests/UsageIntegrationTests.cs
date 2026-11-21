@@ -36,15 +36,15 @@ static class UsageIntegrationTests
             // 两人同时请求，模拟上游等两个请求都到达后才应答，确保两条记录交错进行时仍各自归属正确的成员。
             Check((await Task.WhenAll(Call(web, a.Token), Call(web, b.Token, "b"))).All(status => status == HttpStatusCode.OK));
             total += 2; var report = await Settled(web, total);
-            Check(report.Rows.Take(2).All(row => row.UpstreamVersion == version && row.Completeness == "complete"));
+            Check(report.Rows.Take(2).All(row => row.UpstreamVersion == version && row.Completeness == Core.Usage.UsageCompleteness.Complete));
             var personal = await Personal(web, a.Token);
             Check(personal.Rows.All(row => row.UserId == a.UserId && row.Tokens.Input == 10));
             var theirs = await Personal(web, b.Token);
-            Check(theirs.Rows.All(row => row.UserId == b.UserId) && theirs.Rows.Where(row => row.Completeness == "complete").All(row => row.Tokens.Input == 20));
+            Check(theirs.Rows.All(row => row.UserId == b.UserId) && theirs.Rows.Where(row => row.Completeness == Core.Usage.UsageCompleteness.Complete).All(row => row.Tokens.Input == 20));
             upstream.Handler = context => Json(context, null);
             Check(await Call(web, b.Token) == HttpStatusCode.OK); total++;
             report = await Settled(web, total);
-            Check(report.Rows[0].Completeness == "not_provided" && report.Rows[0].Tokens.Input is null);
+            Check(report.Rows[0].Completeness == Core.Usage.UsageCompleteness.NotProvided && report.Rows[0].Tokens.Input is null);
         }
         var oldTokenId = (await web.Identities.Clients.Authenticate(a.Token))!.TokenId;
         var rotated = await web.Identities.Rotate(a.UserId); await web.Identities.Rename(a.UserId, "甲改名");
@@ -92,12 +92,12 @@ static class UsageIntegrationTests
         using var prewarm = await web.Http.SendAsync(head);
         using var staticPage = await web.Http.GetAsync(web.Url + "/my-usage");
         Check(await Call(web, "invalid") == HttpStatusCode.Unauthorized);
-        var report = await Settled(web, 5); var inference = report.Summary.Single(row => row.Kind == "inference");
+        var report = await Settled(web, 5); var inference = report.Summary.Single(row => row.Kind == Core.Usage.UsageKind.Inference);
         Check(inference.Requests == 3 && inference.Incomplete == 2 && inference.Tokens == new UsageTokens(17, 3, 4, 5));
-        Check(report.Summary.Single(row => row.Kind == "estimate").Tokens.Input == 123);
-        Check(report.Summary.Single(row => row.Kind == "models").Tokens == new UsageTokens());
+        Check(report.Summary.Single(row => row.Kind == Core.Usage.UsageKind.Estimate).Tokens.Input == 123);
+        Check(report.Summary.Single(row => row.Kind == Core.Usage.UsageKind.Models).Tokens == new UsageTokens());
         var complete = report.Rows.Single(row => row.Tokens.Output == 3);
-        await web.RelayUsage.Finish(complete.RequestId, new("failed", true, 500, 500, 1, "partial", new(888, 999)));
+        await web.RelayUsage.Finish(complete.RequestId, new(Core.Usage.UsageOutcome.Failed, true, 500, 500, 1, Core.Usage.UsageCompleteness.Partial, new(888, 999)));
         Check((await web.RelayUsage.Query(new())).Rows.Single(row => row.RequestId == complete.RequestId) == complete, "Duplicate completion must be idempotent");
         using (var connection = web.Database.Open())
         {
@@ -118,12 +118,12 @@ static class UsageIntegrationTests
         await using var web = await WebFixture.Create(config => { config.RequestsPerMinute = 1; config.MaxBodyBytes = 100; });
         var user = await web.Identities.Create("拒绝用量");
         Check(await Call(web, user.Token) == HttpStatusCode.ServiceUnavailable);
-        var first = await Settled(web, 1); Check(first.Rows[0].Outcome == "failed" && !first.Rows[0].Dispatched && first.Rows[0].Completeness == "not_applicable");
+        var first = await Settled(web, 1); Check(first.Rows[0].Outcome == Core.Usage.UsageOutcome.Failed && !first.Rows[0].Dispatched && first.Rows[0].Completeness == Core.Usage.UsageCompleteness.NotApplicable);
         await upstream.Activate(web.Upstreams); var calls = upstream.Calls.Count;
         Check(await Call(web, user.Token) == HttpStatusCode.RequestEntityTooLarge);
         Check(await Call(web, user.Token) == HttpStatusCode.TooManyRequests);
         var report = await Settled(web, 3);
-        Check(report.Rows.All(row => !row.Dispatched && row.Outcome == "failed" && row.Tokens.Input is null));
+        Check(report.Rows.All(row => !row.Dispatched && row.Outcome == Core.Usage.UsageOutcome.Failed && row.Tokens.Input is null));
         Check(upstream.Calls.Count == calls);
     }
 }

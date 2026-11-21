@@ -100,7 +100,7 @@ static class DbTimeBenchmark
         /// <summary>原样转交。</summary>
         public DateTimeOffset Cutoff => inner.Cutoff;
         /// <summary>计时写开始记录。</summary>
-        public Task Start(string requestId, ClientAccess client, string kind) => Timed(() => inner.Start(requestId, client, kind));
+        public Task Start(string requestId, ClientAccess client, UsageKind kind) => Timed(() => inner.Start(requestId, client, kind));
         /// <summary>计时写发送标记。</summary>
         public Task Dispatch(string requestId, long version, long? upstreamCandidateId, string? model) => Timed(() => inner.Dispatch(requestId, version, upstreamCandidateId, model));
         /// <summary>计时写结束结果，完成时记一次。</summary>

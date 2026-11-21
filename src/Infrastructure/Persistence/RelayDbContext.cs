@@ -1,5 +1,7 @@
 ﻿using System.Linq.Expressions;
 using System.Security.Cryptography;
+using Core.Upstream;
+using Core.Usage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Repositories;
@@ -16,13 +18,20 @@ internal sealed class RelayDbContext(DbContextOptions<RelayDbContext> options, I
     /// <summary>本工作单元里已由应用层确认物理删除的实体（按引用比较）。</summary>
     private readonly HashSet<object> _hardDeletes = new(ReferenceEqualityComparer.Instance);
 
-    /// <summary>全模型统一：DateTimeOffset 存 Unix 毫秒整数，decimal 存十进制文本。</summary>
+    /// <summary>全模型统一：DateTimeOffset 存 Unix 毫秒整数，decimal 存十进制文本，封闭取值存今天的那串字符。</summary>
     /// <param name="configurationBuilder">约定配置。</param>
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
         configurationBuilder.Properties<DateTimeOffset>().HaveConversion<UnixMillisecondsConverter>();
         configurationBuilder.Properties<decimal>().HaveConversion<DecimalTextConverter>();
+        Closed<UsageKind>(configurationBuilder); Closed<UsageOutcome>(configurationBuilder); Closed<UsageCompleteness>(configurationBuilder);
+        Closed<MoneySource>(configurationBuilder); Closed<MoneyCompleteness>(configurationBuilder);
+        Closed<AttemptDisposition>(configurationBuilder); Closed<ConnectFailure>(configurationBuilder); Closed<CandidateState>(configurationBuilder);
     }
+
+    /// <summary>登记一种封闭取值的库内转换。</summary>
+    private static void Closed<TEnum>(ModelConfigurationBuilder configurationBuilder) where TEnum : struct, Enum =>
+        configurationBuilder.Properties<TEnum>().HaveConversion<WireValueConverter<TEnum>>();
 
     /// <summary>读入本程序集里的全部实体配置，并给每个实体挂上命名的软删除过滤器（包含软删除查询时只关这一个）。</summary>
     /// <param name="modelBuilder">模型配置。</param>

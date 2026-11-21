@@ -29,9 +29,9 @@ static class UpstreamFailoverTests
         using (var response = await scene.Web.Http.SendAsync(request))
             Check(response.StatusCode == HttpStatusCode.OK && (await response.Content.ReadAsStringAsync()).Contains("msg_fixture"), $"{status} must be caught by the standby upstream");
         var report = await Settled(scene.Web, 1); var row = report.Rows.Single(); var tries = report.AttemptsOf(row.RequestId);
-        Check(row.Outcome == "succeeded" && tries.Count == 2, $"{status}: two attempts");
-        Check(tries[0].Number == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].UpstreamStatus == status && tries[0].Disposition == "next" && tries[0].ErrorType == ErrorType(status), $"{status}: first attempt {tries[0]}");
-        Check(tries[1].Number == 2 && tries[1].UpstreamCandidateId == scene.IdB && tries[1].UpstreamStatus == 200 && tries[1].Disposition == "client" && tries[1].ErrorType is null, $"{status}: second attempt {tries[1]}");
+        Check(row.Outcome == Core.Usage.UsageOutcome.Succeeded && tries.Count == 2, $"{status}: two attempts");
+        Check(tries[0].Number == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].UpstreamStatus == status && tries[0].Disposition == Core.Usage.AttemptDisposition.Next && tries[0].ErrorType == ErrorType(status), $"{status}: first attempt {tries[0]}");
+        Check(tries[1].Number == 2 && tries[1].UpstreamCandidateId == scene.IdB && tries[1].UpstreamStatus == 200 && tries[1].Disposition == Core.Usage.AttemptDisposition.Client && tries[1].ErrorType is null, $"{status}: second attempt {tries[1]}");
         Check(scene.A.Calls.Count == 1 && scene.B.Calls.Count == 1);
         Check(scene.Served(row.RequestId) == scene.IdB, "Usage belongs to the upstream that actually served");
         var line = scene.Events().Last();
@@ -51,8 +51,8 @@ static class UpstreamFailoverTests
         using (var response = await scene.Web.Http.SendAsync(request))
             Check(response.StatusCode == HttpStatusCode.OK, "Connect timeout must be caught by a standby upstream");
         var report = await Settled(scene.Web, 1); var tries = report.AttemptsOf(report.Rows.Single().RequestId);
-        Check(tries.Count == 2 && tries[0].UpstreamCandidateId == dead && tries[0].ErrorType == "connection_failed" && tries[0].ConnectFailure == "connect_timeout"
-            && tries[0].Disposition == "next" && tries[1].UpstreamCandidateId == scene.IdA && tries[1].Disposition == "client", string.Join(" | ", tries));
+        Check(tries.Count == 2 && tries[0].UpstreamCandidateId == dead && tries[0].ErrorType == "connection_failed" && tries[0].ConnectFailure == Core.Usage.ConnectFailure.ConnectTimeout
+            && tries[0].Disposition == Core.Usage.AttemptDisposition.Next && tries[1].UpstreamCandidateId == scene.IdA && tries[1].Disposition == Core.Usage.AttemptDisposition.Client, string.Join(" | ", tries));
         Check(scene.A.Calls.Count == 1 && scene.B.Calls.IsEmpty, "Standby upstreams are tried in page order");
     }
 
@@ -66,7 +66,7 @@ static class UpstreamFailoverTests
         using (var response = await scene.Web.Http.SendAsync(request))
             Check((int)response.StatusCode == status && await response.Content.ReadAsStringAsync() == body, $"{status} must reach the client verbatim");
         var report = await Settled(scene.Web, 1); var tries = report.AttemptsOf(report.Rows.Single().RequestId);
-        Check(tries.Count == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].Disposition == "client" && scene.B.Calls.IsEmpty, $"{status} must not switch");
+        Check(tries.Count == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].Disposition == Core.Usage.AttemptDisposition.Client && scene.B.Calls.IsEmpty, $"{status} must not switch");
     }
 
     /// <summary>甲流式回传到一半断开：已经向客户端写出字节，不换；乙收到 0 次，库里只有甲一条、结果为中断或失败。</summary>
@@ -89,7 +89,7 @@ static class UpstreamFailoverTests
             catch (Exception error) when (error is HttpRequestException or IOException) { }
         }
         var report = await Settled(scene.Web, 1); var row = report.Rows.Single(); var tries = report.AttemptsOf(row.RequestId);
-        Check(tries.Count == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].Disposition == "client" && row.Outcome is "interrupted" or "failed", $"{row.Outcome}: {string.Join(" | ", tries)}");
+        Check(tries.Count == 1 && tries[0].UpstreamCandidateId == scene.IdA && tries[0].Disposition == Core.Usage.AttemptDisposition.Client && row.Outcome is Core.Usage.UsageOutcome.Interrupted or Core.Usage.UsageOutcome.Failed, $"{row.Outcome}: {string.Join(" | ", tries)}");
         Check(scene.B.Calls.IsEmpty, "A stream broken midway must never be continued by another upstream");
     }
 
@@ -139,7 +139,7 @@ static class UpstreamFailoverTests
         using (var response = await scene.Web.Http.SendAsync(request))
             Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && await response.Content.ReadAsStringAsync() == body);
         Check(scene.B.Calls.IsEmpty, "A standby without the requested model must not be tried");
-        var report = await Settled(scene.Web, 1); Check(report.AttemptsOf(report.Rows.Single().RequestId) is [{ Disposition: "client" }]);
+        var report = await Settled(scene.Web, 1); Check(report.AttemptsOf(report.Rows.Single().RequestId) is [{ Disposition: Core.Usage.AttemptDisposition.Client }]);
     }
 
     /// <summary>
@@ -164,7 +164,7 @@ static class UpstreamFailoverTests
             Check(response.StatusCode == HttpStatusCode.ServiceUnavailable && await response.Content.ReadAsStringAsync() == body, "Switch off: client gets A's 503 verbatim");
         Check(scene.B.Calls.IsEmpty, "Switch off: B must receive nothing");
         var report = await Settled(scene.Web, 1); var row = report.Rows.Single();
-        Check(report.AttemptsOf(row.RequestId) is [{ Disposition: "client" } only] && only.UpstreamCandidateId == scene.IdA && scene.Served(row.RequestId) == scene.IdA);
+        Check(report.AttemptsOf(row.RequestId) is [{ Disposition: Core.Usage.AttemptDisposition.Client } only] && only.UpstreamCandidateId == scene.IdA && scene.Served(row.RequestId) == scene.IdA);
         Check((await Save(true)).Contains("自动切换已打开") && (await scene.Web.Upstreams.ReadOverview()).Failover);
         Check(await Call(scene.Web, scene.Token) == HttpStatusCode.OK && scene.B.Calls.Count == 1, "Switch on takes effect for the next request");
     }
@@ -187,7 +187,7 @@ static class UpstreamFailoverTests
         Check(Headers(scene.A).Contains(SecretA) && !Headers(scene.A).Contains(SecretB), "A must only receive its own credential");
         Check(Headers(scene.B).Contains(SecretB) && !Headers(scene.B).Contains(SecretA), "B must only receive its own credential");
         var report = await Settled(scene.Web, 1); var tries = report.AttemptsOf(report.Rows.Single().RequestId);
-        Check(tries is [{ Disposition: "next", UpstreamStatus: 503 }, { Disposition: "client", UpstreamStatus: 502 }], string.Join(" | ", tries));
+        Check(tries is [{ Disposition: Core.Usage.AttemptDisposition.Next, UpstreamStatus: 503 }, { Disposition: Core.Usage.AttemptDisposition.Client, UpstreamStatus: 502 }], string.Join(" | ", tries));
         var stored = string.Join('\n', tries.Select(item => item.ToString())) + string.Join('\n', scene.Logs);
         Check(!stored.Contains(SecretA) && !stored.Contains(SecretB), "Attempts and console must not keep any upstream credential");
     }
@@ -206,7 +206,7 @@ static class UpstreamFailoverTests
                 == """{"type":"error","error":{"type":"api_error","message":"Upstream returned an unreadable error response."}}""");
         Check(scene.A.Calls.Count == 1 && scene.B.Calls.Count == 1, "Each upstream is tried at most once per request");
         var report = await Settled(scene.Web, 1);
-        Check(report.AttemptsOf(report.Rows.Single().RequestId) is [{ Disposition: "next" }, { Disposition: "client", ErrorType: "unreadable" }]);
+        Check(report.AttemptsOf(report.Rows.Single().RequestId) is [{ Disposition: Core.Usage.AttemptDisposition.Next }, { Disposition: Core.Usage.AttemptDisposition.Client, ErrorType: "unreadable" }]);
     }
 
     /// <summary>用量归属与计价：甲、乙各有不同单价，甲回 503 换到乙，金额按乙的单价估算（10 输入、20 输出 → 0.00005 USD），用量记乙的主键。</summary>
@@ -219,7 +219,7 @@ static class UpstreamFailoverTests
         scene.B.Handler = context => Json(context, new { input_tokens = 10, output_tokens = 20 });
         Check(await Call(scene.Web, scene.Token) == HttpStatusCode.OK);
         var row = (await Settled(scene.Web, 1)).Rows.Single();
-        Check(row.Money == new UsageMoney(0.00005m, "USD", "estimated", "complete") && scene.Served(row.RequestId) == scene.IdB, $"{row.Money}");
+        Check(row.Money == new UsageMoney(0.00005m, "USD", Core.Usage.MoneySource.Estimated, Core.Usage.MoneyCompleteness.Complete) && scene.Served(row.RequestId) == scene.IdB, $"{row.Money}");
     }
 
     /// <summary>

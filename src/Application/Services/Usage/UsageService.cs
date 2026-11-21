@@ -45,7 +45,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// 在发往上游之前写入请求开始记录（归属取自已鉴权的使用者与令牌，版本记此刻的活动版本）。写入串行进行，最多等待 2 秒；
     /// 等不到或存储故障时计入失败并抛出 503 的 <see cref="RelayFailure"/>，请求不会发往上游。
     /// </summary>
-    public async Task Start(string requestId, ClientAccess client, string kind)
+    public async Task Start(string requestId, ClientAccess client, UsageKind kind)
     {
         var acquired = false; var startedAt = Now;
         try
@@ -136,7 +136,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
         var now = Now.UtcTicks;
         await requests.WithLockWaitAsync(_writeWait, async () =>
         {
-            foreach (var row in await requests.FindAsync(item => item.Outcome == UsageRequest.StartedOutcome)) row.Interrupt(now);
+            foreach (var row in await requests.FindAsync(item => item.Outcome == UsageOutcome.Started)) row.Interrupt(now);
             return await requests.SaveChangesAsync();
         });
     }
@@ -167,9 +167,9 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
         filter.Validate();
         var now = Now; var cutoff = now.AddDays(-40);
         var from = (filter.From is { } since && since > cutoff ? since : cutoff).UtcTicks; var until = filter.Until?.UtcTicks; var end = now.UtcTicks;
-        var kind = string.IsNullOrEmpty(filter.Kind) ? null : filter.Kind;
+        var kind = filter.Kind;
         var model = string.IsNullOrEmpty(filter.Model) ? null : filter.Model;
-        var outcome = string.IsNullOrEmpty(filter.Outcome) ? null : filter.Outcome;
+        var outcome = filter.Outcome;
         // 只读查询不开写事务：SQLite 下写事务是立即写锁，会挡住转发路径上的用量写入；汇总、分段、金额与明细出自下面同一次读取，天然对得上。
         await using var scope = scopes.CreateAsyncScope();
         var requests = scope.Repository<UsageRequest>();

@@ -1,5 +1,5 @@
 ﻿@model Core.Usage.UsageSummary
-@if (Model.Kind == "inference")
+@if (Model.Kind == Core.Usage.UsageKind.Inference)
 {
     @if (Model.Money.Count == 0) { <p>金额：未知</p> }
     @foreach (var money in Model.Money)

@@ -5,4 +5,4 @@
 /// 供应商名称（只做显示）、保存时基于的活动版本、配置、检测状态、最近一次报告、此刻能不能删除（按 <see cref="UpstreamCandidate.Deletable"/> 与删除时的同一判据给出，页面只读它）与导出搬走的时刻（没导出过为空）；不含任何秘密。
 /// 库里那一行是实体 <see cref="UpstreamCandidate"/>，这里是解析好配置与报告、给页面读的视图。
 /// </summary>
-public sealed record UpstreamCandidateView(long Id, string Uid, string Name, long ExpectedVersion, UpstreamOptions Options, string State, UpstreamReport? Report, bool Deletable, DateTimeOffset? ExportedAt = null);
+public sealed record UpstreamCandidateView(long Id, string Uid, string Name, long ExpectedVersion, UpstreamOptions Options, CandidateState State, UpstreamReport? Report, bool Deletable, DateTimeOffset? ExportedAt = null);

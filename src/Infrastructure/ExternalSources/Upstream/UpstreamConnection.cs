@@ -165,8 +165,8 @@ internal sealed class UpstreamConnection : IUpstreamLease
     /// </summary>
     internal UpstreamAvoidance? Held(DateTimeOffset now)
     {
-        if (Paused) return new(Snapshot.UpstreamCandidateId, "paused", null, null, null, null);
-        if (CooldownSeconds > 0) return new(Snapshot.UpstreamCandidateId, "cooldown", DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref cooldownUntil)), 429, null, null);
+        if (Paused) return new(Snapshot.UpstreamCandidateId, AvoidanceKind.Paused, null, null, null, null);
+        if (CooldownSeconds > 0) return new(Snapshot.UpstreamCandidateId, AvoidanceKind.Cooldown, DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref cooldownUntil)), 429, null, null);
         return Avoided(now) ? Volatile.Read(ref avoidance) : null;
     }
 

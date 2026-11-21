@@ -11,6 +11,7 @@ using Core.Identity;
 using Core.Relay;
 using Core.Upstream;
 using Core.Usage;
+using Core.Values;
 
 namespace Application.Services.Relay;
 
@@ -75,7 +76,7 @@ public sealed class RelayForwarder : IRelayForwarder
     public async Task Handle(IRelayExchange exchange)
     {
         var stopwatch = Stopwatch.StartNew(); var id = Guid.NewGuid().ToString("N"); var name = "unknown";
-        var path = exchange.Path; var outcome = "succeeded";
+        var path = exchange.Path; var outcome = UsageOutcome.Succeeded;
         UsageAccumulator? usage = null; var recorded = false; var dispatched = false; int? upstreamStatus = null;
         var attempts = new List<UpstreamAttempt>(); string? upstreamName = null;
         var heldOfficialOperations = new List<IDisposable>();
@@ -99,7 +100,7 @@ public sealed class RelayForwarder : IRelayForwarder
             if (path == "/api/hello" && exchange.Method == "HEAD") { exchange.Reply.StatusCode = 200; return; }
             if (!_routes.TryGetValue(path, out var method)) throw new RelayFailure(404, "Endpoint not exposed by this relay.");
             if (exchange.Method != method) throw new RelayFailure(405, "Method not allowed.");
-            var kind = path == "/v1/messages" ? "inference" : path == "/v1/models" ? "models" : "estimate";
+            var kind = path == "/v1/messages" ? UsageKind.Inference : path == "/v1/models" ? UsageKind.Models : UsageKind.Estimate;
             usage = new UsageAccumulator(kind);
             if (_usage is not null) { await _usage.Start(id, client, kind); recorded = true; }
             using var route = await _upstreams.Route();
@@ -225,8 +226,8 @@ public sealed class RelayForwarder : IRelayForwarder
                             if (upstream.Snapshot.Options.OfficialAccount)
                                 _diagnostics?.Record(id, "response", path, attemptSite?.Version ?? 0, attemptSite?.DeviceId ?? _config.DeviceId,
                                     entrypoint: caller?.IdentityEntrypoint, status: upstreamStatus, error: DiagnosticError(upstreamStatus.Value, usage));
-                            if (!response.IsSuccessStatusCode || usage.Error) outcome = "failed";
-                            else if (usage.IsStream && !usage.ProtocolComplete) outcome = "interrupted";
+                            if (!response.IsSuccessStatusCode || usage.Error) outcome = UsageOutcome.Failed;
+                            else if (usage.IsStream && !usage.ProtocolComplete) outcome = UsageOutcome.Interrupted;
                             else route.Served(upstream);
                             Interlocked.Increment(ref completed);
                         }
@@ -252,15 +253,15 @@ public sealed class RelayForwarder : IRelayForwarder
         }
         // 站点维护属于本地拒绝，不调用上游 Observe，也不触发认证暂停或冷却。
         catch (Exception error) when (error is SiteIdentityUnavailableException or ClaudeConfigurationUnavailableException)
-        { outcome = "failed"; await exchange.Fail(new RelayFailure(503, error.Message)); }
+        { outcome = UsageOutcome.Failed; await exchange.Fail(new RelayFailure(503, error.Message)); }
         // 客户端主动断开：记为 cancelled 并直接中止连接，不再尝试写错误响应。
-        catch (OperationCanceledException) when (exchange.Aborted.IsCancellationRequested) { outcome = "cancelled"; exchange.Reply.Abort(); }
+        catch (OperationCanceledException) when (exchange.Aborted.IsCancellationRequested) { outcome = UsageOutcome.Cancelled; exchange.Reply.Abort(); }
         // 鉴权、限速、准入、校验等可预期的拒绝，按其状态码和固定消息写回；宿主读请求时发现格式错误或超限，也已在读请求体处换成这一种。
-        catch (RelayFailure error) { outcome = "failed"; await exchange.Fail(error); }
+        catch (RelayFailure error) { outcome = UsageOutcome.Failed; await exchange.Fail(error); }
         // 回传上游响应途中流被打断，记为 interrupted；若已开始写响应，Fail 会直接中止连接。
-        catch (IOException) { outcome = "interrupted"; await exchange.Fail(new RelayFailure(502, "Upstream response interrupted.")); }
+        catch (IOException) { outcome = UsageOutcome.Interrupted; await exchange.Fail(new RelayFailure(502, "Upstream response interrupted.")); }
         // 兜底：未预料的异常只回 500 固定消息，不泄露堆栈、令牌或上游凭据。
-        catch (Exception) { outcome = "failed"; await exchange.Fail(new RelayFailure(500, "Internal relay error.")); }
+        catch (Exception) { outcome = UsageOutcome.Failed; await exchange.Fail(new RelayFailure(500, "Internal relay error.")); }
         // 无论成败都要写用量结束结果和事件日志，保证已开始的用量记录不会悬空；日志只含请求编号、客户端名和路由，不含令牌。
         // 事件日志在原有字段之后补上游名称、尝试次数和最后一次错误类型，原有字段与顺序不变。
         finally
@@ -269,11 +270,11 @@ public sealed class RelayForwarder : IRelayForwarder
             {
                 if (recorded)
                     await _usage!.Finish(id, new UsageEnd(outcome, dispatched, exchange.Reply.StatusCode, upstreamStatus,
-                        stopwatch.ElapsedMilliseconds, usage!.Completeness(dispatched, outcome == "succeeded"), usage.Tokens,
-                        usage.ReportedMoney is { } money ? money with { Completeness = usage.ProtocolComplete && outcome == "succeeded" ? "complete" : "partial" } : null)
+                        stopwatch.ElapsedMilliseconds, usage!.Completeness(dispatched, outcome == UsageOutcome.Succeeded), usage.Tokens,
+                        usage.ReportedMoney is { } money ? money with { Completeness = usage.ProtocolComplete && outcome == UsageOutcome.Succeeded ? MoneyCompleteness.Complete : MoneyCompleteness.Partial } : null)
                         { Attempts = attempts });
                 _log.Write(new { time = DateTimeOffset.UtcNow, requestId = id, client = name, route = _routes.ContainsKey(path) ? path : "local",
-                    status = exchange.Reply.StatusCode, outcome, durationMs = stopwatch.ElapsedMilliseconds,
+                    status = exchange.Reply.StatusCode, outcome = Wire<UsageOutcome>.Name(outcome), durationMs = stopwatch.ElapsedMilliseconds,
                     upstream = upstreamName, attempts = attempts.Count, error = attempts.LastOrDefault()?.ErrorType });
             }
             // SSE 完整结束且尾部用量写入完成后才让维护提交；异常和换家也在此释放，避免提前排空或泄漏许可。
