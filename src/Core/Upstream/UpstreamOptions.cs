@@ -7,10 +7,10 @@ namespace Core.Upstream;
 public sealed record UpstreamOptions
 {
     /// <summary>凭据类型：<c>oauth</c>（Claude 账户令牌）或 <c>api-key</c>（API 密钥）。</summary>
-    public string Mode { get; init; } = "api-key";
+    public UpstreamMode Mode { get; init; } = UpstreamMode.ApiKey;
 
     /// <summary>凭据放在哪个请求头：<c>bearer</c>（Authorization: Bearer）或 <c>x-api-key</c>；账户模式只能用 bearer。未手动指定时由获取模型和测试自动探测后写回。</summary>
-    public string Authentication { get; init; } = "x-api-key";
+    public AuthenticationScheme Authentication { get; init; } = AuthenticationScheme.XApiKey;
 
     /// <summary>为 true 表示认证方式由管理员在高级设置里手动指定：探测只用这一种，结果不覆盖它。</summary>
     public bool AuthenticationManual { get; init; }
@@ -25,7 +25,7 @@ public sealed record UpstreamOptions
     public bool OAuthBeta { get; init; }
 
     /// <summary>上游预设：<c>anthropic</c>（官方接口）或 <c>compatible</c>（兼容接口）；经 <see cref="Validated"/> 时按地址主机重新推出，管理员不再选择。</summary>
-    public string Preset { get; init; } = "anthropic";
+    public UpstreamPreset Preset { get; init; } = UpstreamPreset.Anthropic;
 
     /// <summary>是否允许上游位于本机或私网，以及是否允许使用明文 HTTP；默认只允许公网 HTTPS。</summary>
     public bool AllowPrivateNetwork { get; init; }
@@ -34,7 +34,7 @@ public sealed record UpstreamOptions
     public string Model { get; init; } = "";
 
     /// <summary>候选检测方式：<c>messages</c>（最小消息调用）或 <c>claude-code</c>（启动真实 Claude Code 会话验证）。未手动指定时由测试自动探测后写回。</summary>
-    public string Diagnostic { get; init; } = "messages";
+    public DiagnosticMethod Diagnostic { get; init; } = DiagnosticMethod.Messages;
 
     /// <summary>为 true 表示检测方式由管理员在高级设置里手动指定：测试只用这一种，标准调用被拒时不自动改用 Claude Code。</summary>
     public bool DiagnosticManual { get; init; }
@@ -44,7 +44,7 @@ public sealed record UpstreamOptions
     /// 测试直接用真 Claude Code。按地址主机直接推，不信 <see cref="Preset"/>（没经过 <see cref="Validated"/> 的选项里它还是默认值）；不进库也不进导出文件。
     /// </summary>
     [JsonIgnore]
-    public bool OfficialAccount => OfficialLogin || Mode == "oauth" && Uri.TryCreate(BaseUrl, UriKind.Absolute, out var address) && UpstreamDetection.Preset(address) == "anthropic";
+    public bool OfficialAccount => OfficialLogin || Mode == UpstreamMode.OAuth && Uri.TryCreate(BaseUrl, UriKind.Absolute, out var address) && UpstreamDetection.Preset(address) == UpstreamPreset.Anthropic;
 
     /// <summary>
     /// 校验各枚举取值、凭据组合与模型名（最多 200 字符，仅字母数字和 <c>- _ . / :</c>），规范化地址并按地址主机推出预设，返回新的副本；原对象不变。
@@ -52,20 +52,18 @@ public sealed record UpstreamOptions
     /// </summary>
     public UpstreamOptions Validated()
     {
-        if (Diagnostic is not ("messages" or "claude-code")) throw new InvalidOperationException("请选择支持的调用检测方式。");
-        if (Mode is not ("oauth" or "api-key") || Authentication is not ("bearer" or "x-api-key")
-            || Mode == "oauth" && Authentication != "bearer" || Mode == "api-key" && (OAuthBeta || OfficialLogin))
+        if (Mode == UpstreamMode.OAuth && Authentication != AuthenticationScheme.Bearer || Mode == UpstreamMode.ApiKey && (OAuthBeta || OfficialLogin))
             throw new InvalidOperationException("账户模式使用 Bearer；API 模式不可附加账户 OAuth beta，也不能用官方账户登录。");
         if (Model.Length > 200 || Model.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_' or '.' or '/' or ':')))
             throw new InvalidOperationException("模型名称只能包含字母、数字和 - _ . / :，最多 200 字符。");
         var address = UpstreamAddress.Normalize(BaseUrl, AllowPrivateNetwork);
         var preset = UpstreamDetection.Preset(address);
         return this with { BaseUrl = address.Query.Length == 0 ? address.AbsoluteUri.TrimEnd('/') : address.AbsoluteUri, Preset = preset,
-            OAuthBeta = Mode == "oauth" && (preset == "anthropic" || OAuthBeta) };
+            OAuthBeta = Mode == UpstreamMode.OAuth && (preset == UpstreamPreset.Anthropic || OAuthBeta) };
     }
 
     /// <summary>从旧版实例配置推导上游选项：沿用其认证方式，账户模式使用 bearer 并附加 OAuth beta；旧代理由 v4 迁移改成全局设置，不进选项；结果未经 <see cref="Validated"/> 校验。</summary>
     public static UpstreamOptions Legacy(RelayConfiguration config, string baseUrl = "https://api.anthropic.com") => new()
-    { Mode = config.AuthMode, Authentication = config.AuthMode == "oauth" ? "bearer" : "x-api-key",
-        OAuthBeta = config.AuthMode == "oauth", BaseUrl = baseUrl };
+    { Mode = config.AuthMode, Authentication = config.AuthMode == UpstreamMode.OAuth ? AuthenticationScheme.Bearer : AuthenticationScheme.XApiKey,
+        OAuthBeta = config.AuthMode == UpstreamMode.OAuth, BaseUrl = baseUrl };
 }

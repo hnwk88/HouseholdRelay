@@ -34,7 +34,7 @@ static class OfficialLoginTests
             Check(page.IsSuccessStatusCode && html.Contains($"官方账户登录成功，已保存为「{FakeClaude.Email}」") && html.Contains("<option value=\"fixture-model\""), html);
             Check(!raw.Contains("fixture-login-token") && !raw.Contains("fixture-inherited-secret"));
             var candidate = (await web.Upstreams.LatestCandidate())!;
-            Check(candidate.Name == FakeClaude.Email && candidate.Options is { OfficialLogin: true, Mode: "oauth", Authentication: "bearer" });
+            Check(candidate.Name == FakeClaude.Email && candidate.Options is { OfficialLogin: true, Mode: UpstreamMode.OAuth, Authentication: AuthenticationScheme.Bearer });
             var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate.Uid);
             using (var environment = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "fake-env.json"))))
             {
@@ -104,7 +104,7 @@ static class OfficialLoginTests
         // 预期的拒绝：名称超长在登录前就读出要求。
         catch (InvalidOperationException error) { Check(error.Message.Contains("供应商名称"), error.Message); }
         Check(NoAccountDirectories(host) && (await service.ListCandidates()).Count == 0);
-        try { await service.SaveCandidate((await service.ReadActive()).Version, options with { Mode = "oauth", Authentication = "bearer", OfficialLogin = true }, "fixture-pasted-token", "贴令牌"); Check(false, "Pasted tokens must not claim a login"); }
+        try { await service.SaveCandidate((await service.ReadActive()).Version, options with { Mode = UpstreamMode.OAuth, Authentication = AuthenticationScheme.Bearer, OfficialLogin = true }, "fixture-pasted-token", "贴令牌"); Check(false, "Pasted tokens must not claim a login"); }
         // 预期的拒绝：官方登录只能经登录入口建立。
         catch (InvalidOperationException error) { Check(error.Message.Contains("登录官方账户"), error.Message); }
 

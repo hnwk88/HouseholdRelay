@@ -1,5 +1,6 @@
 ﻿using System.Security.Cryptography;
 using Core.Identity;
+using Core.Upstream;
 
 namespace Core.Configuration;
 
@@ -13,7 +14,7 @@ public sealed class RelayConfiguration
     public string PublicUrl { get; set; } = "";
 
     /// <summary>上游认证方式：<c>oauth</c>（Bearer 令牌）或 <c>api-key</c>（x-api-key 头），其余取值不合法。</summary>
-    public string AuthMode { get; set; } = "oauth";
+    public UpstreamMode AuthMode { get; set; } = UpstreamMode.OAuth;
 
     /// <summary>站点唯一持久设备标识；只有首次建站和明确维护会生成，普通对象和读取不补号。</summary>
     public string DeviceId { get; set; } = "";
@@ -28,7 +29,7 @@ public sealed class RelayConfiguration
     public string? UpstreamProxy { get; set; }
 
     /// <summary>全局出站代理方式：<c>none</c>（不使用代理）、<c>auto</c>（自动检测 Windows 系统代理）或 <c>manual</c>（使用 <see cref="ProxyUrl"/>）；上游转发、获取模型、测试和 Claude Code 检测子进程共用这一份。</summary>
-    public string ProxyMode { get; set; } = "none";
+    public ProxyMode ProxyMode { get; set; } = ProxyMode.None;
 
     /// <summary>手动指定的代理根地址（如 <c>http://127.0.0.1:7897</c>）；只在 <see cref="ProxyMode"/> 为 <c>manual</c> 时生效，其余方式下原样保存，切回手动不必重填。</summary>
     public string? ProxyUrl { get; set; }
@@ -63,7 +64,7 @@ public sealed class RelayConfiguration
     /// <summary>校验全部字段的格式与取值范围，并校验 <see cref="Clients"/>；任一不合法即抛出 <see cref="InvalidOperationException"/>，不做自动修正。</summary>
     public void Validate()
     {
-        if (ListenPort is < 1024 or > 65535 || AuthMode is not ("oauth" or "api-key")
+        if (ListenPort is < 1024 or > 65535
             || MaxConcurrent is < 1 or > 8 || MaxPerClient is < 1 or > 8 || MaxQueued is < 1 or > 64
             || QueueTimeoutSeconds is < 1 or > 120 || UploadTimeoutSeconds is < 1 or > 120
             || RequestTimeoutSeconds is < 1 or > 3600 || MaxBodyBytes is < 1 or > 67108864
@@ -73,8 +74,7 @@ public sealed class RelayConfiguration
             throw new InvalidOperationException("中转配置格式或范围错误。");
         if (UpstreamProxy is not null && (!Uri.TryCreate(UpstreamProxy, UriKind.Absolute, out var proxy)
             || proxy.Scheme is not ("http" or "https"))) throw new InvalidOperationException("上游代理必须是 HTTP/HTTPS 地址。");
-        if (ProxyMode is not ("none" or "auto" or "manual")) throw new InvalidOperationException("请选择不使用代理、自动检测系统代理或手动指定地址。");
-        if (ProxyMode == "manual" && string.IsNullOrWhiteSpace(ProxyUrl)) throw new InvalidOperationException("已选择手动指定代理，请填写代理地址，例如 http://127.0.0.1:7897。");
+        if (ProxyMode == ProxyMode.Manual && string.IsNullOrWhiteSpace(ProxyUrl)) throw new InvalidOperationException("已选择手动指定代理，请填写代理地址，例如 http://127.0.0.1:7897。");
         if (!string.IsNullOrWhiteSpace(ProxyUrl)) Upstream.UpstreamAddress.Proxy(ProxyUrl);
         ValidateClients(Clients);
     }

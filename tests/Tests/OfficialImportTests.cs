@@ -28,7 +28,7 @@ static class OfficialImportTests
         Check(page.IsSuccessStatusCode && html.Contains($"登录文件已导入，已保存为「{FakeClaude.Email}」。已获取 1 个模型") && html.Contains("<option value=\"fixture-model\""), html);
         Check(!raw.Contains(ImportedToken) && !raw.Contains("fixture-refresh-token"), "Imported tokens must not appear on the page");
         var candidate = (await web.Upstreams.LatestCandidate())!;
-        Check(candidate.Name == FakeClaude.Email && candidate.Options is { OfficialLogin: true, Mode: "oauth", Authentication: "bearer" });
+        Check(candidate.Name == FakeClaude.Email && candidate.Options is { OfficialLogin: true, Mode: UpstreamMode.OAuth, Authentication: AuthenticationScheme.Bearer });
         var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", candidate.Uid);
         Check(File.ReadAllBytes(Path.Combine(directory, OfficialCredential.FileName)).SequenceEqual(content), "The imported file must be stored verbatim");
         var calls = File.ReadAllText(Path.Combine(directory, "fake-calls.log"));

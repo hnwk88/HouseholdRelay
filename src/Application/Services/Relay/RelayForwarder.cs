@@ -124,7 +124,7 @@ public sealed class RelayForwarder : IRelayForwarder
                     if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
                     if (document.RootElement.TryGetProperty("model", out var modelValue) && modelValue.ValueKind == JsonValueKind.String)
                         model = SafeModel(modelValue.GetString(), token, route.Active.Snapshot.Credential);
-                    if (!route.Active.Snapshot.Options.OfficialAccount && route.Active.Snapshot.Options.Mode == "oauth" && _config.NormalizeDeviceMetadata) normalized = DeviceMetadata.Normalize(body, compatibleDevice);
+                    if (!route.Active.Snapshot.Options.OfficialAccount && route.Active.Snapshot.Options.Mode == UpstreamMode.OAuth && _config.NormalizeDeviceMetadata) normalized = DeviceMetadata.Normalize(body, compatibleDevice);
                 }
                 // 请求体不是 JSON 对象时在发往上游之前就以 400 拒绝，不把解析器的内部消息透给客户端。
                 catch (JsonException) { throw new RelayFailure(400, "Expected a JSON object."); }
@@ -132,7 +132,7 @@ public sealed class RelayForwarder : IRelayForwarder
             // JSON 处理完成后再核验，缩短上传结束与真正发往上游之间的撤销窗口。
             if (await _clients.Authenticate(token) is null) throw new RelayFailure(401, "Relay token revoked before dispatch.");
             // 每家按自己的接入方式用同一份请求体重建请求：账户模式统一设备元数据，API 模式原样；请求体只读了一次。
-            byte[] Body(IUpstreamLease target) => method == "POST" && !target.Snapshot.Options.OfficialAccount && target.Snapshot.Options.Mode == "oauth" && _config.NormalizeDeviceMetadata
+            byte[] Body(IUpstreamLease target) => method == "POST" && !target.Snapshot.Options.OfficialAccount && target.Snapshot.Options.Mode == UpstreamMode.OAuth && _config.NormalizeDeviceMetadata
                 ? normalized ??= DeviceMetadata.Normalize(body, compatibleDevice) : body;
             var upstream = (await route.Next(model))!;
             // 发往官方账户要和原生直连一致，家里的 Claude Code 得开「按官方直连发请求」开关（它开了每个对话请求都带 X-Client-Request-Id）。

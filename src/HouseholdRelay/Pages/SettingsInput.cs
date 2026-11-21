@@ -1,4 +1,5 @@
 ﻿using Core.Configuration;
+using Core.Values;
 
 namespace HouseholdRelay.Pages;
 
@@ -38,7 +39,7 @@ public sealed class SettingsInput
         MaxPerClient = config.MaxPerClient, MaxQueued = config.MaxQueued, RequestsPerMinute = config.RequestsPerMinute,
         QueueTimeoutSeconds = config.QueueTimeoutSeconds, UploadTimeoutSeconds = config.UploadTimeoutSeconds,
         RequestTimeoutSeconds = config.RequestTimeoutSeconds, NormalizeDeviceMetadata = config.NormalizeDeviceMetadata,
-        UpstreamUserAgent = config.UpstreamUserAgent, ProxyMode = config.ProxyMode, ProxyUrl = config.ProxyUrl
+        UpstreamUserAgent = config.UpstreamUserAgent, ProxyMode = Wire<Core.Configuration.ProxyMode>.Name(config.ProxyMode), ProxyUrl = config.ProxyUrl
     };
     /// <summary>把表单字段写回传入的设置对象，只覆盖本类列出的字段，其余设置（证书、设备标识等）原样保留；不做校验，校验在配置服务保存时进行。</summary>
     public void Apply(RelayConfiguration config)
@@ -48,7 +49,8 @@ public sealed class SettingsInput
         config.MaxQueued = MaxQueued; config.RequestsPerMinute = RequestsPerMinute;
         config.QueueTimeoutSeconds = QueueTimeoutSeconds; config.UploadTimeoutSeconds = UploadTimeoutSeconds;
         config.RequestTimeoutSeconds = RequestTimeoutSeconds; config.NormalizeDeviceMetadata = NormalizeDeviceMetadata;
-        config.UpstreamUserAgent = UpstreamUserAgent; config.ProxyMode = ProxyMode;
+        config.UpstreamUserAgent = UpstreamUserAgent;
+        config.ProxyMode = Wire<Core.Configuration.ProxyMode>.TryParse(ProxyMode, out var mode) ? mode : throw new InvalidOperationException("请选择不使用代理、自动检测系统代理或手动指定地址。");
         var proxy = ProxyUrl?.Trim();
         config.ProxyUrl = string.IsNullOrEmpty(proxy) ? null : proxy.Contains("://", StringComparison.Ordinal) ? proxy : "http://" + proxy;
     }

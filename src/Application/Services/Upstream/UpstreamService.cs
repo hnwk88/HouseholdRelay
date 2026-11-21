@@ -358,7 +358,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// </summary>
     private async Task<long> AddOfficial(long expectedVersion, UpstreamOptions options, string? name, Func<string, Task<string?>> acquire)
     {
-        options = (options with { Mode = "oauth", Authentication = "bearer", AuthenticationManual = false, OfficialLogin = true }).Validated();
+        options = (options with { Mode = UpstreamMode.OAuth, Authentication = AuthenticationScheme.Bearer, AuthenticationManual = false, OfficialLogin = true }).Validated();
         using var operation = siteIdentity.Enter();
         var chosen = string.IsNullOrWhiteSpace(name) ? null : ValidName(name);
         var uid = Guid.NewGuid().ToString("N");

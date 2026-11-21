@@ -455,6 +455,15 @@
           "sourceScope": "changed",
           "timeoutSeconds": 900,
           "cacheMode": "reuse"
+        },
+        "custom.status-literals.check_status_literal_comparison": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
         }
       },
       "budgetSeconds": 60.0,
@@ -580,6 +589,15 @@
           "cacheMode": "reuse"
         },
         "legacy.householdrelay.check_temporary_markers": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.status-literals.check_status_literal_comparison": {
           "enabled": true,
           "severity": "error",
           "failureAction": "block",
@@ -928,6 +946,15 @@
           "cacheMode": "reuse"
         },
         "task.compile": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.status-literals.check_status_literal_comparison": {
           "enabled": true,
           "severity": "error",
           "failureAction": "block",

@@ -34,7 +34,7 @@ static class UpstreamIntegrationTests
     /// <summary>验证 API 密钥模式隔离账号头：上游只收到 x-api-key 形式的宿主密钥，不带 Authorization，也不带账号模式专用的 anthropic-beta。</summary>
     public static async Task AuthenticationModes()
     {
-        await using var fixture = await Fixture.Create(c => c.Response.WriteAsync("{}"), config => config.AuthMode = "api-key");
+        await using var fixture = await Fixture.Create(c => c.Response.WriteAsync("{}"), config => config.AuthMode = Core.Upstream.UpstreamMode.ApiKey);
         using var response = await fixture.Send();
         Check(response.IsSuccessStatusCode);
         var call = fixture.Calls.Single();
@@ -140,7 +140,7 @@ static class UpstreamIntegrationTests
         {
             using var home = new TestHome(); var service = new TestProcess(home.Path).Upstreams;
             var active = await service.ReadActive();
-            var options = new UpstreamOptions { Mode = "api-key", Authentication = "x-api-key", Preset = "compatible", BaseUrl = mock.Urls.Single(), AllowPrivateNetwork = true, Model = "fixture-model" };
+            var options = new UpstreamOptions { Mode = Core.Upstream.UpstreamMode.ApiKey, Authentication = Core.Upstream.AuthenticationScheme.XApiKey, Preset = Core.Upstream.UpstreamPreset.Compatible, BaseUrl = mock.Urls.Single(), AllowPrivateNetwork = true, Model = "fixture-model" };
             var id = await service.SaveCandidate(active.Version, options, "fixture-api-secret");
             Check((await service.ReadActive()).Credential is null && (await service.ReadCandidate(id)).State == Core.Upstream.CandidateState.Untested);
             var refused = false;
@@ -159,7 +159,7 @@ static class UpstreamIntegrationTests
             report = await service.TestCandidate(id, true, CancellationToken.None);
             Check(report.CanActivate, "Testing again after choosing the model back must pass");
             await service.Activate(id); var activated = await service.ReadActive();
-            Check(activated.Configured && activated.Options.Mode == "api-key" && activated.Options.BaseUrl == options.Validated().BaseUrl);
+            Check(activated.Configured && activated.Options.Mode == Core.Upstream.UpstreamMode.ApiKey && activated.Options.BaseUrl == options.Validated().BaseUrl);
             Check(activated.Report?.CanActivate == true);
             await CheckThrows(() => service.SaveCandidate(active.Version, options, "fixture-api-secret-2"));
         }
@@ -201,7 +201,7 @@ static class UpstreamIntegrationTests
             var html = WebUtility.HtmlDecode(await saved.Content.ReadAsStringAsync());
             Check(saved.IsSuccessStatusCode && html.Contains("已保存「页面测试」。已获取 1 个模型，认证用 x-api-key") && html.Contains("<option value=\"fixture-model\"") && !html.Contains("fixture-page-secret"), html);
             var candidate = (await fixture.Upstreams.LatestCandidate())!;
-            Check(candidate.Name == "页面测试" && candidate.Options.Authentication == "x-api-key" && !candidate.Options.AuthenticationManual && candidate.State == Core.Upstream.CandidateState.Untested);
+            Check(candidate.Name == "页面测试" && candidate.Options.Authentication == Core.Upstream.AuthenticationScheme.XApiKey && !candidate.Options.AuthenticationManual && candidate.State == Core.Upstream.CandidateState.Untested);
             values = new() { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["model"] = "fixture-model", ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
             using var tested = await fixture.Post("/Upstream?handler=Test", values); html = WebUtility.HtmlDecode(await tested.Content.ReadAsStringAsync());
             Check(tested.IsSuccessStatusCode && html.Contains("认证用 x-api-key，按标准 Messages 方式通过，模型 fixture-model。") && !html.Contains("fixture-page-secret"));

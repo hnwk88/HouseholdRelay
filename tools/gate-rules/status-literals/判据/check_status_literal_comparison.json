@@ -1,0 +1,36 @@
+﻿{
+  "解法": "逐项核对",
+  "rule": "check_status_literal_comparison",
+  "诊断标识": "status-literal-comparison",
+  "在哪": [{ "正则": "^src/.*\\.cs$" }],
+  "怎么看": "正则",
+  "视图": "去注释留字面量",
+  "严重度": "error",
+  "不许有": [
+    {
+      "找": "(==|!=)\\s*\"(untested|testing|passed|failed|started|succeeded|cancelled|interrupted|unsupported|unverified|reconnect|cooldown)\"",
+      "有了说": "拿状态的字符串字面量做比较（GZ-W-134）：状态和类别是封闭取值，字符串比较写错一个字母编译器不报，新增一档也不报。",
+      "建议": "比较封闭类型的成员（例如 UsageOutcome.Succeeded、CandidateState.Passed）；库里、JSON 里的字符串只在 Wire<T> 对照表那一处转换。"
+    },
+    {
+      "找": "\"(untested|testing|passed|failed|started|succeeded|cancelled|interrupted|unsupported|unverified|reconnect|cooldown)\"\\s*(==|!=)",
+      "有了说": "拿状态的字符串字面量做比较（GZ-W-134，字面量写在左边）。",
+      "建议": "比较封闭类型的成员；字符串只在 Wire<T> 对照表那一处转换。"
+    },
+    {
+      "找": "\"(untested|testing|passed|failed|started|succeeded|cancelled|interrupted|unsupported|unverified|reconnect|cooldown)\"\\s*=>",
+      "有了说": "switch 分支按状态的字符串字面量分（GZ-W-134）：漏了一档或多出一档编译器都不报，只能靠兜底分支读出错误状态。",
+      "建议": "对封闭类型写完整的 switch，每个成员一个分支，不写兜底。"
+    },
+    {
+      "找": "\"(untested|testing|passed|failed|started|succeeded|cancelled|interrupted|unsupported|unverified|reconnect|cooldown)\"\\s*when\\b",
+      "有了说": "带条件的 switch 分支按状态的字符串字面量分（GZ-W-134）。",
+      "建议": "对封闭类型的成员写条件分支，例如 CatalogStatus.Failed when …。"
+    },
+    {
+      "找": "\\b(is|or|and)\\s+(not\\s+)?\\(?\\s*\"(untested|testing|passed|failed|started|succeeded|cancelled|interrupted|unsupported|unverified|reconnect|cooldown)\"",
+      "有了说": "用 is / or 模式拿状态的字符串字面量做比较（GZ-W-134）。",
+      "建议": "用封闭类型的成员写模式，例如 is UsageCompleteness.Partial or UsageCompleteness.NotProvided。"
+    }
+  ]
+}

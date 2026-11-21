@@ -39,7 +39,7 @@ static class UpstreamVersionTests
             if (mode == "api-key") Check(sent.Body == body, "API request bodies must not undergo account device normalization");
         }
         var persisted = await new TestProcess(web.Home.Path).Upstreams.ReadActive();
-        Check(persisted.Report?.CanActivate == true && persisted.Options.Authentication == "bearer" && persisted.Credential == "fixture-new-upstream-secret");
+        Check(persisted.Report?.CanActivate == true && persisted.Options.Authentication == Core.Upstream.AuthenticationScheme.Bearer && persisted.Credential == "fixture-new-upstream-secret");
     }
 
     /// <summary>

@@ -62,7 +62,7 @@ static class ClaudeCodeProbeTests
         var failed = await service.TestCandidate(standard, true, CancellationToken.None);
         Check(failed.Authentication == Core.Upstream.CheckStatus.Passed && !failed.CanActivate && failed.Message.Contains("400"));
         Check(mock.Calls.Count(call => call.Path.Contains("/messages")) == 1, "Rejected generation must not replay or silently switch diagnostics");
-        var id = await service.SaveCandidate((await service.ReadActive()).Version, options with { Diagnostic = "claude-code" }, "fixture-probe-secret");
+        var id = await service.SaveCandidate((await service.ReadActive()).Version, options with { Diagnostic = Core.Upstream.DiagnosticMethod.ClaudeCode }, "fixture-probe-secret");
         var report = await service.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate, report.Message); await service.Activate(id);
         var native = mock.Calls.Last(); Check(native.Path == "/v1/cc/v1/messages?beta=true");
@@ -79,14 +79,14 @@ static class ClaudeCodeProbeTests
         Check(mock.Calls.Last().Headers["Authorization"] == "Bearer fixture-probe-secret");
         Check(mock.Calls.Last().Body == native.Body && mock.Calls.All(call => call.Headers.Values.All(value => !value.Contains(person.Token))));
         var persisted = await new TestProcess(web.Home.Path).Upstreams.ReadActive();
-        Check(persisted.Options.Diagnostic == "claude-code" && persisted.Report?.CanActivate == true);
+        Check(persisted.Options.Diagnostic == Core.Upstream.DiagnosticMethod.ClaudeCode && persisted.Report?.CanActivate == true);
         var version = persisted.Version; var before = mock.Calls.Count;
         mock.Handler = async context =>
         {
             if (context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal)) { await UpstreamFixture.Success(context); return; }
             context.Response.StatusCode = 400; await context.Response.WriteAsJsonAsync(new { error = new { type = "invalid_request_error", message = "fixture-probe-secret" } });
         };
-        var rejected = await service.SaveCandidate(version, options with { Diagnostic = "claude-code" }, "fixture-probe-secret");
+        var rejected = await service.SaveCandidate(version, options with { Diagnostic = Core.Upstream.DiagnosticMethod.ClaudeCode }, "fixture-probe-secret");
         var rejectedReport = await service.TestCandidate(rejected, true, CancellationToken.None);
         Check(!rejectedReport.CanActivate && !JsonSerializer.Serialize(rejectedReport).Contains("fixture-probe-secret"));
         Check(mock.Calls.Skip(before).Count(call => call.Path.Contains("/messages")) == 1);
@@ -114,15 +114,15 @@ static class ClaudeCodeProbeTests
         };
         var id = await service.SaveCandidate((await service.ReadActive()).Version, new UpstreamOptions { BaseUrl = mock.Url + "/v1/cc", AllowPrivateNetwork = true }, "fixture-auto-secret", "自动探测");
         var catalog = await service.DiscoverModels(id, CancellationToken.None);
-        Check(catalog.Status == Core.Upstream.CatalogStatus.Passed && catalog.Authentication == "bearer", catalog.Message);
+        Check(catalog.Status == Core.Upstream.CatalogStatus.Passed && catalog.Authentication == Core.Upstream.AuthenticationScheme.Bearer, catalog.Message);
         await service.ChooseModel(id, "claude-opus-5-5");
         var report = await service.TestCandidate(id, true, CancellationToken.None);
         Check(report.CanActivate && report.Message.StartsWith("认证用 Bearer，按 Claude Code 方式通过，模型 claude-opus-5-5。", StringComparison.Ordinal), report.Message);
         var detected = (await service.ReadCandidate(id)).Options;
-        Check(detected.Authentication == "bearer" && detected.Diagnostic == "claude-code" && !detected.AuthenticationManual && !detected.DiagnosticManual);
+        Check(detected.Authentication == Core.Upstream.AuthenticationScheme.Bearer && detected.Diagnostic == Core.Upstream.DiagnosticMethod.ClaudeCode && !detected.AuthenticationManual && !detected.DiagnosticManual);
         Check(mock.Calls.Count(call => call.Path.Contains("/messages")) == 2, "Automatic detection sends one standard call, then one native call");
         await service.Activate(id); var active = await service.ReadActive();
-        Check(active.Options.Diagnostic == "claude-code" && active.Options.Authentication == "bearer" && active.Name == "自动探测");
+        Check(active.Options.Diagnostic == Core.Upstream.DiagnosticMethod.ClaudeCode && active.Options.Authentication == Core.Upstream.AuthenticationScheme.Bearer && active.Name == "自动探测");
     }
 
     /// <summary>
@@ -143,7 +143,7 @@ static class ClaudeCodeProbeTests
             catch (OperationCanceledException) { released.TrySetResult(); }
         };
         var service = web.Upstreams; var version = (await service.ReadActive()).Version;
-        var id = await service.SaveCandidate(version, mock.Options() with { Diagnostic = "claude-code", Model = "claude-opus-5-5" }, "fixture-cancel-secret");
+        var id = await service.SaveCandidate(version, mock.Options() with { Diagnostic = Core.Upstream.DiagnosticMethod.ClaudeCode, Model = "claude-opus-5-5" }, "fixture-cancel-secret");
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         var pending = service.TestCandidate(id, true, cancellation.Token);
         // 确认诊断请求已到达上游后再取消，保证测的是在途取消而不是尚未发出的请求。

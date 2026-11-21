@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using Application.Interfaces.Upstream;
 using Core.Configuration;
+using Core.Values;
 using Core.Upstream;
 
 namespace Infrastructure.ExternalSources.Network;
@@ -37,20 +38,22 @@ public sealed class SystemUpstreamProxy : IUpstreamProxy
         var config = _settings();
         switch (config.ProxyMode)
         {
-            case "manual":
+            case ProxyMode.Manual:
                 if (string.IsNullOrWhiteSpace(config.ProxyUrl))
                     throw new UpstreamProxyUnavailableException("已选择手动指定代理，但没有填写代理地址；为防止意外直连，请求没有发出。请到项目设置填写代理地址。");
                 var manual = Checked(config.ProxyUrl, "手动指定的代理地址");
                 return new(manual, Loopback, "手动指定 " + Text(manual));
-            case "auto":
+            case ProxyMode.Auto:
                 var detected = WindowsSystemProxyDetector.Detect(target, _systemProxy());
                 var found = target.Scheme == "https" ? detected.HttpsProxy ?? detected.HttpProxy : detected.HttpProxy ?? detected.HttpsProxy;
                 if (string.IsNullOrWhiteSpace(found))
                     throw new UpstreamProxyUnavailableException("已选择自动检测系统代理，但系统没有为上游地址提供代理；为防止意外直连，请求没有发出。请打开代理软件，或到项目设置改成不使用代理、手动指定地址。");
                 var automatic = Checked(found, "自动检测到的系统代理");
                 return new(automatic, detected.NoProxy ?? Loopback, "自动检测到 " + Text(automatic));
-            default:
+            case ProxyMode.None:
                 return new(null, Loopback, "不使用代理，直连上游");
+            default:
+                throw Wire<ProxyMode>.Unknown(config.ProxyMode.ToString());
         }
     }
 

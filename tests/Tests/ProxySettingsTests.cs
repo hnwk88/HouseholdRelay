@@ -22,10 +22,10 @@ static class ProxySettingsTests
         var proxy = new SystemUpstreamProxy(() => config, system); var target = new Uri("https://api.example.test/");
         var direct = proxy.Resolve(target);
         Check(direct.Address is null && direct.NoProxy.Contains("127.0.0.1") && proxy.Describe() == "不使用代理，直连上游。");
-        config.ProxyMode = "manual"; config.ProxyUrl = "127.0.0.1:8899";
+        config.ProxyMode = Core.Configuration.ProxyMode.Manual; config.ProxyUrl = "127.0.0.1:8899";
         var manual = proxy.Resolve(target);
         Check(manual.Address?.AbsoluteUri == "http://127.0.0.1:8899/" && manual.Description == "手动指定 http://127.0.0.1:8899");
-        config.ProxyMode = "auto";
+        config.ProxyMode = Core.Configuration.ProxyMode.Auto;
         var automatic = proxy.Resolve(target);
         Check(automatic.Address?.AbsoluteUri == "http://127.0.0.1:7897/" && proxy.Describe() == "自动检测到 http://127.0.0.1:7897。" && automatic.NoProxy.Contains("::1"));
         Check(system.Asked.Contains("https://api.example.test/"), "Auto detection must ask the system for the real target");
@@ -34,11 +34,11 @@ static class ProxySettingsTests
         Check(proxy.Describe().Contains("为防止意外直连，请求没有发出"));
         system.Bypass = false; system.Address = "socks5://127.0.0.1:7898";
         Refused(() => proxy.Resolve(target), "不是 HTTP 代理根地址");
-        config.ProxyMode = "manual"; config.ProxyUrl = null;
+        config.ProxyMode = Core.Configuration.ProxyMode.Manual; config.ProxyUrl = null;
         Refused(() => proxy.Resolve(target), "没有填写代理地址");
-        CheckInvalid(new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "manual" });
-        CheckInvalid(new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "sometimes" });
-        new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "auto" }.Validate();
+        CheckInvalid(new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = Core.Configuration.ProxyMode.Manual });
+        Check(!Core.Values.Wire<Core.Configuration.ProxyMode>.TryParse("sometimes", out _), "An unknown proxy mode must not parse");
+        new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = Core.Configuration.ProxyMode.Auto }.Validate();
         return Task.CompletedTask;
     }
 
@@ -54,14 +54,14 @@ static class ProxySettingsTests
             new SystemUpstreamProxy(() => switchable, new FakeProxy("http://127.0.0.1:7897") { Bypass = true }))))
         {
             await target.Activate(web.Upstreams); var calls = target.Calls.Count; var person = await web.Identities.Create("代理用量");
-            switchable.ProxyMode = "auto";
+            switchable.ProxyMode = Core.Configuration.ProxyMode.Auto;
             using (var refused = await UpstreamFixture.RelayRequest(web, person.Token)) Check((int)refused.StatusCode == 502 && target.Calls.Count == calls);
             var usage = web.App.Services.GetRequiredService<IUsageService>(); UsageRow? row = null;
             await Until(async () => (row = (await usage.Query(new())).Rows.SingleOrDefault()) is { Outcome: not Core.Usage.UsageOutcome.Started });
             Check(row is { Outcome: Core.Usage.UsageOutcome.Failed, Dispatched: false, UpstreamStatus: null, StatusCode: 502 } && row.Money.Source == Core.Usage.MoneySource.NotApplicable, JsonSerializer.Serialize(row));
         }
 
-        var config = new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = "auto" };
+        var config = new RelayConfiguration { DeviceId = new string('e', 64), ProxyMode = Core.Configuration.ProxyMode.Auto };
         var unavailable = new SystemUpstreamProxy(() => config, new FakeProxy("http://127.0.0.1:7897") { Bypass = true });
         await using var fixture = await Fixture.Create(context => context.Response.WriteAsync("{}"), proxy: unavailable);
         using var response = await fixture.Send(); var body = await response.Content.ReadAsStringAsync();

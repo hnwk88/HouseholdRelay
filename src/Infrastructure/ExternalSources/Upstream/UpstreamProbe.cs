@@ -40,11 +40,11 @@ internal sealed class UpstreamProbe : IUpstreamProbe
         {
             var identity = options.OfficialAccount ? await _identities.Current(ClaudeCodeClient.DefaultEntrypoint, timeout.Token) : null;
             var catalog = await Catalog(snapshot, UpstreamDetection.AuthenticationOrder(options), identity, timeout.Token);
-            var manual = options.AuthenticationManual && options.Mode != "oauth" ? "（手动指定）" : "";
+            var manual = options.AuthenticationManual && options.Mode != UpstreamMode.OAuth ? "（手动指定）" : "";
             return catalog.Status switch
             {
-                CatalogStatus.Passed when catalog.Models.Length > 0 => catalog with { Message = $"已获取 {catalog.Models.Length} 个模型，认证用 {UpstreamDetection.AuthenticationLabel(catalog.Authentication!)}{manual}。请在下面选择模型，再按测试。" },
-                CatalogStatus.Passed => catalog with { Message = $"上游接受了密钥（认证用 {UpstreamDetection.AuthenticationLabel(catalog.Authentication!)}{manual}），但模型目录是空的，请手填模型名。" },
+                CatalogStatus.Passed when catalog.Models.Length > 0 => catalog with { Message = $"已获取 {catalog.Models.Length} 个模型，认证用 {UpstreamDetection.AuthenticationLabel(catalog.Authentication!.Value)}{manual}。请在下面选择模型，再按测试。" },
+                CatalogStatus.Passed => catalog with { Message = $"上游接受了密钥（认证用 {UpstreamDetection.AuthenticationLabel(catalog.Authentication!.Value)}{manual}），但模型目录是空的，请手填模型名。" },
                 CatalogStatus.Unsupported => catalog with { Message = "上游不提供模型目录，请手填模型名。" },
                 CatalogStatus.Rejected => catalog with { Message = UpstreamDetection.Rejected(options) },
                 CatalogStatus.Cooldown => catalog with { Message = "上游请求过多，请稍后再获取模型。" },
@@ -107,7 +107,7 @@ internal sealed class UpstreamProbe : IUpstreamProbe
                 verifiedModel = ProbeMessage.Read(reply.Body, reply.Streaming, snapshot.Credential!);
                 if (verifiedModel is null) return Result(CheckStatus.Failed, "上游未返回有效的 Anthropic Messages 回复，不能标记调用成功。");
                 return Result(CheckStatus.Passed, UpstreamDetection.Passed(used, verifiedModel)
-                    + (diagnostic == "claude-code" && !options.OfficialAccount ? "Claude Code 能调用不代表通用 API 请求也被这家接受。" : "") + "此检测为管理员诊断，不计入个人业务用量；凭据到期时间未知。");
+                    + (diagnostic == DiagnosticMethod.ClaudeCode && !options.OfficialAccount ? "Claude Code 能调用不代表通用 API 请求也被这家接受。" : "") + "此检测为管理员诊断，不计入个人业务用量；凭据到期时间未知。");
             }
             authentication = CheckStatus.Reconnect; used = options;
             return Result(CheckStatus.Failed, UpstreamDetection.Rejected(options));
@@ -183,7 +183,7 @@ internal sealed class UpstreamProbe : IUpstreamProbe
     /// 404/405 视为不提供目录；其余非 2xx 为 <c>failed</c>，状态码放在 <see cref="ModelCatalog.UpstreamStatus"/>，由调用方读成句子。
     /// 官方账户的目录请求只带 <paramref name="identity"/> 这份统一身份，其余上游为 null、照旧用中转自己的 User-Agent。
     /// </summary>
-    private async Task<ModelCatalog> Catalog(UpstreamSnapshot snapshot, string[] order, ClaudeCodeIdentity? identity, CancellationToken cancellation)
+    private async Task<ModelCatalog> Catalog(UpstreamSnapshot snapshot, AuthenticationScheme[] order, ClaudeCodeIdentity? identity, CancellationToken cancellation)
     {
         for (var index = 0; index < order.Length; index++)
         {
@@ -217,15 +217,15 @@ internal sealed class UpstreamProbe : IUpstreamProbe
     /// 按检测方式做一次最小调用：官方账户只跑实际客户端、带统一身份，不发标准调用；手动 Claude Code 直接跑实际客户端；手动标准只发标准调用；
     /// 自动时标准调用非 2xx（401、429 除外）且本机装有 Claude Code 再跑一次实际客户端。返回最后一次回复、采用的检测方式和是否先发过标准调用又跑了 Claude Code。
     /// </summary>
-    private async Task<(ProbeReply Reply, string Diagnostic, bool TriedClaude)> Call(UpstreamConnection transport, UpstreamOptions attempt, ClaudeCodeIdentity? identity, CancellationToken cancellation)
+    private async Task<(ProbeReply Reply, DiagnosticMethod Diagnostic, bool TriedClaude)> Call(UpstreamConnection transport, UpstreamOptions attempt, ClaudeCodeIdentity? identity, CancellationToken cancellation)
     {
-        if (attempt.OfficialAccount) return (await _claudeCode.Run(transport, identity, cancellation), "claude-code", false);
-        if (attempt.DiagnosticManual && attempt.Diagnostic == "claude-code") return (await _claudeCode.Run(transport, null, cancellation), "claude-code", true);
+        if (attempt.OfficialAccount) return (await _claudeCode.Run(transport, identity, cancellation), DiagnosticMethod.ClaudeCode, false);
+        if (attempt.DiagnosticManual && attempt.Diagnostic == DiagnosticMethod.ClaudeCode) return (await _claudeCode.Run(transport, null, cancellation), DiagnosticMethod.ClaudeCode, true);
         var standard = await StandardCall(transport, cancellation);
         if (attempt.DiagnosticManual || Accepted(standard, transport.Snapshot.Credential!) || standard.Status is HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
-            return (standard, "messages", false);
-        if (!_claudeCode.IsAvailable) return (standard, "messages", false);
-        return (await _claudeCode.Run(transport, null, cancellation), "claude-code", true);
+            return (standard, DiagnosticMethod.Messages, false);
+        if (!_claudeCode.IsAvailable) return (standard, DiagnosticMethod.Messages, false);
+        return (await _claudeCode.Run(transport, null, cancellation), DiagnosticMethod.ClaudeCode, true);
     }
 
     /// <summary>标准调用是否已经成功：2xx 且正文是真实的 Messages 回复；正文无法解析时视为未成功。</summary>
@@ -241,9 +241,9 @@ internal sealed class UpstreamProbe : IUpstreamProbe
     /// 调用被拒（非 2xx、非 401/429）时读出的原因与下一步，区分手动标准、手动 Claude Code、自动但本机没装 Claude Code、两种都试过；
     /// 5xx 不是模型或权限问题，一律读成上游暂时不可用或拒绝了当前网络出口，并读出当前代理方式。
     /// </summary>
-    private string Refused(int status, UpstreamOptions attempt, string diagnostic, bool triedClaude) =>
+    private string Refused(int status, UpstreamOptions attempt, DiagnosticMethod diagnostic, bool triedClaude) =>
         status >= 500 ? (triedClaude ? $"标准 Messages 和 Claude Code 实际调用都没有通过（最后一次 HTTP {status}）。" : $"最小模型调用返回 HTTP {status}。") + Unavailable()
-        : attempt.DiagnosticManual && diagnostic == "messages" ? $"最小模型调用返回 HTTP {status}，请检查模型权限和上游配置。若这家只接受 Claude Code，可在高级设置把检测方式改回自动判断。"
+        : attempt.DiagnosticManual && diagnostic == DiagnosticMethod.Messages ? $"最小模型调用返回 HTTP {status}，请检查模型权限和上游配置。若这家只接受 Claude Code，可在高级设置把检测方式改回自动判断。"
         : attempt.DiagnosticManual || attempt.OfficialAccount ? $"Claude Code 实际调用返回 HTTP {status}，请检查模型名称和权限。"
         : triedClaude ? $"标准 Messages 和 Claude Code 实际调用都没有通过（最后一次 HTTP {status}），请检查模型名称和权限。"
         : _claudeCode.IsAvailable ? $"最小模型调用返回 HTTP {status}，请检查模型名称和权限。"

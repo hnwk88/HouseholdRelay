@@ -41,11 +41,11 @@ static class UpstreamNamingMigrationTests
         }
         Check(Settings(home) == settingsBefore);
         var upgraded = new TestProcess(home.Path); var settings = (await upgraded.Settings.Read()).Value;
-        Check(settings.ProxyMode == "manual" && settings.ProxyUrl == "http://127.0.0.1:7897");
+        Check(settings.ProxyMode == Core.Configuration.ProxyMode.Manual && settings.ProxyUrl == "http://127.0.0.1:7897");
         var saved = await upgraded.Upstreams.ListCandidates();
         Check(saved.Select(item => (item.Uid, item.Name, item.State)).SequenceEqual([("old-candidate", "aitoll.net", CandidateState.Passed), ("newer-candidate", "api.sftoken.top", CandidateState.Passed)]));
         var active = await upgraded.Upstreams.ReadActive();
-        Check(active.UpstreamCandidateId == saved[0].Id && active.Name == "aitoll.net" && active.Credential == "fixture-migrated-secret" && active.Options.Diagnostic == "claude-code");
+        Check(active.UpstreamCandidateId == saved[0].Id && active.Name == "aitoll.net" && active.Credential == "fixture-migrated-secret" && active.Options.Diagnostic == Core.Upstream.DiagnosticMethod.ClaudeCode);
         using (var connection = upgraded.Database.Open())
         {
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == RelayDatabase.CurrentVersion);
@@ -71,8 +71,8 @@ static class UpstreamNamingMigrationTests
         // 迁移只核对原有加密凭据；未准备官方身份的测试进程不通过活动读取开放转发。
         Check(active.UpstreamCandidateId is not null && active.Name == "api.anthropic.com" && upgraded.ActiveCredential() == "fixture-orphan-secret");
         var created = await upgraded.Upstreams.ReadCandidate(active.UpstreamCandidateId!.Value);
-        Check(created.State == Core.Upstream.CandidateState.Untested && created.Options.Mode == "oauth" && created.Uid.Length == 32 && (await upgraded.Upstreams.ListCandidates()).Count == 1);
-        Check((await upgraded.Settings.Read()).Value.ProxyMode == "none" && (await upgraded.Settings.Read()).Version.ToString(CultureInfo.InvariantCulture) == version);
+        Check(created.State == Core.Upstream.CandidateState.Untested && created.Options.Mode == Core.Upstream.UpstreamMode.OAuth && created.Uid.Length == 32 && (await upgraded.Upstreams.ListCandidates()).Count == 1);
+        Check((await upgraded.Settings.Read()).Value.ProxyMode == Core.Configuration.ProxyMode.None && (await upgraded.Settings.Read()).Version.ToString(CultureInfo.InvariantCulture) == version);
     }
 
     /// <summary>在真实 v3 旧库上清掉夹具自带的三家候选（它们带的代理会参与全局代理的选择），再交给 <paramref name="seed"/> 写入用例要的旧数据；只写数据行，不改结构。</summary>

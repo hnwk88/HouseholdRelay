@@ -44,7 +44,7 @@ static class UpstreamMigrationTests
         }
         var upgraded = new TestProcess(home.Path); var upstream = await upgraded.Upstreams.ReadActive();
         // 纯迁移不准备官方目录或触发续期；直接检查已保存密文解密后仍是旧夹具凭据。
-        Check(upstream.Options.Mode == "oauth" && upgraded.ActiveCredential() == "fixture-legacy-upstream-secret" && upstream.Report is null);
+        Check(upstream.Options.Mode == Core.Upstream.UpstreamMode.OAuth && upgraded.ActiveCredential() == "fixture-legacy-upstream-secret" && upstream.Report is null);
         Check(await upgraded.Administrators.IsInitialized() && await upgraded.Administrators.Login(WebFixture.Password) is not null);
         using (var connection = upgraded.Database.Open())
         {

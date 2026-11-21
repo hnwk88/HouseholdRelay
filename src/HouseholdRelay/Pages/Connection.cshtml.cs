@@ -39,7 +39,7 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
         RootUrl = (await settings.Read()).Value.PublicUrl.TrimEnd('/');
         var active = await upstreams.ReadOverview();
         UpstreamName = !active.Configured ? "尚未选择" : active.Name ?? "未命名";
-        ClaudeCodeOnly = active.Options.Diagnostic == "claude-code";
+        ClaudeCodeOnly = active.Options.Diagnostic == Core.Upstream.DiagnosticMethod.ClaudeCode;
         if (active.Report?.CanActivate == true)
         { VerifiedModel = active.Report.VerifiedModel; RecommendedModel = active.Options.Model; Models = active.Report.Models; }
         var certificate = await certificates.ReadInfo();

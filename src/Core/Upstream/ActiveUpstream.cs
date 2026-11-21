@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using Core.Configuration;
+using Core.Values;
 using Repositories;
 
 namespace Core.Upstream;
@@ -56,7 +57,7 @@ public sealed class ActiveUpstream : BaseEntity
         candidate.EnsureActivatable();
         EnsureVersion(expectedVersion ?? candidate.ExpectedVersion, "活动上游已被另一页面或命令更换，请重新加载页面后再切换。");
         var options = JsonSerializer.Deserialize<UpstreamOptions>(candidate.OptionsJson, ConfigurationFiles.Json) ?? throw new InvalidOperationException("上游配置损坏。");
-        Version++; Mode = options.Mode; BaseUrl = options.BaseUrl; Credential = candidate.Credential;
+        Version++; Mode = Wire<UpstreamMode>.Name(options.Mode); BaseUrl = options.BaseUrl; Credential = candidate.Credential;
         OptionsJson = candidate.OptionsJson; ReportJson = candidate.ReportJson; UpstreamCandidateId = candidate.Id;
     }
 }

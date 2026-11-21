@@ -39,15 +39,15 @@ static class UpstreamDetectionTests
         }
         accepted = "x-api-key";
         var key = await Detect("只认密钥头");
-        Check(key.Catalog.Status == Core.Upstream.CatalogStatus.Passed && key.Catalog.Authentication == "x-api-key" && key.Catalog.Message.StartsWith("已获取 1 个模型，认证用 x-api-key", StringComparison.Ordinal));
-        Check(key.Report.CanActivate && key.Report.Message.StartsWith("认证用 x-api-key，按标准 Messages 方式通过，模型 fixture-model。", StringComparison.Ordinal) && key.Candidate.Options.Authentication == "x-api-key");
+        Check(key.Catalog.Status == Core.Upstream.CatalogStatus.Passed && key.Catalog.Authentication == Core.Upstream.AuthenticationScheme.XApiKey && key.Catalog.Message.StartsWith("已获取 1 个模型，认证用 x-api-key", StringComparison.Ordinal));
+        Check(key.Report.CanActivate && key.Report.Message.StartsWith("认证用 x-api-key，按标准 Messages 方式通过，模型 fixture-model。", StringComparison.Ordinal) && key.Candidate.Options.Authentication == Core.Upstream.AuthenticationScheme.XApiKey);
         accepted = "bearer";
         var bearer = await Detect("只认 Bearer");
-        Check(bearer.Catalog.Authentication == "bearer" && bearer.Report.CanActivate && bearer.Report.Message.StartsWith("认证用 Bearer，按标准 Messages", StringComparison.Ordinal));
-        Check(bearer.Candidate.Options.Authentication == "bearer" && !bearer.Candidate.Options.AuthenticationManual);
+        Check(bearer.Catalog.Authentication == Core.Upstream.AuthenticationScheme.Bearer && bearer.Report.CanActivate && bearer.Report.Message.StartsWith("认证用 Bearer，按标准 Messages", StringComparison.Ordinal));
+        Check(bearer.Candidate.Options.Authentication == Core.Upstream.AuthenticationScheme.Bearer && !bearer.Candidate.Options.AuthenticationManual);
         badRequest = true;
         var missingHeader = await Detect("缺头回 400");
-        Check(missingHeader.Catalog.Authentication == "bearer" && missingHeader.Report.CanActivate && missingHeader.Candidate.Options.Authentication == "bearer", missingHeader.Catalog.Message);
+        Check(missingHeader.Catalog.Authentication == Core.Upstream.AuthenticationScheme.Bearer && missingHeader.Report.CanActivate && missingHeader.Candidate.Options.Authentication == Core.Upstream.AuthenticationScheme.Bearer, missingHeader.Catalog.Message);
         badRequest = false;
         accepted = null; var before = mock.Calls.Count(call => call.Path.Contains("/messages"));
         var rejected = await Detect("两种都拒");
@@ -57,7 +57,7 @@ static class UpstreamDetectionTests
         accepted = "bearer"; catalog = false;
         var absent = await Detect("没有目录");
         Check(absent.Catalog.Status == Core.Upstream.CatalogStatus.Unsupported && absent.Catalog.Message == "上游不提供模型目录，请手填模型名。" && absent.Catalog.Authentication is null);
-        Check(absent.Report.CanActivate && absent.Report.ModelDiscovery == Core.Upstream.CheckStatus.Unsupported && absent.Candidate.Options.Authentication == "bearer");
+        Check(absent.Report.CanActivate && absent.Report.ModelDiscovery == Core.Upstream.CheckStatus.Unsupported && absent.Candidate.Options.Authentication == Core.Upstream.AuthenticationScheme.Bearer);
         using var page = await web.Http.GetAsync(web.Url + "/Upstream?candidateId=" + absent.Candidate.Id);
         var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
         Check(html.Contains("模型名称（上游没有提供模型目录，请手填）") && html.Contains("<input id=\"test-model\" name=\"model\" value=\"fixture-model\""), "No catalog must offer a text box");
@@ -72,15 +72,15 @@ static class UpstreamDetectionTests
         await using var mock = await UpstreamFixture.Create(); using var home = new TestHome(); var service = new TestProcess(home.Path).Upstreams;
         mock.Handler = context => mock.Calls.Last().Headers.GetValueOrDefault("Authorization") == "Bearer fixture-manual-secret"
             ? UpstreamFixture.Success(context) : Status(context, 401);
-        var options = new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model", Authentication = "x-api-key", AuthenticationManual = true };
+        var options = new UpstreamOptions { BaseUrl = mock.Url, AllowPrivateNetwork = true, Model = "fixture-model", Authentication = Core.Upstream.AuthenticationScheme.XApiKey, AuthenticationManual = true };
         var forced = await service.SaveCandidate((await service.ReadActive()).Version, options, "fixture-manual-secret", "手动密钥头");
         var catalog = await service.DiscoverModels(forced, CancellationToken.None);
         Check(catalog.Status == Core.Upstream.CatalogStatus.Rejected && catalog.Message.Contains("手动指定为 x-api-key"), catalog.Message);
         var report = await service.TestCandidate(forced, true, CancellationToken.None);
         var kept = (await service.ReadCandidate(forced)).Options;
-        Check(!report.CanActivate && kept.Authentication == "x-api-key" && kept.AuthenticationManual, "Detection must never overwrite a manual choice");
+        Check(!report.CanActivate && kept.Authentication == Core.Upstream.AuthenticationScheme.XApiKey && kept.AuthenticationManual, "Detection must never overwrite a manual choice");
         Check(mock.Calls.All(call => !call.Headers.ContainsKey("Authorization")), "A manual x-api-key choice must not silently try Bearer");
-        var chosen = await service.SaveCandidate((await service.ReadActive()).Version, options with { Authentication = "bearer" }, "fixture-manual-secret", "手动 Bearer");
+        var chosen = await service.SaveCandidate((await service.ReadActive()).Version, options with { Authentication = Core.Upstream.AuthenticationScheme.Bearer }, "fixture-manual-secret", "手动 Bearer");
         var passed = await service.TestCandidate(chosen, true, CancellationToken.None);
         Check(passed.CanActivate && passed.Message.StartsWith("认证用 Bearer（手动指定），按标准 Messages 方式通过", StringComparison.Ordinal), passed.Message);
     }
@@ -290,7 +290,7 @@ static class UpstreamDetectionTests
         Check(api > 0 && account > api && html.Contains("还没有上游") && login > account && html.Contains("登录官方账户</button>") && !html.Contains("登录功能将在下一版加入"));
         var discoverApi = html.IndexOf("handler=DiscoverApi", StringComparison.Ordinal);
         Check(discoverApi > api && discoverApi < html.IndexOf("handler=DiscoverAccount", StringComparison.Ordinal) && !html.Contains("handler=Test"), "The first upstream form must be the API supplier");
-        Check(!html.Contains("name=\"confirmed\"") && (await web.Settings.Read()).Value.ProxyMode == "none");
+        Check(!html.Contains("name=\"confirmed\"") && (await web.Settings.Read()).Value.ProxyMode == Core.Configuration.ProxyMode.None);
     }
 
     /// <summary>保存一个指向模拟上游的具名上游（自动探测），获取模型、选模型、测试通过后返回主键。</summary>

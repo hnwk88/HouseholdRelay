@@ -51,7 +51,7 @@ static class UpstreamTransferTests
         Check(saved.Select(item => item.Name).SequenceEqual(["原有", "甲", "乙", "官方"]), string.Join(",", saved.Select(item => item.Name)));
         Check(saved.Skip(1).All(item => item.State == CandidateState.Untested && item.Report is null && item.ExportedAt is null), "Imported upstreams start untested");
         var official = saved.Single(item => item.Name == "官方");
-        Check(official.Options is { OfficialLogin: true, Mode: "oauth" } && File.ReadAllBytes(Path.Combine(target.Home.Path, ".state", "official-accounts", official.Uid, OfficialCredential.FileName)).SequenceEqual(login),
+        Check(official.Options is { OfficialLogin: true, Mode: UpstreamMode.OAuth } && File.ReadAllBytes(Path.Combine(target.Home.Path, ".state", "official-accounts", official.Uid, OfficialCredential.FileName)).SequenceEqual(login),
             "The login file must arrive byte for byte");
         var imported = saved.Single(item => item.Name == "甲"); mockA.Calls.Clear();
         Check((await target.Upstreams.TestCandidate(imported.Id, true, CancellationToken.None)).CanActivate && mockA.Calls.Last().Headers["x-api-key"] == KeyA, "The imported key is the original key");

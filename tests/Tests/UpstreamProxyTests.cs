@@ -31,7 +31,7 @@ static class UpstreamProxyTests
     /// <summary>经配置服务按版本保存全局代理方式与地址，与项目设置页走同一条写入路径。</summary>
     public static async Task UseProxy(TestProcess process, string mode, string? url)
     {
-        var snapshot = await process.Settings.Read(); snapshot.Value.ProxyMode = mode; snapshot.Value.ProxyUrl = url;
+        var snapshot = await process.Settings.Read(); snapshot.Value.ProxyMode = Core.Values.Wire<Core.Configuration.ProxyMode>.Parse(mode); snapshot.Value.ProxyUrl = url;
         await process.Settings.Save(snapshot.Version, snapshot.Value);
     }
 }

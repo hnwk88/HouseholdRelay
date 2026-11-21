@@ -1,0 +1,15 @@
+﻿{
+  "包名": "status-literals",
+  "版本": "1.0.0",
+  "说明": "守 GZ-W-134：src 下的 C# 不许拿状态的字符串字面量做比较、做 switch 分支或 is/or 模式；状态与类别都是封闭类型，字符串只在 Wire<T> 对照表那一处转换。",
+  "判据": [
+    {
+      "rule": "check_status_literal_comparison",
+      "标题": "不许拿字符串字面量和状态字段比较",
+      "配置": "判据/check_status_literal_comparison.json",
+      "正反例": "正反例/check_status_literal_comparison.json",
+      "查什么": "global-only",
+      "建议级别": "L1"
+    }
+  ]
+}

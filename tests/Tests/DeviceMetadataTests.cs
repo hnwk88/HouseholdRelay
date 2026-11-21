@@ -213,7 +213,7 @@ public static class DeviceMetadataTests
         mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true }, "fixture-secret", accountUuid: Account), Proxy());
 
     /// <summary>固定无代理设置；本组请求目标只能来自本机模拟上游。</summary>
-    private static IUpstreamProxy Proxy() => new SystemUpstreamProxy(() => new RelayConfiguration { ProxyMode = "none" });
+    private static IUpstreamProxy Proxy() => new SystemUpstreamProxy(() => new RelayConfiguration { ProxyMode = Core.Configuration.ProxyMode.None });
 
     /// <summary>取假 CLI 的已知稳定身份，避免运行真 CLI 或加载个人配置。</summary>
     private static ClaudeCodeIdentity Identity() => ClaudeCodeIdentity.From(FakeClaude.Identity("1.0.0"), "1.0.0", "sdk-cli", DateTimeOffset.UnixEpoch);

@@ -319,11 +319,11 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     private static string Quoted(IEnumerable<string> names) => string.Concat(names.Select(name => $"「{name}」"));
 
     /// <summary>「接入方式」的读法：官方账户登录、官方账户令牌或 API 密钥。</summary>
-    public static string AccessText(UpstreamOptions options) => options.OfficialLogin ? "官方账户登录" : options.Mode == "oauth" ? "官方账户令牌" : "API 密钥";
+    public static string AccessText(UpstreamOptions options) => options.OfficialLogin ? "官方账户登录" : options.Mode == UpstreamMode.OAuth ? "官方账户令牌" : "API 密钥";
 
     /// <summary>列表与第二步里「认证方式」的读法：手动指定或已被上游确认时读出方式，否则读「尚未确认」。</summary>
     public static string AuthenticationText(UpstreamCandidateView item) =>
-        item.Options.AuthenticationManual || item.Options.Mode == "oauth" || item.Report?.Authentication == CheckStatus.Passed
+        item.Options.AuthenticationManual || item.Options.Mode == UpstreamMode.OAuth || item.Report?.Authentication == CheckStatus.Passed
             ? UpstreamDetection.AuthenticationLabel(item.Options.Authentication) + (item.Options.AuthenticationManual ? "（手动指定）" : "")
             : "尚未确认";
 

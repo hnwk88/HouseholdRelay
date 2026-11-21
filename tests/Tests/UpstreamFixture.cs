@@ -53,7 +53,7 @@ sealed class UpstreamFixture : IAsyncDisposable
     }
     /// <summary>生成指向本模拟上游的兼容型候选配置（允许私有网络，模型 fixture-model），可指定路径后缀、模式和认证方式；认证方式与检测方式标为手动指定，老用例按给定组合精确执行，自动探测另有专门用例。</summary>
     public UpstreamOptions Options(string suffix = "", string mode = "api-key", string authentication = "x-api-key") => new()
-    { Preset = "compatible", BaseUrl = Url + suffix, AllowPrivateNetwork = true, Mode = mode, Authentication = authentication, Model = "fixture-model",
+    { Preset = Core.Upstream.UpstreamPreset.Compatible, BaseUrl = Url + suffix, AllowPrivateNetwork = true, Mode = Core.Values.Wire<UpstreamMode>.Parse(mode), Authentication = Core.Values.Wire<AuthenticationScheme>.Parse(authentication), Model = "fixture-model",
         AuthenticationManual = true, DiagnosticManual = true };
     /// <summary>按当前版本保存候选上游，经明确同意后做诊断测试，测试必须允许激活，然后激活并返回候选编号。</summary>
     public async Task<long> Activate(IUpstreamService service, string credential = "fixture-new-upstream-secret", UpstreamOptions? options = null)

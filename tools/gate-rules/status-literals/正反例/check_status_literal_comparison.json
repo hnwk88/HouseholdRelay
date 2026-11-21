@@ -1,0 +1,24 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/Core/Usage/好的.cs",
+      "内容": "namespace Core.Usage;\n// 注释里写 row.Outcome == \"succeeded\" 不算。\nstatic class Good\n{\n    static bool Done(UsageRow row) => row.Outcome == UsageOutcome.Succeeded;\n    static string Name(UsageKind kind) => kind switch { UsageKind.Inference => \"推理\", UsageKind.Estimate => \"估算\", UsageKind.Models => \"模型查询\" };\n    static (string, string?) Classify() => (\"cancelled\", null);\n    static bool Other(string type) => type == \"connection_failed\";\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/Core/Usage/比较.cs",
+      "内容": "namespace Core.Usage;\nstatic class Bad\n{\n    static bool Done(string outcome) => outcome == \"succeeded\";\n    static bool Started(string outcome) => \"started\" != outcome;\n}\n",
+      "期望": [{ "行": 4 }, { "行": 5 }]
+    },
+    {
+      "路径": "src/Core/Usage/分支.cs",
+      "内容": "namespace Core.Usage;\nstatic class Bad\n{\n    static string Label(string state) => state switch\n    {\n        \"passed\" => \"通过\",\n        \"failed\" when state.Length > 0 => \"失败\",\n        _ => \"未检测\"\n    };\n    static bool Partial(string value) => value is \"cancelled\" or \"interrupted\";\n}\n",
+      "期望": [{ "行": 6 }, { "行": 7 }, { "行": 10 }]
+    },
+    {
+      "路径": "tests/Tests/测试不归它管.cs",
+      "内容": "static class T { static bool Done(string outcome) => outcome == \"succeeded\"; }\n",
+      "期望": []
+    }
+  ]
+}
