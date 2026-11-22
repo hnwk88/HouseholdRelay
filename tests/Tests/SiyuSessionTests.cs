@@ -9,6 +9,7 @@ using Core.Configuration;
 using Core.Identity;
 using Core.Siyu;
 using Core.Upstream;
+using Microsoft.Extensions.DependencyInjection;
 using static Tests.TestSuite;
 
 namespace Tests;
@@ -206,6 +207,39 @@ public static class SiyuSessionTests
         Check(next == "profile-missing", "没有资料的账户建不了会话：" + next);
     }
 
+    /// <summary>账户退役（删除或搬走）只结束这个账户上的会话，并作废它的发现集合；别的账户不受影响。</summary>
+    public static async Task AccountRetirementEndsItsSessions()
+    {
+        using var rig = new Rig();
+        var created = await rig.Service.Create(Alice, Request("x"), default);
+        var tunnel = rig.Service.OpenTunnel(created.Session.Binding.SessionId, created.Proxy.Ticket, OfficialHost.Api)!;
+        rig.Discovery.Replace(AccountId, rig.Profile.ProfileVersion, ["mcpsrv_1"], rig.Clock.GetUtcNow());
+        rig.Retirements.Retire(AccountId + 1);
+        Check(!tunnel.Closed.IsCancellationRequested, "别的账户退役不影响");
+        rig.Retirements.Retire(AccountId);
+        Check(tunnel.Closed.IsCancellationRequested, "本账户退役即断隧道");
+        tunnel.Dispose();
+        var view = await rig.Service.Read(Alice, created.Session.Binding.SessionId);
+        Check(view.State == SiyuSessionState.Closed && view.CloseCode == "official-account-unavailable", "原因是账户不可用");
+        Check(rig.Discovery.Check(AccountId, rig.Profile.ProfileVersion, "mcpsrv_1") == McpDiscoveryCheck.NotDiscovered, "发现集合作废");
+    }
+
+    /// <summary>真实组合根：删除官方登录上游会按它的主键发布退役通知（在删账户目录之前）。</summary>
+    public static async Task DeletingOfficialUpstreamRetiresIt()
+    {
+        using var claude = new FakeClaudeLauncher("success");
+        await using var web = await WebFixture.Create(overrides: claude.Register);
+        var retired = new List<long>();
+        web.App.Services.GetRequiredService<OfficialAccountRetirements>().Subscribe(retired.Add);
+        var service = web.Upstreams;
+        var id = await service.LoginOfficial((await service.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = "https://api.anthropic.com" }, "家里的官方账户", default);
+        var keep = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, new UpstreamOptions { BaseUrl = "https://api.example.com" }, "fixture-api-key-value", "独立 API");
+        await service.Delete(keep);
+        Check(retired.Count == 0, "删独立 API 上游不发布退役");
+        await service.Delete(id);
+        Check(retired.SequenceEqual([id]), "删官方登录上游按主键发布一次退役");
+    }
+
     /// <summary>一个合法的创建请求。</summary>
     private static SiyuCreateRequest Request(string requestId) =>
         new(requestId, AccountId, null, SiyuContract.ProtocolVersion, "2.1.325", new string('a', 64), "sdk-cli", SiyuContract.Transport);
@@ -257,7 +291,7 @@ public static class SiyuSessionTests
                 _ => throw new NotSupportedException(method.Name),
             });
             Service = new SiyuSessionService(Clients, upstreams, accounts, Site, new FixedSiyuProxyCertificates(_authority, new Dictionary<OfficialHost, X509Certificate2>()),
-                new SiyuProxyEndpoint(new Uri("https://relay.example.test:8789")), Discovery, Clock);
+                new SiyuProxyEndpoint(new Uri("https://relay.example.test:8789")), Discovery, Clock, Retirements);
         }
 
         /// <summary>令牌名单。</summary>
@@ -290,6 +324,9 @@ public static class SiyuSessionTests
 
         /// <summary>被测服务。</summary>
         public SiyuSessionService Service { get; }
+
+        /// <summary>官方账户退役通知。</summary>
+        public OfficialAccountRetirements Retirements { get; } = new();
 
         /// <summary>按片段做一份合表资料；<paramref name="missing"/> 时返回 null，读取即抛 profile-missing。</summary>
         public static SiyuLaunchProfile MakeProfile(string? extra, bool missing = false) => missing ? null! :

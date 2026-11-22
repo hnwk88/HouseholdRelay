@@ -50,13 +50,17 @@ public static class SiyuLaunchProfileContract
 
     /// <summary>
     /// 核对 oauthAccount 原始字节（顶层 oauthAccount 的值）与凭据 claudeAiOauth 原始字节，合表就返回启动资料。
-    /// 不合表抛 <see cref="SiyuRefusal"/>（503，原因码 profile-missing、profile-unverified 或 profile-malformed），读句说清下一步。
+    /// 不合表抛 <see cref="SiyuRefusal"/>（503，原因码 profile-missing、profile-unverified、profile-malformed，或没有 profileFetchedAt 时 profile-incomplete），读句说清下一步。
     /// </summary>
     public static SiyuLaunchProfile Read(ReadOnlySpan<byte> oauthAccount, ReadOnlySpan<byte> credential)
     {
         if (oauthAccount.IsEmpty) throw Refuse("profile-missing", "这个官方账户还没有账户资料。请在中转机管理页对这个账户获取一次模型，再启动思域。");
         using var account = Parse(oauthAccount, "oauthAccount");
         var oauth = Collect(account.RootElement, OAuthAccountFields, rejectUnknown: true, "oauthAccount");
+        // 完整性：原生 CLI 取过资料才会写 profileFetchedAt（两份真实资料都有）；中转旧接法 RecordAccount 只补三项、从不写它。
+        // 缺它说明这份资料不是原生写全的，下发会与原生直连不一致，所以拒绝；原生续期会不会自己补全没实测（机制未明），读句只给确定有效的重新登录。
+        if (oauth[IndexOf(OAuthAccountFields, "profileFetchedAt")] is null)
+            throw Refuse("profile-incomplete", "这个官方账户在中转机上的资料还不完整，思域暂不能用它。请在中转机管理页重新登录该账户，再启动思域。");
         var accountUuid = oauth[0]!.Value.GetString()!;
         using var credentials = Parse(credential, "凭据");
         var metadata = Collect(credentials.RootElement, CredentialFields, rejectUnknown: false, "凭据");

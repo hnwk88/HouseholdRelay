@@ -52,7 +52,7 @@ public static class SiyuContractTests
         Check(profile.ProfileVersion.Length == 16 && profile.ProfileVersion.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'), "资料代次应是 16 个小写十六进制字符");
         var account18 = Account17.Replace("\"seatTier\": null,", "\"seatTier\": null,\n  \"planDisplayName\": \"Max 5\",", StringComparison.Ordinal);
         Check(Read(account18, Credential).AccountUuid == profile.AccountUuid, "多 planDisplayName 的 18 项形状应能读");
-        var minimal = """{"accountUuid":"0f6c2a1e-3b7d-4c55-9a10-2f4e8d9b1c01","emailAddress":"someone@example.com"}""";
+        var minimal = """{"accountUuid":"0f6c2a1e-3b7d-4c55-9a10-2f4e8d9b1c01","emailAddress":"someone@example.com","profileFetchedAt":1}""";
         Check(Read(minimal, """{"scopes":["user:inference"]}""").CredentialMetadataJson.Span.SequenceEqual("""{"scopes":["user:inference"]}"""u8), "可缺项缺了不补默认值");
         Check(Encoding.UTF8.GetString(Read(Account17, """{"scopes":["user:inference"],"subscriptionType":null}""").CredentialMetadataJson.Span) == """{"scopes":["user:inference"],"subscriptionType":null}""", "null 原样是 null");
         Check(Read(Account17.Replace("\"seatTier\": null", "\"seatTier\": \"standard\"", StringComparison.Ordinal), Credential).AccountUuid.Length == 36, "类型未明的项非空标量原样放行");
@@ -78,6 +78,9 @@ public static class SiyuContractTests
         }
         string Swap(string from, string to) => Account17.Replace(from, to, StringComparison.Ordinal);
         Refused("", Credential, "profile-missing", "没有 oauthAccount");
+        Refused("""{"accountUuid":"0f6c2a1e-3b7d-4c55-9a10-2f4e8d9b1c01","emailAddress":"someone@example.com","organizationUuid":"7a1d3c5e-9b2f-4d8a-8c6e-1f3a5b7d9e02"}""",
+            Credential, "profile-incomplete", "中转旧接法只补的三项");
+        Refused(Swap("\"profileFetchedAt\": 1795327787407,", ""), Credential, "profile-incomplete", "缺 profileFetchedAt");
         Refused(Swap("\"emailAddress\": \"someone@example.com\",", ""), Credential, "profile-missing", "缺 emailAddress");
         Refused(Account17, """{"accessToken":"x"}""", "profile-missing", "缺 scopes");
         Refused(Swap("\"seatTier\": null,", "\"seatTier\": null,\n  \"newField\": 1,"), Credential, "profile-unverified", "表外字段");

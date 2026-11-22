@@ -61,6 +61,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IRelayInstance>(provider => provider.GetRequiredService<RelayDatabase>());
         // 负责以独占打开 serving.lock 保证同一数据目录只有一个服务进程；选 Singleton 的原因：锁在进程生命周期内只持有一份。
         services.AddSingleton<IServingLock, ServingLockFile>();
+        // 负责把命令行的使用者管理动作经本机管道交给运行中的服务；选 Singleton 的原因：无状态，每次调用各开一条连接。
+        services.AddSingleton<Application.Interfaces.Identity.IIdentityCommandChannel, LocalIpc.IdentityCommandPipeClient>();
+        // 服务一侧的本机管道；作为后台服务只在宿主里启动，命令行进程不启动它。
+        services.AddHostedService<LocalIpc.IdentityCommandPipeServer>();
 
         // 运行时所有数据经通用仓储走 EF Core：上下文按作用域，一次操作一个工作单元；选项先解析单例 RelayDatabase，它的构造跑完迁移链，所以第一个上下文用库之前库已是当前版本。
         services.AddDbContext<RelayDbContext>((provider, options) =>

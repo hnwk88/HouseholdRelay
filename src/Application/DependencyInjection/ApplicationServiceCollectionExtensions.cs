@@ -39,8 +39,12 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<ISiteIdentityService, SiteIdentityService>();
         // 维护使用者与个人令牌；选 Singleton 的原因：写入串行锁与鉴权名单发布必须全进程共享一份。
         services.AddSingleton<IIdentityService, IdentityService>();
+        // 执行命令行经本机管道交来的使用者管理动作，与管理页同一条路径；选 Singleton 的原因：无状态。
+        services.AddSingleton<IdentityCommandHandler>();
         // 维护管理员账户、首次设置与管理会话；选 Singleton 的原因：数据每次经独立作用域的仓储读写，服务本身无状态。
         services.AddSingleton<IAdministratorService, AdministratorService>();
+        // 负责转发官方账户退役通知；选 Singleton 的原因：上游服务发布、思域会话层订阅，必须全进程共享同一份。
+        services.AddSingleton<Core.Upstream.OfficialAccountRetirements>();
         // 维护已保存上游、测试与激活；选 Singleton 的原因：测试与激活的状态都存在库里，服务本身无状态，每次经独立作用域的仓储读写。
         services.AddSingleton<IUpstreamService, UpstreamService>();
         services.AddSingleton<IActiveUpstreamSource>(provider => provider.GetRequiredService<IUpstreamService>());

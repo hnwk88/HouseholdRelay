@@ -273,6 +273,10 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: revocation and maintenance drop sessions at once", SiyuSessionTests.RevocationAndMaintenanceDropSessions),
     ("siyu: lease expiry stops admission without waiting for the sweep", SiyuSessionTests.LeaseExpiry),
     ("siyu: profile change ends the session on renew", SiyuSessionTests.ProfileChangeEndsSessionOnRenew),
+    ("siyu: account retirement ends only that account's sessions", SiyuSessionTests.AccountRetirementEndsItsSessions),
+    ("siyu: deleting an official upstream publishes its retirement", SiyuSessionTests.DeletingOfficialUpstreamRetiresIt),
+    ("siyu: client commands run inside the running service", IdentityCommandChannelTests.RunningServiceExecutesClientCommands),
+    ("siyu: client commands refuse without saving when the running service is unreachable", IdentityCommandChannelTests.UnreachableServiceRefusesWithoutSaving),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

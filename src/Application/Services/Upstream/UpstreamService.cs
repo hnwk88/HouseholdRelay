@@ -24,7 +24,7 @@ namespace Application.Services.Upstream;
 /// 检测状态流转、能不能删、能不能切换都由实体 <see cref="UpstreamCandidate"/>、<see cref="ActiveUpstream"/> 的方法判断，这里只做场景编排。
 /// </summary>
 public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts, IPasswordCipher cipher, ISiteIdentityService siteIdentity,
-    ILogger<UpstreamService> logger) : IUpstreamService
+    ILogger<UpstreamService> logger, OfficialAccountRetirements retirements) : IUpstreamService
 {
     /// <summary>已经记过「配置损坏」的已保存上游主键：每家每个进程只记一行，转发每次读备用上游都会碰到它，不能每次都写。</summary>
     private readonly ConcurrentDictionary<long, bool> _damagedLogged = new();
@@ -198,7 +198,12 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         try { official = Parse<UpstreamOptions>(removed.OptionsJson).OfficialLogin; }
         // 配置读不懂：当它可能是官方登录，删一次账户目录；行已经软删除，这里不再抛出。
         catch (Exception error) when (error is JsonException or InvalidOperationException) { official = true; }
-        if (official) officialAccounts.Remove(removed.Uid);
+        if (official)
+        {
+            // 行已软删除并提交：先让思域结束这个账户上的会话，再删账户目录，免得在途请求撞上被删的凭据。
+            retirements.Retire(removed.Id);
+            officialAccounts.Remove(removed.Uid);
+        }
         return references;
     }
 
@@ -347,6 +352,8 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
             {
                 var file = cipher.Seal(plain, password);
                 await MarkExported(officials.Select(item => item.Id).ToArray());
+                // 已记为导出（搬走）并提交：本机不再用它们，思域结束这些账户上的会话。
+                foreach (var item in officials) retirements.Retire(item.Id);
                 return new UpstreamExport(file, chosen.Select(item => item.Name).ToArray(), officials.Select(item => item.Name).ToArray());
             }
             // 明文正文里有全部密钥和登录文件：加密成败都清零。

@@ -16,7 +16,7 @@ namespace Application.Services.Siyu;
 /// 思域会话的唯一登记处与准入：会话只存内存（服务重启即全部失效），票据只留哈希。
 /// 锁只护内存状态，锁内不等网络、不等 CLI、不读文件；关闭时锁内转 Closing，锁外取消，隧道与许可归还完才 Closed。
 /// 失效源：个人令牌名单变化（<see cref="ClientRegistry.Subscribe"/>）、站点维护（<see cref="ISiteIdentityService.TransportStopping"/>）、租约到期（定时清扫与每次准入都查）、
-/// 资料换代（续租时核对）、官方凭据需要重新登录（准入时）、账户收口（<see cref="CloseAccount"/>）。
+/// 资料换代（续租时核对）、官方凭据需要重新登录（准入时）、账户收口（<see cref="CloseAccount"/>，上游删除与导出经 <see cref="OfficialAccountRetirements"/> 触发）。
 /// </summary>
 public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDisposable
 {
@@ -40,8 +40,9 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
 
     /// <summary>依赖全部必填，构造时当场判空；订阅令牌名单变化，挂上定时清扫。</summary>
     public SiyuSessionService(ClientRegistry clients, IUpstreamService upstreams, IOfficialAccountLogin officialAccounts, ISiteIdentityService siteIdentity,
-        ISiyuProxyCertificates certificates, SiyuProxyEndpoint endpoint, McpDiscoveryRegistry discovery, TimeProvider clock)
+        ISiyuProxyCertificates certificates, SiyuProxyEndpoint endpoint, McpDiscoveryRegistry discovery, TimeProvider clock, OfficialAccountRetirements retirements)
     {
+        ArgumentNullException.ThrowIfNull(retirements);
         ArgumentNullException.ThrowIfNull(clients); ArgumentNullException.ThrowIfNull(upstreams); ArgumentNullException.ThrowIfNull(officialAccounts);
         ArgumentNullException.ThrowIfNull(siteIdentity); ArgumentNullException.ThrowIfNull(certificates); ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(discovery); ArgumentNullException.ThrowIfNull(clock);
@@ -50,6 +51,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         _authoritySha256 = Convert.ToHexStringLower(SHA256.HashData(certificates.Authority.RawData));
         _endpoint = endpoint; _discovery = discovery; _clock = clock;
         _clients.Subscribe(OnClientsChanged);
+        retirements.Subscribe(id => CloseAccount(id, SiyuCloseReason.AccountUnavailable));
         _sweep = clock.CreateTimer(_ => Sweep(), null, SiyuContract.SweepInterval, SiyuContract.SweepInterval);
     }
 

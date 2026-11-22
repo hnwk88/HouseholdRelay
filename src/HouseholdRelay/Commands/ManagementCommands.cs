@@ -1,12 +1,16 @@
-﻿using Application.Interfaces.Configuration;
+﻿using Application.Contracts.Identity;
+using Application.Interfaces.Configuration;
 using Application.Interfaces.Identity;
+using Application.Interfaces.Usage;
+using Application.Services.Identity;
 using Core.Configuration;
 using Core.Identity;
 
 namespace HouseholdRelay.Commands;
 
 /// <summary>命令行 init、account、clients 子命令；依赖由容器注入，不再自行装配服务。</summary>
-public sealed class ManagementCommands(IConfigurationService settings, IIdentityService identities)
+public sealed class ManagementCommands(IConfigurationService settings, IIdentityService identities, IdentityCommandHandler handler, IServingLock servingLock,
+    IIdentityCommandChannel channel)
 {
     /// <summary>读取当前配置，并把身份库里的客户端访问列表填回 <see cref="RelayConfiguration.Clients"/>，得到一份完整的配置视图；只读，不写回任何存储。</summary>
     public async Task<RelayConfiguration> Read()
@@ -49,25 +53,37 @@ public sealed class ManagementCommands(IConfigurationService settings, IIdentity
             foreach (var user in await identities.List()) Console.WriteLine($"{user.Id}  {user.Name}  {user.DisplayName}  {(user.Enabled ? "启用" : "停用")}");
             return;
         }
-        IssuedToken? issued = null;
-        if (action == "add") issued = await identities.Create(displayName ?? name ?? throw new InvalidOperationException("请提供 --display-name 或 --name。"), name);
-        else
+        var kind = action switch
+        {
+            "add" => IdentityCommandAction.Add,
+            "rotate" => IdentityCommandAction.Rotate,
+            "enable" => IdentityCommandAction.Enable,
+            "disable" => IdentityCommandAction.Disable,
+            "rename" => IdentityCommandAction.Rename,
+            _ => throw new InvalidOperationException("clients 支持 list / add / rotate / enable / disable / rename。"),
+        };
+        long? userId = null;
+        if (kind != IdentityCommandAction.Add)
         {
             // 主键是 clients list 第一列的数字；命令行收到的是文本，这里只做解析，不按文本关联。
-            long? userId = id is null ? null : long.TryParse(id, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed
+            userId = id is null ? null : long.TryParse(id, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed
                 : throw new InvalidOperationException("--id 应是 clients list 第一列的数字主键。");
             userId ??= (await identities.List()).SingleOrDefault(user => user.Name == name)?.Id;
-            if (userId is not { } user) throw new InvalidOperationException("请用 --id 指定使用者主键，或用 --name 查找旧客户端。");
-            switch (action)
-            {
-                case "rotate": issued = await identities.Rotate(user); break;
-                case "enable": await identities.SetEnabled(user, true); break;
-                case "disable": await identities.SetEnabled(user, false); break;
-                case "rename": await identities.Rename(user, displayName ?? throw new InvalidOperationException("请提供 --display-name。")); break;
-                default: throw new InvalidOperationException("clients 支持 list / add / rotate / enable / disable / rename。");
-            }
+            if (userId is null) throw new InvalidOperationException("请用 --id 指定使用者主键，或用 --name 查找旧客户端。");
         }
-        Console.WriteLine("已保存，新的权限检查立即生效。");
+        var command = new IdentityCommand(kind, userId, displayName, name);
+        // 服务在运行时必须把动作交给它执行（它提交并当场关闭受影响的思域会话），不能这里落库再事后通知；
+        // 服务没在运行时持着服务锁在本进程执行，执行期间服务也启动不了，不会漏掉会话。两条路用同一个执行器。
+        IDisposable? serving;
+        try { serving = servingLock.Acquire(); }
+        // 锁被占着：服务正在运行，改走本机管道。
+        catch (IOException) { serving = null; }
+        IdentityCommandResult result;
+        if (serving is not null) using (serving) result = await handler.Execute(command);
+        else result = await channel.Send(command, CancellationToken.None);
+        if (result.Error is { } error) throw new InvalidOperationException(error);
+        Console.WriteLine(serving is null ? "已保存：运行中的中转已确认，立即生效；这名使用者受影响的思域会话已经结束。" : "已保存，新的权限检查立即生效（中转服务没在运行）。");
+        var issued = result.Issued;
         if (issued is not null)
         {
             Console.WriteLine($"使用者：{issued.UserId}；个人令牌仅显示这一次：");
