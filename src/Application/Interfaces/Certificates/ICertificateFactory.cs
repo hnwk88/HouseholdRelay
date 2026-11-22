@@ -14,6 +14,15 @@ public interface ICertificateFactory
     /// <summary>用给定的私有 CA（须带私钥）为主机名签发服务器证书；CA 不变，客户端已装的信任照常有效。</summary>
     X509Certificate2 IssueServer(X509Certificate2 authority, string host);
 
+    /// <summary>
+    /// 新建思域代理 CA：带 critical Name Constraints，只许签 <paramref name="permittedHosts"/> 这几个 DNS 子树；返回带可导出私钥的 CA 证书。
+    /// 它和站点私有 CA 是两套，只给思域进程信任，绝不装进系统证书库。
+    /// </summary>
+    X509Certificate2 CreateProxyAuthority(IReadOnlyList<string> permittedHosts);
+
+    /// <summary>用思域代理 CA（须带私钥）给一个官方主机签叶证书：SAN 只有这一个精确 DNS 名，不加 localhost、回环地址或别的名字；返回可直接给 Schannel 用的带私钥证书。</summary>
+    X509Certificate2 IssueProxyLeaf(X509Certificate2 authority, string host);
+
     /// <summary>以当前用户密钥容器加载带私钥的服务器证书。</summary>
     X509Certificate2 LoadServerCertificate(byte[] pfx);
 }

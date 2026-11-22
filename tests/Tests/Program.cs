@@ -253,6 +253,11 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: pipelined requests are read in order", SiyuHttp1Tests.PipelinedRequestsStayInOrder),
     ("siyu: authorization swap changes one value and nothing else", SiyuHttp1Tests.AuthorizationSwapTouchesOneValue),
     ("siyu: upstream response framing forwards bytes and refuses smuggling", SiyuHttp1Tests.ResponseContract),
+    ("siyu: proxy end to end keeps request and response bytes except authorization", SiyuProxyTests.EndToEndPreservesBytes),
+    ("siyu: proxy refusals never reach the official host", SiyuProxyTests.RefusalsNeverReachOfficial),
+    ("siyu: inner handshake pins SNI and never negotiates h2", SiyuProxyTests.InnerHandshakeIsPinned),
+    ("siyu: proxy authority is name constrained to the two hosts", SiyuProxyTests.ProxyAuthorityIsNameConstrained),
+    ("siyu: closing the session drops the tunnel at once", SiyuProxyTests.SessionCloseDropsTunnel),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

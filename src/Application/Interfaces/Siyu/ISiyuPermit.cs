@@ -1,0 +1,20 @@
+﻿namespace Application.Interfaces.Siyu;
+
+/// <summary>
+/// 一次内层请求的发送许可：从准入一直持有到回应体转发完毕。释放即归还。
+/// 官方令牌只经 <see cref="AccessToken"/> 交给传输层写进这一次请求头，不进日志、不进异常消息。
+/// </summary>
+public interface ISiyuPermit : IAsyncDisposable
+{
+    /// <summary>这一次发送要用的官方访问令牌。</summary>
+    string AccessToken { get; }
+
+    /// <summary>会话关闭或这次许可被撤回时取消；传输层用它读请求体、发送和转发回应。</summary>
+    CancellationToken Cancellation { get; }
+
+    /// <summary>请求体读完、真正写给官方之前再核对一次（排队期间会话可能已关闭）；不再准入抛 <see cref="Core.Siyu.SiyuRefusal"/>。</summary>
+    void Recheck();
+
+    /// <summary>官方回了最终状态码（或本地因 3xx 拒绝转发）时报告一次，错误归属与用量由会话层决定。</summary>
+    void Observe(int status);
+}
