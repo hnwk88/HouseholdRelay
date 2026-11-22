@@ -108,7 +108,7 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
         var users = (await scope.Repository<User>().GetAllAsync()).ToDictionary(item => item.Id);
         var tokens = await scope.Repository<Token>().FindAsync(item => item.RevokedAt == null);
         return tokens.Where(item => users.ContainsKey(item.UserId)).OrderBy(item => item.UserId)
-            .Select(item => new ClientAccess(users[item.UserId].Name, item.Hash, users[item.UserId].Enabled, item.UserId, item.Id)).ToArray();
+            .Select(item => new ClientAccess(users[item.UserId].Name, item.Hash, users[item.UserId].Enabled, item.UserId, item.Id, item.Version)).ToArray();
     }
 
     /// <summary>

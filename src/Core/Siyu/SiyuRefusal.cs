@@ -21,4 +21,7 @@ public sealed class SiyuRefusal : Exception
 
     /// <summary>中文读句。</summary>
     public string Sentence { get; }
+
+    /// <summary>身份代次过时（409）时服务端当前的站点身份代次，供 MyCoAI 重新准备；其余拒绝为 null。</summary>
+    public long? CurrentIdentityVersion { get; init; }
 }

@@ -267,6 +267,12 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: expired credential with failed renewal is refused", SiyuCredentialTests.ExpiredAndRefreshFailedIsRefused),
     ("siyu: cancelling a credential wait leaves the renewal running", SiyuCredentialTests.CancellationOnlyStopsTheWaiter),
     ("siyu: launch profile is read from the account directory and checked", SiyuCredentialTests.LaunchProfileFromAccountDirectory),
+    ("siyu: session create, replay, read, renew and close", SiyuSessionTests.CreateReadRenewClose),
+    ("siyu: session create refuses unverified clients, stale identity, unusable accounts and over limit", SiyuSessionTests.CreateRefusals),
+    ("siyu: tunnels and admission follow ticket, token, discovery and rejected credential generation", SiyuSessionTests.TunnelsAndAdmission),
+    ("siyu: revocation and maintenance drop sessions at once", SiyuSessionTests.RevocationAndMaintenanceDropSessions),
+    ("siyu: lease expiry stops admission without waiting for the sweep", SiyuSessionTests.LeaseExpiry),
+    ("siyu: profile change ends the session on renew", SiyuSessionTests.ProfileChangeEndsSessionOnRenew),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

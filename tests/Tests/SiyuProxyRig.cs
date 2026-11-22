@@ -56,7 +56,7 @@ public sealed class SiyuProxyRig : IAsyncDisposable
         builder.Logging.SetMinimumLevel(LogLevel.Critical);
         builder.Services.AddSingleton<ISiyuGate>(gate);
         builder.Services.AddSingleton<IOfficialConnector>(connector);
-        builder.Services.AddSingleton<ISiyuProxyCertificates>(new FixedSiyuProxyCertificates(leaves));
+        builder.Services.AddSingleton<ISiyuProxyCertificates>(new FixedSiyuProxyCertificates(proxyAuthority, leaves));
         builder.Services.AddSingleton(SiyuProxyLimits.Default(10_000) with { IdleTimeout = TimeSpan.FromSeconds(idleSeconds) });
         builder.Services.AddSingleton<SiyuProxyConnectionHandler>();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, listen =>

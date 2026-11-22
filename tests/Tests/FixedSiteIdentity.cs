@@ -14,6 +14,8 @@ sealed class FixedSiteIdentity(string deviceId) : ISiteIdentityService
     public string Status => "固定站点身份（测试）。";
     /// <summary>许可不计数，释放什么也不做。</summary>
     public IDisposable Enter() => new Permit();
+    /// <summary>永不维护，传输停止信号永不触发。</summary>
+    public CancellationToken TransportStopping => CancellationToken.None;
     /// <summary>没有私有配置要准备。</summary>
     public Task Prepare(CancellationToken cancellation) => Task.CompletedTask;
     /// <summary>不支持维护。</summary>

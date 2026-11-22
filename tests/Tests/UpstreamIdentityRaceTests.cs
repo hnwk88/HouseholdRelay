@@ -156,6 +156,8 @@ public static class UpstreamIdentityRaceTests
         public SiteIdentitySnapshot Current => inner.Current;
         /// <summary>真实就绪状态，不因注入而造假。</summary>
         public bool Available => inner.Available;
+        /// <summary>真实服务的传输停止信号。</summary>
+        public CancellationToken TransportStopping => inner.TransportStopping;
         /// <summary>真实服务的管理员读句。</summary>
         public string Status => inner.Status;
         /// <summary>下一轮在账户读取的内部准入拒绝，避免依赖定时或线程调度。</summary>

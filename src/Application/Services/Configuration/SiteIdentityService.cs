@@ -26,6 +26,9 @@ public sealed class SiteIdentityService(IServiceScopeFactory scopes, IDeviceIdGe
     private Task? aligning;
     private int active;
     private bool available;
+    // 取消源只取消不释放：不带计时器，不占非托管资源；释放了反而会让晚到的读取撞上已释放的对象。
+    /// <summary>这一轮准入的思域传输取消源；关闭准入时换代并在锁外取消旧的。</summary>
+    private CancellationTokenSource transport = new();
     private string status = "尚未开始设备准备，官方账户暂不可用。";
 
     /// <summary>在同一锁下读取已发布身份，避免版本和编号读取错代。</summary>
@@ -37,6 +40,10 @@ public sealed class SiteIdentityService(IServiceScopeFactory scopes, IDeviceIdGe
     /// <summary>在状态锁下读取不含秘密的管理员进度。</summary>
     // 状态消息与准入变更一起发布，避免读屏获得过时状态。
     public string Status { get { lock (_sync) return status; } }
+
+    /// <summary>这一轮准入的思域传输停止信号。</summary>
+    // 与关闭准入同锁读取，读到的不会是换代到一半的取消源。
+    public CancellationToken TransportStopping { get { lock (_sync) return transport.Token; } }
 
     /// <summary>在同一锁内检查准入并计数，维护不能插入检查和登记之间。</summary>
     public IDisposable Enter()
@@ -171,14 +178,17 @@ public sealed class SiteIdentityService(IServiceScopeFactory scopes, IDeviceIdGe
     /// <summary>关闭新准入后取得既有完整操作的完成信号，直到全部归还才允许准备文件。</summary>
     private async Task CloseAndDrain(CancellationToken cancellation)
     {
-        Task waiting;
+        Task waiting; CancellationTokenSource stopping;
         // 关闭与取得排空任务必须同时完成，新许可不能插入两者之间。
         lock (_sync)
         {
             available = false;
             status = current.Pending ? "设备更换尚未完成，正在等待已有操作结束后继续。" : "正在等待已有官方调用和登录程序结束，尚未更换设备编号。";
             waiting = drained.Task;
+            stopping = RotateTransport();
         }
+        // 锁外取消思域传输：长流和空闲隧道先收尾、归还许可，排空才不会被它们拖满时限；正式 CLI 不受影响，照旧等它安全退出。
+        stopping.Cancel();
         await waiting.WaitAsync(cancellation);
         cancellation.ThrowIfCancellationRequested();
     }
@@ -190,7 +200,10 @@ public sealed class SiteIdentityService(IServiceScopeFactory scopes, IDeviceIdGe
         // 管理员取消与本阶段时间预算合并，只取消等待或准备，不终止既有凭据写入。
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellation, budget.Token);
         // 状态与准入计数共用同一把锁，避免维护和正在结束的操作看到不一致状态。
-        lock (_sync) { available = false; status = "设备更换尚未完成，正在准备本站全部官方账户。"; }
+        CancellationTokenSource stopping;
+        lock (_sync) { available = false; status = "设备更换尚未完成，正在准备本站全部官方账户。"; stopping = RotateTransport(); }
+        // 锁外取消，理由同 CloseAndDrain。
+        stopping.Cancel();
         try
         {
             if (aligning is not null)
@@ -250,8 +263,19 @@ public sealed class SiteIdentityService(IServiceScopeFactory scopes, IDeviceIdGe
     /// <summary>先关闭准入再读取存储或报告失败，数据库读取异常也不能留下开放窗口。</summary>
     private void SetUnavailable(string message)
     {
+        CancellationTokenSource stopping;
         // 准入和读屏消息同锁发布，存储故障期间也保留完整关闭状态。
-        lock (_sync) { available = false; status = message; }
+        lock (_sync) { available = false; status = message; stopping = RotateTransport(); }
+        // 锁外取消：取消回调会同步关闭思域隧道，不能占着准入锁。
+        stopping.Cancel();
+    }
+
+    /// <summary>关闭准入时调用（须在 <see cref="_sync"/> 内）：换上下一轮的传输令牌，返回上一轮的取消源交给调用方在锁外取消。</summary>
+    private CancellationTokenSource RotateTransport()
+    {
+        var previous = transport;
+        transport = new CancellationTokenSource();
+        return previous;
     }
 
     /// <summary>读取 canonical 编号（只从设置取）及对应代次并交叉校验；只读，不抢写锁，别人占着写锁时照样读得到（见 <see cref="ReadCurrent"/> 的双检）。</summary>

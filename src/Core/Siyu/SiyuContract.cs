@@ -15,6 +15,15 @@ public static class SiyuContract
     /// <summary>版本 1 唯一的传输方式：原生 HTTPS 代理。</summary>
     public const string Transport = "nativeHttpsProxy";
 
+    /// <summary>已验证的 Claude Code 版本（2.1.325 的真实旅程证据）；不在表里的版本拒建会话。</summary>
+    public static IReadOnlyList<string> SupportedClaudeVersions { get; } = ["2.1.325"];
+
+    /// <summary>已验证的入口：实测记录里只出现过 sdk-cli；交互式入口没实测，不放进来。</summary>
+    public static IReadOnlyList<string> SupportedEntrypoints { get; } = ["sdk-cli"];
+
+    /// <summary>后台清扫（租约到期、终态与幂等结果过期）的间隔。</summary>
+    public static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(5);
+
     /// <summary>一次续租给的存活时长；MyCoAI 失联后票据最多再有效这么久。</summary>
     public static readonly TimeSpan LeaseDuration = TimeSpan.FromSeconds(120);
 

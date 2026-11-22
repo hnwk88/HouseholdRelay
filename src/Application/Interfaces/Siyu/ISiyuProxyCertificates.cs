@@ -8,4 +8,7 @@ public interface ISiyuProxyCertificates
 {
     /// <summary>给 <paramref name="host"/> 的带私钥叶证书。</summary>
     X509Certificate2 Leaf(OfficialHost host);
+
+    /// <summary>思域代理 CA 的公钥证书（不带私钥），交给 MyCoAI 只让思域进程信任。</summary>
+    X509Certificate2 Authority { get; }
 }
