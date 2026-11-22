@@ -6,12 +6,14 @@ using Application.Interfaces.Configuration;
 using Application.Interfaces.Relay;
 using Application.Interfaces.Upstream;
 using Application.Interfaces.Usage;
+using Application.Logging;
 using Core.Configuration;
 using Core.Identity;
 using Core.Relay;
 using Core.Upstream;
 using Core.Usage;
 using Core.Values;
+using Microsoft.Extensions.Logging;
 
 namespace Application.Services.Relay;
 
@@ -24,6 +26,7 @@ public sealed class RelayForwarder : IRelayForwarder
     private readonly IUpstreamPool _upstreams;
     private readonly IRelayEventLog _log;
     private readonly IUpstreamResponses _responses;
+    private readonly ILogger<RelayForwarder> _logger;
     // 下面六个只在正式服务里有；独立中转（Standalone）明确没有它们：不记用量、不发往官方账户、不跟客户端版本、不进站点维护、不取上游概览、不记协议诊断。
     private readonly IUsageService? _usage;
     private readonly IClaudeCodeIdentitySource? _identities;
@@ -33,10 +36,10 @@ public sealed class RelayForwarder : IRelayForwarder
     private readonly IProtocolDiagnostics? _diagnostics;
     private long completed;
 
-    /// <summary>正式服务：十二个依赖全部必填，构造时当场判空，漏登记在启动时就报，不会静默退成「不记录用量」。</summary>
-    public RelayForwarder(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUpstreamResponses responses,
+    /// <summary>正式服务：十三个依赖全部必填，构造时当场判空，漏登记在启动时就报，不会静默退成「不记录用量」。</summary>
+    public RelayForwarder(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUpstreamResponses responses, ILogger<RelayForwarder> logger,
         IUsageService usage, IClaudeCodeIdentitySource identities, IClaudeCodeUpdater updater, ISiteIdentityService siteIdentity, IUpstreamService upstreamService, IProtocolDiagnostics diagnostics)
-        : this(config, clients, admission, upstreams, log, responses)
+        : this(config, clients, admission, upstreams, log, responses, logger)
     {
         ArgumentNullException.ThrowIfNull(usage); ArgumentNullException.ThrowIfNull(identities); ArgumentNullException.ThrowIfNull(updater);
         ArgumentNullException.ThrowIfNull(siteIdentity); ArgumentNullException.ThrowIfNull(upstreamService); ArgumentNullException.ThrowIfNull(diagnostics);
@@ -47,16 +50,16 @@ public sealed class RelayForwarder : IRelayForwarder
     /// 独立中转（不连数据库）：只要转发本身的六样。不记用量，个人用量入口返回 503；发往官方账户的请求一律不发并读出原因；不跟客户端版本；
     /// 设备值用启动配置里的那一个；/status 直接问连接池。
     /// </summary>
-    public static RelayForwarder Standalone(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUpstreamResponses responses) =>
-        new(config, clients, admission, upstreams, log, responses);
+    public static RelayForwarder Standalone(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUpstreamResponses responses,
+        ILogger<RelayForwarder> logger) => new(config, clients, admission, upstreams, log, responses, logger);
 
-    /// <summary>两个入口共用的那一半：转发本身的六样依赖，当场判空并校验配置。</summary>
-    private RelayForwarder(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUpstreamResponses responses)
+    /// <summary>两个入口共用的那一半：转发本身的七样依赖（含兜底用的日志），当场判空并校验配置。</summary>
+    private RelayForwarder(RelayConfiguration config, ClientRegistry clients, Admission admission, IUpstreamPool upstreams, IRelayEventLog log, IUpstreamResponses responses, ILogger<RelayForwarder> logger)
     {
         ArgumentNullException.ThrowIfNull(config); ArgumentNullException.ThrowIfNull(clients); ArgumentNullException.ThrowIfNull(admission);
-        ArgumentNullException.ThrowIfNull(upstreams); ArgumentNullException.ThrowIfNull(log); ArgumentNullException.ThrowIfNull(responses);
+        ArgumentNullException.ThrowIfNull(upstreams); ArgumentNullException.ThrowIfNull(log); ArgumentNullException.ThrowIfNull(responses); ArgumentNullException.ThrowIfNull(logger);
         config.Validate();
-        _config = config; _clients = clients; _admission = admission; _upstreams = upstreams; _log = log; _responses = responses;
+        _config = config; _clients = clients; _admission = admission; _upstreams = upstreams; _log = log; _responses = responses; _logger = logger;
     }
 
     /// <summary>
@@ -251,15 +254,20 @@ public sealed class RelayForwarder : IRelayForwarder
         }
         // 站点维护属于本地拒绝，不调用上游 Observe，也不触发认证暂停或冷却。
         catch (Exception error) when (error is SiteIdentityUnavailableException or ClaudeConfigurationUnavailableException)
-        { outcome = UsageOutcome.Failed; await exchange.Fail(new RelayFailure(503, error.Message)); }
+        { outcome = UsageOutcome.Failed; await exchange.Fail(new RelayFailure(503, error.Message), id); }
         // 客户端主动断开：记为 cancelled 并直接中止连接，不再尝试写错误响应。
         catch (OperationCanceledException) when (exchange.Aborted.IsCancellationRequested) { outcome = UsageOutcome.Cancelled; exchange.Reply.Abort(); }
         // 鉴权、限速、准入、校验等可预期的拒绝，按其状态码和固定消息写回；宿主读请求时发现格式错误或超限，也已在读请求体处换成这一种。
-        catch (RelayFailure error) { outcome = UsageOutcome.Failed; await exchange.Fail(error); }
+        catch (RelayFailure error) { outcome = UsageOutcome.Failed; await exchange.Fail(error, id); }
         // 回传上游响应途中流被打断，记为 interrupted；若已开始写响应，Fail 会直接中止连接。
-        catch (IOException) { outcome = UsageOutcome.Interrupted; await exchange.Fail(new RelayFailure(502, "Upstream response interrupted.")); }
-        // 兜底：未预料的异常只回 500 固定消息，不泄露堆栈、令牌或上游凭据。
-        catch (Exception) { outcome = UsageOutcome.Failed; await exchange.Fail(new RelayFailure(500, "Internal relay error.")); }
+        catch (IOException) { outcome = UsageOutcome.Interrupted; await exchange.Fail(new RelayFailure(502, "Upstream response interrupted."), id); }
+        catch (Exception error)
+        {
+            // 兜底：未预料的异常只回 500 固定消息（带请求编号），不泄露堆栈、令牌或上游凭据；日志只记异常类型链、阶段、请求编号与这次在试的上游主键。
+            outcome = UsageOutcome.Failed;
+            RelayLog.Unexpected(_logger, error, "relay", id, attempts.LastOrDefault()?.UpstreamCandidateId);
+            await exchange.Fail(new RelayFailure(500, "Internal relay error."), id);
+        }
         // 无论成败都要写用量结束结果和事件日志，保证已开始的用量记录不会悬空；日志只含请求编号、客户端名和路由，不含令牌。
         // 事件日志在原有字段之后补上游名称、尝试次数和最后一次错误类型，原有字段与顺序不变。
         finally

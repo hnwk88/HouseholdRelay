@@ -10,6 +10,7 @@ using Core.Configuration;
 using Infrastructure.ExternalSources.ClaudeCode;
 using Infrastructure.ExternalSources.Network;
 using Infrastructure.ExternalSources.Upstream;
+using Infrastructure.Logging;
 using Infrastructure.Persistence;
 using Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
@@ -28,6 +29,8 @@ public static class InfrastructureServiceCollectionExtensions
         var options = new RelayDataOptions();
         configure(options);
         services.AddSingleton(options);
+        // 数据目录先定，再挂文件日志：管理宿主、命令行容器的日志（含兜底异常）都写进数据目录 logs\errors.log，只有类型、阶段、编号。
+        services.AddLogging(logging => logging.AddRelayFileLog(options.Home));
 
         // 数据库构造时依次执行这些步骤；登记顺序与 Order 一致：旧数据导入、上游架构、用量架构、上游命名与全局代理、上游尝试记录、自动切换与按上游计价、上游导出。
         // 负责把旧版本数据目录里的配置文件导入新库（保留原文件与导入前快照）；选 Singleton 的原因：迁移无状态，只在打开数据库时按顺序执行一次。

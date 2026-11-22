@@ -48,8 +48,8 @@ internal sealed class HttpRelayExchange(HttpContext context) : IRelayExchange, I
         catch (Microsoft.AspNetCore.Http.BadHttpRequestException error) { throw new RelayFailure(error.StatusCode, "Invalid or oversized request."); }
     }
 
-    /// <summary>按 Anthropic 错误格式写出中转失败响应，只含状态码对应的类型和固定消息，不含内部细节；响应已开始或客户端已断开时直接中止连接。</summary>
-    public async Task Fail(RelayFailure error)
+    /// <summary>按 Anthropic 错误格式写出中转失败响应，只含状态码对应的类型、固定消息与中转请求编号，不含内部细节；响应已开始或客户端已断开时直接中止连接。</summary>
+    public async Task Fail(RelayFailure error, string requestId)
     {
         if (context.Response.HasStarted || context.RequestAborted.IsCancellationRequested) { context.Abort(); return; }
         context.Response.Clear(); context.Response.StatusCode = error.Status; context.Response.Headers.CacheControl = "no-store";
@@ -57,7 +57,7 @@ internal sealed class HttpRelayExchange(HttpContext context) : IRelayExchange, I
         if (context.Request.Protocol.StartsWith("HTTP/1", StringComparison.Ordinal)) context.Response.Headers.Connection = "close";
         if (error.RetryAfter > 0) context.Response.Headers.RetryAfter = error.RetryAfter.ToString();
         try { await context.Response.WriteAsJsonAsync(new { type = "error", error = new {
-            type = error.Status == 429 ? "rate_limit_error" : error.Status == 401 ? "authentication_error" : "api_error", message = error.Message } }, context.RequestAborted); }
+            type = error.Status == 429 ? "rate_limit_error" : error.Status == 401 ? "authentication_error" : "api_error", message = error.Message }, request_id = requestId }, context.RequestAborted); }
         // 写错误响应时客户端已断开，没必要再写，直接中止连接收场。
         catch (OperationCanceledException) { context.Abort(); }
     }

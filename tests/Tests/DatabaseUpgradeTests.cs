@@ -145,7 +145,7 @@ static class DatabaseUpgradeTests
         var gone = await process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://gone.example.com" }, "sk-gone-0001", "顺丰中转");
         await process.Pricing.Save(gone, "fixture-model", "USD", 1m, 2m, null, null);
         await process.Usage.Start("served", user, Core.Usage.UsageKind.Inference); await process.Usage.Dispatch("served", version, gone, "fixture-model");
-        Check(await process.Usage.Finish("served", new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(1, 2)) { Attempts = [new UpstreamAttempt(1, gone, version, DateTimeOffset.UtcNow)] }));
+        Check(await process.Usage.Finish("served", new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(1, 2)) { Attempts = [new UpstreamAttempt(1, gone, version, DateTimeOffset.UtcNow)] }) == Core.Usage.UsageFinish.Saved);
         await process.Upstreams.Rename(gone, "顺丰中转改名");
         var references = await process.Upstreams.Delete(gone);
         Check(references == new Application.Contracts.Upstream.UpstreamReferences(1, 1, 1), references.ToString());
@@ -190,7 +190,7 @@ static class DatabaseUpgradeTests
         var usage = web.App.Services.GetRequiredService<IUsageService>();
         await usage.Start("web-served", user, Core.Usage.UsageKind.Inference); await usage.Dispatch("web-served", version, gone, "fixture-model");
         var attempt = new UpstreamAttempt(1, gone, version, DateTimeOffset.UtcNow); attempt.Headers(200, null, text => text);
-        Check(await usage.Finish("web-served", new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(1, 2)) { Attempts = [attempt] }));
+        Check(await usage.Finish("web-served", new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(1, 2)) { Attempts = [attempt] }) == Core.Usage.UsageFinish.Saved);
         var form = new Dictionary<string, string> { ["candidateId"] = gone.ToString(CultureInfo.InvariantCulture), ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         string notice;
         using (var response = await web.Post("/Upstream?handler=Delete", form)) notice = System.Net.WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());

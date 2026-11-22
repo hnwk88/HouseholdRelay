@@ -66,8 +66,11 @@ public interface IUpstreamService : IActiveUpstreamSource
     /// <summary>选定要测试的模型；与原值不同时清除旧的通过状态，需重新测试才能切换。</summary>
     Task ChooseModel(long id, string model);
 
-    /// <summary>经操作者确认后对上游做一次最小模型调用检测，保存安全的检测报告并写回自动探测出的认证方式与检测方式。</summary>
+    /// <summary>经操作者确认后对上游做一次最小模型调用检测，保存安全的检测报告并写回自动探测出的认证方式与检测方式。标记检测中之后出错或被取消时写成「检测未完成」再抛出。</summary>
     Task<UpstreamReport> TestCandidate(long id, bool confirmed, CancellationToken cancellation);
+
+    /// <summary>服务启动时把库里残留的「检测中」写成「检测未完成」（检测任务只在内存里，重启后没人再写完它们），返回改了几家。</summary>
+    Task<int> RecoverInterruptedChecks();
 
     /// <summary>把检测通过的上游原子切换为活动版本；<paramref name="expectedVersion"/> 是调用方看到的活动版本，为空时沿用该上游保存时基于的版本。</summary>
     Task Activate(long id, long expectedVersion);

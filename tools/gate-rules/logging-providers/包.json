@@ -1,0 +1,15 @@
+﻿{
+  "包名": "logging-providers",
+  "版本": "1.0.0",
+  "说明": "守 GZ-T-117：src 下的 C# 不许清空日志提供程序（ClearProviders、移除全部 ILoggerProvider 登记）。清空以后未预料的异常无处可查；要收紧哪些消息去哪里，用按类别、按提供程序的过滤，文件日志只写类型、阶段、编号。",
+  "判据": [
+    {
+      "rule": "check_no_clear_logging_providers",
+      "标题": "不许清空日志提供程序",
+      "配置": "判据/check_no_clear_logging_providers.json",
+      "正反例": "正反例/check_no_clear_logging_providers.json",
+      "查什么": "global-only",
+      "建议级别": "L1"
+    }
+  ]
+}

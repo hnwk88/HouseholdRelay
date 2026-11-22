@@ -1,11 +1,13 @@
 ﻿using Application.Interfaces.Usage;
 using Application.Interfaces.Configuration;
+using Application.Logging;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Application.Services.Usage;
 
 /// <summary>只在服务启动时恢复遗留请求；查询和 CLI 打开数据库不会打断仍在运行的请求。</summary>
-public sealed class UsageMaintenance(IUsageService store, IServingLock servingLock, ISiteIdentityService identity) : BackgroundService
+public sealed class UsageMaintenance(IUsageService store, IServingLock servingLock, ISiteIdentityService identity, ILogger<UsageMaintenance> logger) : BackgroundService
 {
     private IDisposable? serving;
 
@@ -33,7 +35,10 @@ public sealed class UsageMaintenance(IUsageService store, IServingLock servingLo
     /// <summary>释放后台服务资源并释放仍持有的服务锁；可重复调用。</summary>
     public override void Dispose() { base.Dispose(); serving?.Dispose(); serving = null; }
 
-    /// <summary>每小时（按用量服务的时钟）清理一次超出保留窗口的记录，直到服务停止；单次清理的存储故障只计入失败次数，不终止循环。</summary>
+    /// <summary>
+    /// 每小时（按用量服务的时钟）清理一次超出保留窗口的记录，直到服务停止；单次清理失败（存储故障或任何没有预料到的异常）只计入失败次数、记一行日志，不终止循环，
+    /// 不会因为清理出错停掉整个宿主（连同中转）。
+    /// </summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromHours(1), store.Clock);
@@ -42,8 +47,11 @@ public sealed class UsageMaintenance(IUsageService store, IServingLock servingLo
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
                 try { await store.Cleanup(stoppingToken); }
-                // 只吞掉可恢复的存储故障并记入健康状态，让下一个小时继续重试；取消和其他异常照常向外传播。
+                // 可恢复的存储故障：记入健康状态，下一个小时继续重试。
                 catch (Exception error) when (UsageService.StorageError(error)) { store.MaintenanceFailure(); }
+                // 其余异常（服务停止引起的取消除外）：同样计入失败并记一行只有类型与阶段的日志，循环继续；按 .NET 默认让它冒出去会停掉整个宿主。
+                catch (Exception error) when (!(error is OperationCanceledException && stoppingToken.IsCancellationRequested))
+                { store.MaintenanceFailure(); RelayLog.Unexpected(logger, error, "usage-cleanup"); }
             }
         }
         // 服务正常停止时的取消属于预期结束，静默返回；不是由停止令牌引起的取消仍然向外抛出。

@@ -79,6 +79,9 @@ public sealed class RelayDatabase : IRelayInstance
             foreach (var migration in migrations.OrderBy(item => item.Order)) migration.Apply(this);
             using (var connection = Open())
             {
+                // 刚建的库：自动切换默认关（它会把请求交给另一家可能计费的上游，要管理员自己打开）。迁移链照老库升级走一遍，v6 那条迁移的 DEFAULT 1 语义不动，
+                // 所以只在这里、只对这次新建的库改一次；已有的库（含用户自己的设置）一行不碰。
+                if (created) Execute(connection, null, "UPDATE upstream SET failover=0");
                 if (backup is not null) { RecordUpgrade(connection, version, backup); UpgradedOnOpen = true; }
                 LastUpgrade = Scalar(connection, null, "SELECT value FROM metadata WHERE key='last_upgrade'") is string json
                     ? JsonSerializer.Deserialize<DatabaseUpgrade>(json, ConfigurationFiles.Json) : null;

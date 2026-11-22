@@ -23,7 +23,7 @@ const testsExe = process.argv[4] ? path.resolve(process.argv[4]) : readdirSync(p
     .map(name => path.join(__dirname, 'bin', 'Release', name, 'Tests.exe')).find(existsSync);
 const fakeClaude = path.join(path.dirname(testsExe ?? '.'), 'claude.exe');
 let child, browser, temporary, upstream, scenarioFile;
-let rejectAccount = false, regionBlocked = false;
+let rejectAccount = false, regionBlocked = false, slowModels = false;
 const regionSecret = 'fixture-browser-region-secret';
 const calls = [], steps = [];
 async function port() {
@@ -156,6 +156,8 @@ async function relay(url, token, stream = false) {
         const mode = account ? 'account' : request.headers.authorization === 'Bearer ' + loginToken ? 'login' : request.headers.authorization === 'Bearer ' + importToken ? 'import' : 'api';
         calls.push({ path: request.url, mode, beta: request.headers['anthropic-beta'] || '' });
         // 模拟按地区屏蔽当前网络出口：照 sftoken 现场回 503 和一张说明网页。
+        // 模拟一直不回模型目录的上游：等客户端断开（后台检测被取消）为止，用来走「取消检测」。
+        if (slowModels && request.url.includes('/models')) { await new Promise(resolve => request.on('close', resolve)); return; }
         if (regionBlocked) { response.writeHead(503, { 'content-type': 'text/html; charset=utf-8' }); response.end('<title>该网页在当前地区不可用</title>'); return; }
         if (rejectAccount && account) { response.writeHead(401, { 'content-type': 'application/json' }); response.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: accountSecret } })); return; }
         // 中转在获取模型与测试前照原生登录取一次账户资料（订单 133），按官方形状回一个虚构账户。
@@ -198,7 +200,9 @@ async function relay(url, token, stream = false) {
     assert.equal((await relay(url, token, true)).status, 200);
     await candidate(page, url, upstreamUrl, 'oauth', accountSecret, '浏览器账户');
     assert.equal((await relay(url, token)).status, 200);
-    // 先经页面关掉自动切换：账户回 401 原样交给客户端，随后认证暂停回 503，与没有自动切换时相同。
+    // 新实例的自动切换默认关（订单 148）：先确认页面读出关着，经页面打开一次再关掉，开关两个方向都走过。
+    // 关掉后账户回 401 原样交给客户端，随后认证暂停回 503，与没有自动切换时相同。
+    await failover(page, url, true);
     const switchedOff = await failover(page, url, false);
     rejectAccount = true; const denied = await relay(url, token); assert.equal(denied.status, 401); assert.equal((await denied.text()).includes(accountSecret), false);
     assert.equal((await relay(url, token)).status, 503);
@@ -227,7 +231,7 @@ async function relay(url, token, stream = false) {
     await page.getByRole('button', { name: '获取模型（不花额度）', exact: true }).click();
     const blocked = page.getByRole('status').filter({ hasText: '拒绝了当前网络出口' }); await blocked.waitFor();
     const blockedText = (await blocked.textContent()).trim();
-    assert.equal(blockedText, '已保存「顺丰中转」。获取模型失败，上游返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：不使用代理，直连上游。请检查代理出口后重试。');
+    assert.equal(blockedText, '已保存「顺丰中转」。获取模型失败，上游返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。请在本机管理页「项目设置」里检查代理和网络出口后重试。');
     assert.equal(blockedText.includes('检查地址'), false); assert.equal((await page.content()).includes(regionSecret), false);
     await screenshot(page, '19-region-blocked'); const before = await savedCount();
     regionBlocked = false;
@@ -236,6 +240,18 @@ async function relay(url, token, stream = false) {
     const againText = (await again.textContent()).trim();
     assert.ok(againText.startsWith('已重新获取「顺丰中转」的模型。已获取 1 个模型'), againText);
     assert.equal(await savedCount(), before, '重新获取模型不得新增上游');
+    // 后台检测：上游一直不回目录时按「重新获取」，页面马上回来，状态区是礼貌朗读区、读得出「正在获取模型」；按「取消检测」后读出「检测未完成」，不按刷新。
+    slowModels = true;
+    await page.getByRole('button', { name: '重新获取「顺丰中转」的模型（不花额度）', exact: true }).click();
+    const running = page.locator('#check-status'); await running.waitFor();
+    assert.equal(await running.getAttribute('aria-live'), 'polite'); assert.equal(await running.getAttribute('role'), 'status');
+    assert.equal((await running.textContent()).trim(), '正在获取模型，结果出来会自动读出。');
+    await readingOrder(page, '19b-upstream-check-running');
+    await page.getByRole('button', { name: '取消检测', exact: true }).click();
+    const stopped = page.getByRole('status').filter({ hasText: '检测未完成：管理员取消了这次检测。' }); await stopped.first().waitFor();
+    const stoppedText = (await stopped.first().textContent()).trim(); slowModels = false;
+    assert.equal(await page.getByRole('button', { name: '取消检测', exact: true }).count(), 0, '结束后不再有取消按钮');
+    steps.push('后台检测：上游不回目录时按「重新获取」，页面马上回来，状态区（role=status，aria-live=polite）读「正在获取模型，结果出来会自动读出。」；按「取消检测」读出：' + stoppedText);
     assert.equal(await page.getByRole('button', { name: '删除「浏览器账户（新令牌）」', exact: true }).count(), 0, '当前使用中的上游不能出删除按钮');
     await page.getByLabel('确认删除「顺丰中转」（删除后不能恢复）', { exact: true }).check();
     await page.getByRole('button', { name: '删除「顺丰中转」', exact: true }).click();

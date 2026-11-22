@@ -1,0 +1,29 @@
+﻿{
+  "样本": [
+    {
+      "路径": "src/HouseholdRelay/好的.cs",
+      "内容": "namespace HouseholdRelay;\n// 注释里写 builder.Logging.ClearProviders(); 不算。\nstatic class Good\n{\n    static void Configure(Microsoft.Extensions.Logging.ILoggingBuilder logging, string home)\n    {\n        logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Warning);\n        logging.AddFilter((provider, category, level) => level >= Microsoft.Extensions.Logging.LogLevel.Warning);\n    }\n}\n",
+      "期望": []
+    },
+    {
+      "路径": "src/HouseholdRelay/清空.cs",
+      "内容": "namespace HouseholdRelay;\nstatic class Bad\n{\n    static void Build(Microsoft.AspNetCore.Builder.WebApplicationBuilder builder)\n    {\n        builder.Logging.ClearProviders();\n    }\n}\n",
+      "期望": [{ "行": 6 }]
+    },
+    {
+      "路径": "src/HouseholdRelay/空格.cs",
+      "内容": "namespace HouseholdRelay;\nstatic class Bad\n{\n    static void Build(Microsoft.AspNetCore.Builder.WebApplicationBuilder builder) =>\n        builder.Logging\n            .ClearProviders ();\n}\n",
+      "期望": [{ "行": 6 }]
+    },
+    {
+      "路径": "src/Infrastructure/移除.cs",
+      "内容": "namespace Infrastructure;\nstatic class Bad\n{\n    static void Strip(Microsoft.Extensions.DependencyInjection.IServiceCollection services) =>\n        services.RemoveAll<Microsoft.Extensions.Logging.ILoggerProvider>();\n}\n",
+      "期望": [{ "行": 5 }]
+    },
+    {
+      "路径": "tests/Tests/测试不归它管.cs",
+      "内容": "static class T { static void B(Microsoft.AspNetCore.Builder.WebApplicationBuilder b) => b.Logging.ClearProviders(); }\n",
+      "期望": []
+    }
+  ]
+}

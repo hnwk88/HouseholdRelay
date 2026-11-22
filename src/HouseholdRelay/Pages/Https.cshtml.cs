@@ -24,6 +24,16 @@ public sealed class HttpsModel(IConfigurationService settings, ICertificateServi
     [BindProperty] public string? Password { get; set; }
     /// <summary>创建私有 CA 时是否允许替换已存在的证书；不勾选时已有证书会被拒绝覆盖。</summary>
     [BindProperty] public bool ReplaceExisting { get; set; }
+    /// <summary>导入 PFX 时是否确认覆盖现有的私有 CA（装了私有 CA 信任的电脑改用新证书）；已有私有 CA 而不勾选时服务拒绝导入。</summary>
+    [BindProperty] public bool ReplacePrivateConfirmed { get; set; }
+    /// <summary>存着私有 CA 私钥，可以只重签服务器证书（换地址、续期，家人不用重装信任）。</summary>
+    public bool CanReissue { get; private set; }
+    /// <summary>有上一份证书可以退回。</summary>
+    public bool HasPrevious { get; private set; }
+    /// <summary>当前是私有 CA 却没存着 CA 私钥（旧版建的）时的说明；其余时候为空。</summary>
+    public string? LegacyAuthorityText { get; private set; }
+    /// <summary>证书 30 天内到期的提示；没快到期时为空。</summary>
+    public string? ExpiryWarning { get; private set; }
     /// <summary>当前已保存证书的摘要信息（模式、有效期等）；未配置证书时为空。</summary>
     public CertificateInfo? Info { get; private set; }
     /// <summary>私有 CA 根证书的 SHA-256 指纹，供管理员与客户端核对；未生成私有 CA 时为空。</summary>
@@ -49,7 +59,7 @@ public sealed class HttpsModel(IConfigurationService settings, ICertificateServi
                 await using (var input = CertificateFile.OpenReadStream())
                     if (await input.ReadAtLeastAsync(bytes, bytes.Length, false, HttpContext.RequestAborted) < bytes.Length)
                     { CryptographicOperations.ZeroMemory(bytes); throw new InvalidOperationException("证书文件没有读完整，请重新选择后再导入。"); }
-                try { await certificates.Import(Version, PublicUrl, ListenPort, bytes, Password); }
+                try { await certificates.Import(Version, PublicUrl, ListenPort, bytes, Password, ReplacePrivateConfirmed); }
                 // PFX 字节里含服务器私钥，导入成功或失败都立即清零，不让私钥留在托管内存里等待回收。
                 finally { CryptographicOperations.ZeroMemory(bytes); }
                 Notice = "可信证书及地址已保存。请重启服务使监听端口和证书生效，再从实际客户端验证连接。";
@@ -78,6 +88,46 @@ public sealed class HttpsModel(IConfigurationService settings, ICertificateServi
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         await Load(); return Page();
     }
-    /// <summary>重新读取证书摘要与 CA 指纹，供每个处理程序在渲染页面前刷新展示内容。</summary>
-    private async Task Load() { Info = await certificates.ReadInfo(); AuthorityFingerprint = await certificates.AuthorityFingerprint(); }
+    /// <summary>用存下来的私有 CA 重签服务器证书并保存地址与端口（需已登录且通过防 CSRF 校验）：CA 指纹不变，家人不用重装信任；需重启服务生效。</summary>
+    public async Task<IActionResult> OnPostReissueAsync()
+    {
+        try
+        {
+            if (ModelState.IsValid)
+            {
+                await certificates.ReissuePrivate(Version, PublicUrl, ListenPort);
+                Notice = "已用现有私有 CA 重签服务器证书，CA 指纹不变，家人不用重装信任。请重启服务使新证书生效。";
+                Version = (await settings.Read()).Version; ModelState.Remove(nameof(Version));
+            }
+        }
+        // 没存着 CA 私钥、版本冲突或地址不合法：读出原因与下一步，证书不变。
+        catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        await Load(); return Page();
+    }
+
+    /// <summary>退回上一份证书（需已登录且通过防 CSRF 校验）：当前与上一份对调，地址与端口一起退回；再按一次就回到现在这份。需重启服务生效。</summary>
+    public async Task<IActionResult> OnPostRestoreAsync()
+    {
+        try
+        {
+            await certificates.RestorePrevious(Version);
+            Notice = "已退回上一份证书，对外地址与端口也一起退回。请重启服务使它生效；再按一次「退回上一份证书」就回到刚才那份。";
+            var value = await settings.Read(); Version = value.Version; PublicUrl = value.Value.PublicUrl; ListenPort = value.Value.ListenPort;
+            ModelState.Remove(nameof(Version)); ModelState.Remove(nameof(PublicUrl)); ModelState.Remove(nameof(ListenPort));
+        }
+        // 没有上一份或版本冲突：读出原因，证书不变。
+        catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
+        await Load(); return Page();
+    }
+
+    /// <summary>重新读取证书摘要、CA 指纹、能否重签、有没有上一份与到期提示，供每个处理程序在渲染页面前刷新展示内容。</summary>
+    private async Task Load()
+    {
+        Info = await certificates.ReadInfo(); AuthorityFingerprint = await certificates.AuthorityFingerprint();
+        CanReissue = await certificates.CanReissue(); HasPrevious = await certificates.HasPrevious();
+        LegacyAuthorityText = AuthorityFingerprint is not null && !CanReissue
+            ? "这份私有 CA 是旧版建的，CA 私钥当初没有留存：以后换地址或证书到期时，只能新建一次私有 CA，每台客户端要重新安装一次信任。新建之后私钥会受保护地存下来，再换地址只重签服务器证书。"
+            : null;
+        ExpiryWarning = Info?.ExpiryWarning(DateTimeOffset.UtcNow, CanReissue);
+    }
 }

@@ -146,12 +146,12 @@ async function createUser(page, name) {
     assert.equal((await personal(b.token)).rows.find(row => row.money.source === 'estimated').money.amount, 0.00011);
     await page.goto(url + '/Users'); const row = page.locator(`[data-user-id="${a.id}"]`);
     await row.getByLabel('显示名', { exact: true }).fill('统计甲改名'); await row.getByRole('button', { name: '保存显示名', exact: true }).click();
-    await page.locator(`[data-user-id="${a.id}"]`).getByRole('button', { name: '轮换令牌', exact: true }).click();
+    await page.locator(`[data-user-id="${a.id}"]`).getByRole('button', { name: '轮换令牌（旧令牌立即失效）', exact: true }).click();
     const oldToken = a.token; a.token = (await page.locator('#issued-token').textContent()).trim();
     assert.equal((await fetch(url + '/my-usage/data', { headers: { Authorization: 'Bearer ' + oldToken } })).status, 401);
     assert.equal((await fetch(url + '/my-usage/data?user_id=' + b.id, { headers: { Authorization: 'Bearer ' + a.token } })).status, 400);
     assert.ok((await personal(a.token)).rows.every(row => String(row.userId) === a.id &&row.displayName === '统计甲改名'));
-    await page.locator(`[data-user-id="${b.id}"]`).getByRole('button', { name: '停用', exact: true }).click();
+    await page.locator(`[data-user-id="${b.id}"]`).getByRole('button', { name: '停用（他的个人令牌立即不能用）', exact: true }).click();
     assert.equal((await fetch(url + '/my-usage/data', { headers: { Authorization: 'Bearer ' + b.token } })).status, 401);
     await mine.getByLabel('个人令牌', { exact: true }).fill(a.token); await mine.getByLabel('时间统计', { exact: true }).selectOption('hour');
     await mine.getByRole('button', { name: '查询我的用量', exact: true }).click(); await mine.getByText('查询完成。', { exact: true }).waitFor();

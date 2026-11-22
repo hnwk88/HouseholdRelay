@@ -116,7 +116,7 @@ static class UpstreamDetectionTests
     }
 
     /// <summary>
-    /// 验证上游 5xx、重新获取模型与删除：获取模型和测试遇到 503 时读成「上游暂时不可用，或者拒绝了当前网络出口」并读出当前代理设置，不再叫人检查地址；
+    /// 验证上游 5xx、重新获取模型与删除：获取模型和测试遇到 503 时读成「上游暂时不可用，或者拒绝了当前网络出口」并指向项目设置（不读出本机代理地址），不再叫人检查地址；
     /// 上游恢复后对已保存的上游按「重新获取模型」成功，不新增上游；删除须勾选确认，当前使用中的不出删除按钮、提交也被拒，正在检测的被拒，
     /// 其余删除后列表少一个，活动上游和历史用量不变。
     /// </summary>
@@ -136,14 +136,14 @@ static class UpstreamDetectionTests
         };
         string blocked;
         using (var discovered = await web.Post("/Upstream?handler=DiscoverApi", values)) blocked = WebUtility.HtmlDecode(await discovered.Content.ReadAsStringAsync());
-        Check(blocked.Contains("获取模型失败，上游返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：不使用代理，直连上游。请检查代理出口后重试。")
+        Check(blocked.Contains("获取模型失败，上游返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。请在本机管理页「项目设置」里检查代理和网络出口后重试。")
             && !blocked.Contains("请检查地址是否填对"), blocked);
         var failed = (await service.ListCandidates()).Single(item => item.Name == "顺丰中转").Id; var count = (await service.ListCandidates()).Count;
 
         mock.Handler = context => context.Request.Path.Value!.EndsWith("/models", StringComparison.Ordinal) ? UpstreamFixture.Success(context) : Status(context, 503);
         var manual = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mock.Options(), "fixture-manual-region-secret", "手动标准");
         var refused = await service.TestCandidate(manual, true, CancellationToken.None);
-        Check(!refused.CanActivate && refused.Message.StartsWith("最小模型调用返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口", StringComparison.Ordinal) && refused.Message.Contains("当前代理设置："), refused.Message);
+        Check(!refused.CanActivate && refused.Message.StartsWith("最小模型调用返回 HTTP 503。上游暂时不可用，或者拒绝了当前网络出口", StringComparison.Ordinal) && !refused.Message.Contains("当前代理设置：") && refused.Message.Contains("「项目设置」"), refused.Message);
         count++;
 
         mock.Handler = null;

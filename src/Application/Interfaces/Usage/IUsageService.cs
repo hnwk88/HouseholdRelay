@@ -24,8 +24,8 @@ public interface IUsageService
     /// <summary>记录即将发送与首先要试的那一家（已保存上游主键）；保存失败时以 503 拒绝请求，不发往上游。</summary>
     Task Dispatch(string requestId, long version, long? upstreamCandidateId, string? model);
 
-    /// <summary>保存请求结束结果，最多重试三次；全部失败时返回 false。</summary>
-    Task<bool> Finish(string requestId, UsageEnd result);
+    /// <summary>保存请求结束结果，最多重试三次：写了返回已保存，早已结束返回无需再写，全部失败返回保存失败（已计入失败次数）。</summary>
+    Task<UsageFinish> Finish(string requestId, UsageEnd result);
 
     /// <summary>服务启动时把上次遗留的未结束记录标记为中断。</summary>
     Task Recover();

@@ -173,7 +173,7 @@ static class IntegerKeyUpgradeTests
             Check((string?)RelayDatabase.Scalar(connection, null, "SELECT token_hash FROM admin_sessions WHERE admin_id=(SELECT id FROM administrators)") == ConfigurationFiles.Hash(session));
         var user = (await process.Identities.Clients.Authenticate(first.Token))!;
         await process.Usage.Start("key-request", user, Core.Usage.UsageKind.Inference); await process.Usage.Dispatch("key-request", version, a, "key-model");
-        Check(await process.Usage.Finish("key-request", new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(1, 2)) { Attempts = [new UpstreamAttempt(1, a, version, DateTimeOffset.UtcNow)] }));
+        Check(await process.Usage.Finish("key-request", new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(1, 2)) { Attempts = [new UpstreamAttempt(1, a, version, DateTimeOffset.UtcNow)] }) == Core.Usage.UsageFinish.Saved);
         using (var connection = process.Database.Open())
         {
             Check(Convert.ToInt64(RelayDatabase.Scalar(connection, null, "SELECT a.usage_request_id FROM usage_attempts a")) == Convert.ToInt64(RelayDatabase.Scalar(connection, null, "SELECT id FROM usage_requests WHERE request_id='key-request'")));

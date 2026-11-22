@@ -37,7 +37,10 @@ static class UpstreamSecurityTests
         plain.Handler = async context => { try { await Task.Delay(Timeout.Infinite, context.RequestAborted); } catch (OperationCanceledException) { /* 模拟永不应答的上游；诊断取消后请求中止属于预期，安静结束即可。 */ } };
         var slow = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, plain.Options(), "fixture-slow-secret");
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-        var cancelled = await service.TestCandidate(slow, true, cancel.Token); Check(cancelled.Call == Core.Upstream.CheckStatus.Cancelled && (await service.ReadCandidate(slow)).State == Core.Upstream.CandidateState.Failed);
+        // 订单 148：管理员取消不算结论，这一家落到「检测未完成」（未测试），不记成未通过；返回的报告仍是「已取消」。
+        var cancelled = await service.TestCandidate(slow, true, cancel.Token); var after = await service.ReadCandidate(slow);
+        Check(cancelled.Call == Core.Upstream.CheckStatus.Cancelled && after.State == Core.Upstream.CandidateState.Untested
+            && after.Report?.Message.StartsWith(Core.Upstream.UpstreamReport.UnfinishedLead + Core.Upstream.UpstreamReport.CancelledReason, StringComparison.Ordinal) == true, after.Report?.Message ?? "no report");
         Check(!(await service.ReadActive()).Configured);
     }
 

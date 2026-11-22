@@ -115,7 +115,31 @@ sealed class WebFixture : IAsyncDisposable
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, Url + path) { Content = new FormUrlEncodedContent(values) };
         request.Headers.TryAddWithoutValidation("Origin", origin ?? Url);
-        return await (client ?? Http).SendAsync(request);
+        return await AfterCheck(await (client ?? Http).SendAsync(request), client ?? Http);
+    }
+
+    /// <summary>
+    /// 上游页的获取模型、测试改成了后台检测：提交回来的页面带进行中的检测状态区时，照页面脚本的做法每 100 毫秒查一次状态，结束后取「带检测编号的上游页」返回（结论在提示或错误里），
+    /// 用例照旧按提交后的页面读结论。没有进行中的检测时原样返回（正文已缓冲，可再读）。最多等 120 秒。
+    /// </summary>
+    public async Task<HttpResponseMessage> AfterCheck(HttpResponseMessage response, HttpClient client)
+    {
+        var html = await response.Content.ReadAsStringAsync();
+        var found = System.Text.RegularExpressions.Regex.Match(html, "data-check-id=\"(\\d+)\" data-candidate-id=\"(\\d+)\"");
+        if (!found.Success) return response;
+        response.Dispose();
+        var check = found.Groups[1].Value; var candidate = found.Groups[2].Value;
+        var deadline = DateTime.UtcNow.AddSeconds(120);
+        while (true)
+        {
+            using var state = await client.GetAsync(Url + "/Upstream?handler=Check&checkId=" + check);
+            var json = await state.Content.ReadAsStringAsync();
+            TestSuite.Check(state.IsSuccessStatusCode, "Check status unavailable: " + json);
+            if (json.Contains("\"ended\":true", StringComparison.Ordinal)) break;
+            TestSuite.Check(DateTime.UtcNow < deadline, "Background check did not end in 120 seconds");
+            await Task.Delay(100);
+        }
+        return await client.GetAsync(Url + "/Upstream?candidateId=" + candidate + "&checkId=" + check);
     }
     /// <summary>以 multipart 提交 POST，带本站 Origin：<paramref name="values"/> 是普通字段，<paramref name="file"/> 作为名为 <paramref name="field"/> 的上传文件。调用方负责释放响应。</summary>
     public async Task<HttpResponseMessage> Post(string path, Dictionary<string, string> values, string field, string fileName, byte[] file)
@@ -125,7 +149,7 @@ sealed class WebFixture : IAsyncDisposable
         content.Add(new ByteArrayContent(file), field, fileName);
         using var request = new HttpRequestMessage(HttpMethod.Post, Url + path) { Content = content };
         request.Headers.TryAddWithoutValidation("Origin", Url);
-        return await Http.SendAsync(request);
+        return await AfterCheck(await Http.SendAsync(request), Http);
     }
     /// <summary>如尚未初始化则用首次引导码设置测试密码，再通过登录表单登录默认会话；登录必须返回 302 跳转。</summary>
     public async Task Login()

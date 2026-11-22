@@ -43,6 +43,8 @@ async function readingOrder(page, name) {
 }
 function clean(text) { return redact(text, [password, token, ...material.providers.map(provider => provider.credential)]); }
 async function status(page) {
+    // 上游页的获取模型、测试在后台跑：状态区还在读「正在……」时等它读出结论（最多两分钟）。
+    await page.waitForFunction(() => { const live = document.getElementById('check-status'); return !live || !live.textContent.trim().startsWith('正在'); }, null, { timeout: 120000 });
     const notice = page.getByRole('status');
     return ((await notice.count()) > 0 ? await notice.first().textContent() : await page.getByRole('alert').first().textContent()).trim();
 }

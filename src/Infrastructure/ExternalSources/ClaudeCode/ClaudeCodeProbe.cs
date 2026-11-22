@@ -112,7 +112,10 @@ internal sealed class ClaudeCodeProbe : IClaudeCodeProbe
     private async Task<T> Session<T>(string? model, string? entrypoint, Uri target, bool officialOperation, Func<HttpContext, TaskCompletionSource<T>, Task> handle, Func<T, bool> settle, CancellationToken cancellation)
     {
         using var operation = officialOperation ? _siteIdentity.Enter() : null;
-        var executable = _launcher.FindClaude();
+        string executable;
+        try { executable = _launcher.FindClaude(); }
+        // 本机没装或找不到 claude.exe：归为 Claude Code 检测没走完，读句沿用定位失败的原话，子进程没有启动。
+        catch (InvalidOperationException error) when (error is not ClaudeCodeProbeIncompleteException) { throw new ClaudeCodeProbeIncompleteException(error.Message, error); }
         var route = _proxy.Resolve(target);
         var parent = Path.GetFullPath(Path.GetTempPath());
         var directory = Path.GetFullPath(Path.Combine(parent, "HouseholdRelay-diagnostic-" + Guid.NewGuid().ToString("N")));
@@ -149,7 +152,7 @@ internal sealed class ClaudeCodeProbe : IClaudeCodeProbe
             }
             else
             {
-                child = OfficialAccountLogin.StartOwned(start, owned) ?? throw new InvalidOperationException("无法启动隔离的 Claude Code 检测。");
+                child = OfficialAccountLogin.StartOwned(start, owned) ?? throw new ClaudeCodeProbeIncompleteException("无法启动隔离的 Claude Code 检测。");
                 owned?.Register(child.Id, child.StartTime.ToUniversalTime()); registered = owned is not null;
                 child.StandardInput.Close();
                 output = child.StandardOutput.BaseStream.CopyToAsync(Stream.Null, cancellation);
@@ -161,13 +164,13 @@ internal sealed class ClaudeCodeProbe : IClaudeCodeProbe
             var finished = await Task.WhenAny(completion.Task, exited);
             cancellation.ThrowIfCancellationRequested();
             if (finished == exited && !completion.Task.IsCompleted)
-                throw new InvalidOperationException("Claude Code 未发送检测请求；请检查本机客户端版本，或选择标准 Messages 检测。");
+                throw new ClaudeCodeProbeIncompleteException("Claude Code 未发送检测请求；请检查本机客户端版本，或选择标准 Messages 检测。");
             var reply = await completion.Task.WaitAsync(cancellation);
             if (settle(reply))
             {
                 // 上游成功时还要等子进程正常收尾并排空输出管道，确认客户端完整走完一次会话才算检测通过。
                 await exited; await Task.WhenAll(output, errors);
-                if (child.ExitCode != 0) throw new InvalidOperationException("Claude Code 未完成检测会话，候选未激活。");
+                if (child.ExitCode != 0) throw new ClaudeCodeProbeIncompleteException("Claude Code 未完成检测会话，候选未激活。");
             }
             return reply;
         }

@@ -39,20 +39,23 @@ static class UsageStorageTests
         var client = (await web.Identities.Clients.Authenticate(user.Token))!; var usage = web.RelayUsage;
         var completed = new UsageEnd(Core.Usage.UsageOutcome.Succeeded, true, 200, 200, 1, Core.Usage.UsageCompleteness.Complete, new(12, 9));
         await usage.Start("finish-retry", client, Core.Usage.UsageKind.Inference); await usage.Dispatch("finish-retry", 2, null, "fixture-model");
-        Task<bool> finish;
+        Task<Core.Usage.UsageFinish> finish;
         using (var connection = web.Database.Open())
         using (var locked = connection.BeginTransaction())
         {
             finish = Task.Run(() => usage.Finish("finish-retry", completed));
             await Task.Delay(1200); // 首次忙等待失败，下一次独立保存仍应成功。
         }
-        Check(await finish.WaitAsync(TimeSpan.FromSeconds(5)));
+        Check(await finish.WaitAsync(TimeSpan.FromSeconds(5)) == Core.Usage.UsageFinish.Saved);
         Check((await usage.Query(new())).Rows.Single().Completeness == Core.Usage.UsageCompleteness.Complete);
+        // P-053：同一条再结束一次，什么都不写，读得出「早已结束、无需再写」，不冒充「已保存」。
+        Check(await usage.Finish("finish-retry", completed with { Status = 500 }) == Core.Usage.UsageFinish.AlreadyEnded, "A repeated finish must say it did nothing");
+        Check((await usage.Query(new())).Rows.Single().StatusCode == 200, "A repeated finish must keep the first result");
         await usage.Start("finish-failed", client, Core.Usage.UsageKind.Inference);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             CREATE TRIGGER reject_usage_finish BEFORE UPDATE ON usage_requests BEGIN SELECT RAISE(ABORT,'fixture-write-failure'); END
             """));
-        var timer = Stopwatch.StartNew(); Check(!await usage.Finish("finish-failed", completed));
+        var timer = Stopwatch.StartNew(); Check(await usage.Finish("finish-failed", completed) == Core.Usage.UsageFinish.Failed);
         Check(timer.Elapsed < TimeSpan.FromSeconds(5) && usage.PersistenceFailures == 2);
         Check((await usage.Query(new())).Rows.Single(row => row.RequestId == "finish-failed").Outcome == Core.Usage.UsageOutcome.Started);
         await web.Login(); Check((await web.Http.GetStringAsync(web.Url + "/Usage")).Contains("待写入记录不能视为完整统计"));

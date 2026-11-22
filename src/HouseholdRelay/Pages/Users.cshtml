@@ -31,8 +31,8 @@
             <button type="submit" class="secondary">保存显示名</button>
         </form>
         <div class="actions">
-            <form method="post" asp-page-handler="Enable"><input type="hidden" name="userId" value="@user.Id" /><input type="hidden" name="enabled" value="@((!user.Enabled).ToString().ToLowerInvariant())" /><button type="submit" class="secondary">@(user.Enabled ? "停用" : "启用")</button></form>
-            <form method="post" asp-page-handler="Rotate"><input type="hidden" name="userId" value="@user.Id" /><button type="submit" class="secondary">轮换令牌</button></form>
+            <form method="post" asp-page-handler="Enable"><input type="hidden" name="userId" value="@user.Id" /><input type="hidden" name="enabled" value="@((!user.Enabled).ToString().ToLowerInvariant())" /><button type="submit" class="secondary">@(user.Enabled ? "停用（他的个人令牌立即不能用）" : "启用")</button></form>
+            <form method="post" asp-page-handler="Rotate"><input type="hidden" name="userId" value="@user.Id" /><button type="submit" class="secondary">轮换令牌（旧令牌立即失效）</button></form>
         </div>
         <small>轮换后旧令牌立即失效。已停用的使用者轮换后仍保持停用。</small>
     </section>

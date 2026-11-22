@@ -1,5 +1,6 @@
 ﻿using System.Security.Cryptography;
 using Application.Interfaces.Administration;
+using Application.Logging;
 using Application.Interfaces.Certificates;
 using Core.Certificates;
 using Core.Configuration;
@@ -8,7 +9,8 @@ using HouseholdRelay.Relay;
 namespace HouseholdRelay.Commands;
 
 /// <summary>命令行 serve：加载证书、启动本机管理网页和对外 HTTPS 中转两个宿主，并在控制台给出引导信息。</summary>
-public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, ICertificateService certificates, IAdministratorService administrators, Application.Interfaces.Configuration.IRelayInstance instance)
+public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, ICertificateService certificates, IAdministratorService administrators, Application.Interfaces.Configuration.IRelayInstance instance,
+    ILogger<ServeCommand> logger)
 {
     /// <summary>管理端口须在 1024 至 65535 之间；在打开数据目录前检查。</summary>
     public static void CheckPort(int adminPort)
@@ -22,8 +24,9 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
         ServerCertificates? loaded = null;
         try { loaded = await certificates.LoadForServing(); }
         // 证书损坏或配置不符时只降级为不启用对外 HTTPS，管理网页照常启动，让操作者能在本机重新导入证书。
+        // 控制台读句不变；具体是哪一类失败记进 logs\errors.log（只有类型链与阶段），管理员事后查得到。
         catch (Exception error) when (error is CryptographicException or InvalidOperationException)
-        { Console.WriteLine("HTTPS 证书无法启用，请在本机管理页面检查证书链、域名和有效期后重新导入。"); }
+        { RelayLog.Unexpected(logger, error, "serve:certificate"); Console.WriteLine("HTTPS 证书无法启用，请在本机管理页面检查证书链、域名和有效期后重新导入。"); }
         using var certificate = loaded;
         await using var api = certificate is null ? null : relay.Build(certificate.Certificate, certificateChain: certificate.Chain);
         await admin.StartAsync();

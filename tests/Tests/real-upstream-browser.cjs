@@ -223,11 +223,11 @@ async function configureTls(page, url, port) {
     }
     evidence.stage = 'switch-back-https'; await switchTo(page, url, material.providers[0]); evidence.switch_back = await native(relayUrl, model);
     evidence.stage = 'rotate-disable-private-usage'; await page.goto(url + '/Users');
-    await page.locator(`[data-user-id="${firstUser.id}"]`).getByRole('button', { name: '轮换令牌', exact: true }).click();
+    await page.locator(`[data-user-id="${firstUser.id}"]`).getByRole('button', { name: '轮换令牌（旧令牌立即失效）', exact: true }).click();
     const oldToken = token; token = (await page.locator('#issued-token').textContent()).trim();
     assert.equal((await relayFetch(relayUrl + '/my-usage/data', { headers: { Authorization: 'Bearer ' + oldToken } })).status, 401);
     assert.ok((await personalUsage(relayUrl)).rows.some(row => row.requestId === evidence.providers[0].json.request_id));
-    await page.goto(url + '/Users'); await page.locator(`[data-user-id="${secondUser.id}"]`).getByRole('button', { name: '停用', exact: true }).click();
+    await page.goto(url + '/Users'); await page.locator(`[data-user-id="${secondUser.id}"]`).getByRole('button', { name: '停用（他的个人令牌立即不能用）', exact: true }).click();
     for (const route of ['/my-usage/data', '/v1/models']) assert.equal((await relayFetch(relayUrl + route, { headers: { Authorization: 'Bearer ' + secondUser.token } })).status, 401);
     evidence.rotation_and_disable = true;
     await page.setViewportSize({ width: 390, height: 844 }); await page.goto(url + '/Upstream');

@@ -44,6 +44,9 @@ public static class ApplicationServiceCollectionExtensions
         // 维护已保存上游、测试与激活；选 Singleton 的原因：测试与激活的状态都存在库里，服务本身无状态，每次经独立作用域的仓储读写。
         services.AddSingleton<IUpstreamService, UpstreamService>();
         services.AddSingleton<IActiveUpstreamSource>(provider => provider.GetRequiredService<IUpstreamService>());
+        // 负责获取模型与测试的后台调度；选 Singleton 的原因：进行中的检测与最近的记录只在内存里，全进程共享一份，页面按编号查。
+        services.AddSingleton<UpstreamChecks>();
+        services.AddSingleton<IUpstreamChecks>(provider => provider.GetRequiredService<UpstreamChecks>());
         // 负责用量记录的写入、清理与查询；选 Singleton 的原因：写入队列与失败计数必须全进程共享。
         services.AddSingleton<IUsageService, UsageService>();
         // 维护按上游、按模型的单价；选 Singleton 的原因：数据每次经独立作用域的仓储读写，服务本身无状态。
@@ -52,10 +55,11 @@ public static class ApplicationServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>登记只在正式服务宿主里运行的后台任务：启动恢复与每小时一次的 40 天用量清理。</summary>
+    /// <summary>登记只在正式服务宿主里运行的后台任务：启动恢复与每小时一次的 40 天用量清理；后台检测（启动时把残留的「检测中」写成「检测未完成」，停止时取消进行中的检测）。</summary>
     public static IServiceCollection AddApplicationBackgroundServices(this IServiceCollection services)
     {
         services.AddHostedService(provider => provider.GetRequiredService<UsageMaintenance>());
+        services.AddHostedService(provider => provider.GetRequiredService<UpstreamChecks>());
         return services;
     }
 }

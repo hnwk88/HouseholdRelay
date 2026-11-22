@@ -127,7 +127,7 @@ static class LayeringTests
         try
         {
             _ = new RelayForwarder(new RelayConfiguration { DeviceId = new string('e', 64) }, new Core.Identity.ClientRegistry([]), new Admission(new RelayConfiguration { DeviceId = new string('e', 64) }),
-                null!, null!, null!, null!, null!, null!, null!, null!, null!);
+                null!, null!, null!, null!, null!, null!, null!, null!, null!, null!);
             Check(false, "Null dependencies were accepted");
         }
         // 判空是这条用例要的结果：漏传依赖当场抛出。
@@ -135,7 +135,8 @@ static class LayeringTests
         try
         {
             var config = new RelayConfiguration { DeviceId = new string('e', 64) };
-            _ = RelayForwarder.Standalone(config, new Core.Identity.ClientRegistry([]), new Admission(config), null!, new Application.Services.Relay.NullRelayEventLog(), new UpstreamResponses());
+            _ = RelayForwarder.Standalone(config, new Core.Identity.ClientRegistry([]), new Admission(config), null!, new Application.Services.Relay.NullRelayEventLog(), new UpstreamResponses(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<RelayForwarder>.Instance);
             Check(false, "A standalone relay without an upstream pool was accepted");
         }
         // 这里是用例期望的拒绝：接住后核对读句或类型，别的异常照常让用例失败。

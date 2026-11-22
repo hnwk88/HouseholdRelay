@@ -42,9 +42,11 @@ public sealed class ConnectionModel(IConfigurationService settings, IUpstreamSer
         ClaudeCodeOnly = active.Options.Diagnostic == Core.Upstream.DiagnosticMethod.ClaudeCode;
         if (active.Report?.CanActivate == true)
         { VerifiedModel = active.Report.VerifiedModel; RecommendedModel = active.Options.Model; Models = active.Report.Models; }
-        var certificate = await certificates.ReadInfo();
-        HttpsStatus = certificate is null ? "尚未配置 HTTPS。" : certificate.ValidUntil <= DateTimeOffset.UtcNow ? "证书已过期，请管理员更新。"
-            : certificate.Mode == "private" ? "私有 CA 已配置；每台电脑完成下方一次性信任后即可使用。" : "已导入可信证书；请确认服务重启并从实际客户端检查信任。";
+        // 30 天内到期时先读到期提示（与概览、HTTPS 页同一句），再读原来的状态。
+        var certificate = await certificates.ReadInfo(); var now = DateTimeOffset.UtcNow;
+        HttpsStatus = certificate is null ? "尚未配置 HTTPS。" : certificate.Expired(now) ? "证书已过期，请管理员更新。"
+            : certificate.ExpiryWarning(now, await certificates.CanReissue())
+                + (certificate.Mode == "private" ? "私有 CA 已配置；每台电脑完成下方一次性信任后即可使用。" : "已导入可信证书；请确认服务重启并从实际客户端检查信任。");
         AuthorityFingerprint = await certificates.AuthorityFingerprint();
         TrustCommand = $".\\Install-RelayTrust.ps1 -ExpectedSha256 {AuthorityFingerprint}";
         var address = RootUrl.Length == 0 ? "https://YOUR_RELAY_HOST" : RootUrl;

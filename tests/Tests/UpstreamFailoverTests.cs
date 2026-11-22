@@ -318,6 +318,8 @@ static class UpstreamFailoverTests
             var token = (await web.Identities.Create("切换")).Token;
             var idA = await Passed(web, a, SecretA, "甲"); var idB = await Passed(web, b, SecretB, "乙");
             await web.Upstreams.Activate(idA); a.Calls.Clear(); b.Calls.Clear();
+            // 新实例的自动切换默认关（订单 148）；这组用例测的是打开以后的行为，场景里由管理员打开一次。
+            await web.Upstreams.SetFailover(true);
             return new() { A = a, B = b, Web = web, Clock = clock, Logs = logs, Token = token, IdA = idA, IdB = idB };
         }
 

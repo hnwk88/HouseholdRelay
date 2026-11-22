@@ -464,6 +464,15 @@
           "sourceScope": "changed",
           "timeoutSeconds": 900,
           "cacheMode": "reuse"
+        },
+        "custom.logging-providers.check_no_clear_logging_providers": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "warn",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
         }
       },
       "budgetSeconds": 60.0,
@@ -598,6 +607,15 @@
           "cacheMode": "reuse"
         },
         "custom.status-literals.check_status_literal_comparison": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "changed",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.logging-providers.check_no_clear_logging_providers": {
           "enabled": true,
           "severity": "error",
           "failureAction": "block",
@@ -955,6 +973,15 @@
           "cacheMode": "reuse"
         },
         "custom.status-literals.check_status_literal_comparison": {
+          "enabled": true,
+          "severity": "error",
+          "failureAction": "block",
+          "parameters": {},
+          "sourceScope": "all",
+          "timeoutSeconds": 900,
+          "cacheMode": "reuse"
+        },
+        "custom.logging-providers.check_no_clear_logging_providers": {
           "enabled": true,
           "severity": "error",
           "failureAction": "block",

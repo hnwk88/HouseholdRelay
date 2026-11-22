@@ -67,6 +67,25 @@ public sealed class UpstreamCandidate : BaseEntity
         State = state; ReportJson = reportJson; OptionsJson = optionsJson;
     }
 
+    /// <summary>此刻的检测阶段：不是检测中为空闲；检测中且在窗口内为正在检测；检测中却已过窗口为检测未完成。页面文字、删除与重新检测都读它。</summary>
+    /// <param name="nowSeconds">此刻（Unix 秒）。</param>
+    public UpstreamCheckPhase Phase(long nowSeconds) =>
+        State != CandidateState.Testing ? UpstreamCheckPhase.Idle : Idle(nowSeconds) ? UpstreamCheckPhase.Interrupted : UpstreamCheckPhase.Checking;
+
+    /// <summary>
+    /// 检测没有走到结论就结束了（出错、被取消、服务重启）：回到未测试，报告读「检测未完成：原因。下一步」。与 <see cref="BeginTest"/> 成对；
+    /// 只在仍是检测中时改，已经写回结论的不覆盖，返回是否改了。
+    /// </summary>
+    /// <param name="at">此刻。</param>
+    /// <param name="reason">原因，见 <see cref="UpstreamReport"/> 上的几种读句。</param>
+    public bool Interrupt(DateTimeOffset at, string reason)
+    {
+        if (State != CandidateState.Testing) return false;
+        State = CandidateState.Untested; TestStartedAt = null;
+        ReportJson = JsonSerializer.Serialize(UpstreamReport.Unfinished(at, reason), ConfigurationFiles.Json);
+        return true;
+    }
+
     /// <summary>改了配置（获取模型或改选模型）以后回到未测试，报告可为空；须重新测试才能切换。</summary>
     /// <param name="optionsJson">新配置 JSON。</param>
     /// <param name="reportJson">新报告 JSON，可为空。</param>

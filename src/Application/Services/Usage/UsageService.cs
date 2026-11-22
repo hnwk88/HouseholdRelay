@@ -98,11 +98,12 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     }
 
     /// <summary>
-    /// 保存请求结束结果并按单价快照计算金额，成功返回 true：在一个事务里读出记录，由 <see cref="UsageRequest.ServedBy"/> 定下记在哪一家（换了家就取那一家此刻的单价与名称），
-    /// 写入结束结果与各次尝试；记录已结束时什么都不写。存储故障时最多共尝试 3 次（间隔 100、200 毫秒），全部失败则计入失败并返回 false，不抛出。
+    /// 保存请求结束结果并按单价快照计算金额：在一个事务里读出记录，由 <see cref="UsageRequest.ServedBy"/> 定下记在哪一家（换了家就取那一家此刻的单价与名称），
+    /// 写入结束结果与各次尝试，返回 <see cref="UsageFinish.Saved"/>；记录已结束时什么都不写，返回 <see cref="UsageFinish.AlreadyEnded"/>。
+    /// 存储故障时最多共尝试 3 次（间隔 100、200 毫秒），全部失败则计入失败并返回 <see cref="UsageFinish.Failed"/>，不抛出。
     /// 重试等待不受请求取消影响，客户端断开也会尽量把结果写完。
     /// </summary>
-    public async Task<bool> Finish(string requestId, UsageEnd result)
+    public async Task<UsageFinish> Finish(string requestId, UsageEnd result)
     {
         for (var attempt = 0; attempt < 3; attempt++)
         {
@@ -111,21 +112,20 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
             {
                 acquired = await _writes.WaitAsync(TimeSpan.FromSeconds(2));
                 if (!acquired) throw new InvalidOperationException("Usage write queue is busy.");
-                await Complete(requestId, result);
-                return true;
+                return await Complete(requestId, result) ? UsageFinish.Saved : UsageFinish.AlreadyEnded;
             }
             // 结束记录写失败不应让已完成的请求报错，所以只记失败并有限重试；重试前先归还写入名额，避免退避等待期间挡住其他请求的写入。
             // 退避等待故意不接收请求的取消令牌：结束保存与请求取消无关，客户端断开后也要尽量写完。
             catch (Exception error) when (StorageError(error))
             {
-                if (attempt == 2) { Failure(requestId, "finish"); return false; }
+                if (attempt == 2) { Failure(requestId, "finish"); return UsageFinish.Failed; }
                 if (acquired) { _writes.Release(); acquired = false; }
                 await Task.Delay(TimeSpan.FromMilliseconds(100 * (attempt + 1)), CancellationToken.None);
             }
             // 只在本轮仍持有写入名额时归还；catch 里已提前归还的会把标记清掉，防止重复释放。
             finally { if (acquired) _writes.Release(); }
         }
-        return false;
+        return UsageFinish.Failed;
     }
 
     /// <summary>服务启动时把上次遗留、仍处于开始状态的记录统一标记为中断（以当前时间为结束时间）。</summary>
@@ -191,25 +191,32 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// <summary>记录一次后台维护（定时清理）失败：计入失败次数并写事件日志。</summary>
     public void MaintenanceFailure() => Failure(null, "maintenance");
 
-    /// <summary>在一个事务里读出记录、定下记账的那一家与单价快照、算金额，写入结束结果与各次尝试；要么都在，要么都不在，重试保存时不会留下重复的尝试。</summary>
-    private async Task Complete(string requestId, UsageEnd result)
+    /// <summary>
+    /// 在一个事务里读出记录、定下记账的那一家与单价快照、算金额，写入结束结果与各次尝试；要么都在，要么都不在，重试保存时不会留下重复的尝试。
+    /// 返回这次有没有写：记录早已结束（<see cref="UsageRequest.Complete"/> 拒绝）时为假。
+    /// </summary>
+    private async Task<bool> Complete(string requestId, UsageEnd result)
     {
         await using var scope = scopes.CreateAsyncScope();
         var requests = scope.Repository<UsageRequest>();
+        var written = false;
         await requests.WithLockWaitAsync(_writeWait, () => requests.ExecuteInTransactionAsync(async () =>
         {
+            written = false;
             var row = await requests.FirstOrDefaultAsync(item => item.RequestId == requestId) ?? throw new InvalidOperationException("Usage start record unavailable.");
             if (!row.IsStarted) return 0;
             var served = row.ServedBy(result);
             var (price, name) = served == row.UpstreamCandidateId ? (row.PriceJson, row.UpstreamName) : await Snapshot(scope, served, row.Model);
-            // 金额只由纯规则按单价快照计算；这里只负责在同一事务里读快照、写结果。
-            row.Complete(Now.UtcTicks, result, UsageMoneyRules.Calculate(row.Kind, result, price), served, price, name);
+            // 金额只由纯规则按单价快照计算；这里只负责在同一事务里读快照、写结果。实体拒绝（早已结束）就什么都不写。
+            if (!row.Complete(Now.UtcTicks, result, UsageMoneyRules.Calculate(row.Kind, result, price), served, price, name)) return 0;
+            written = true;
             var attempts = scope.Repository<UsageAttempt>();
             var names = await Names(scope, result.Attempts.Select(item => item.UpstreamCandidateId));
             await attempts.AddRangeAsync(result.Attempts.Select(item => UsageAttempt.From(row.Id,
                 item, item.UpstreamCandidateId is { } id ? names.GetValueOrDefault(id) : null)).ToList());
             return await requests.SaveChangesAsync();
         }));
+        return written;
     }
 
     /// <summary>删除一批（最多 <see cref="CleanupBatch"/> 行、最早的先删）早于截止点的记录，返回删除的用量记录行数。</summary>

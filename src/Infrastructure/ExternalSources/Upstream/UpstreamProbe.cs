@@ -126,8 +126,11 @@ internal sealed class UpstreamProbe : IUpstreamProbe
         catch (IOException) { used = options; return Result(CheckStatus.Failed, "上游响应中断，这个上游没有切换。"); }
         // Claude Code 检测前解析代理失败：读出代理原因，子进程没有启动。
         catch (UpstreamProxyUnavailableException error) { used = options; connection = CheckStatus.Failed; return Result(CheckStatus.Failed, error.Message); }
-        // Claude Code 检测未找到客户端或会话未完成时抛出此异常，转成可操作的提示。
-        catch (InvalidOperationException) { used = options; return Result(CheckStatus.Failed, "Claude Code 检测未完成，请确认本机已安装可用的原生客户端；这个上游没有切换。"); }
+        // 只有 Claude Code 检测没走完（找不到客户端、没发请求、会话没收尾）才归到 Claude Code，转成可操作的提示。
+        catch (ClaudeCodeProbeIncompleteException) { used = options; return Result(CheckStatus.Failed, "Claude Code 检测未完成，请确认本机已安装可用的原生客户端；这个上游没有切换。"); }
+        // 其余本地拒绝（地址规则、请求组装等）按它自己的原因读出，不归到 Claude Code；读句先去掉凭据再截断。
+        catch (InvalidOperationException error)
+        { used = options; return Result(CheckStatus.Failed, $"检测没有完成：{SafeText.Clip(error.Message, value => UpstreamResponses.Redact(value, snapshot.Credential!), QuoteLimit)}这个上游没有切换。"); }
         // 系统无法启动 claude.exe 进程（如文件损坏或被拦截）：单独提示，候选不激活。
         catch (System.ComponentModel.Win32Exception) { used = options; return Result(CheckStatus.Failed, "无法启动本机 Claude Code，这个上游没有切换。"); }
     }
@@ -286,8 +289,11 @@ internal sealed class UpstreamProbe : IUpstreamProbe
         return ExceptionChain.Find<UpstreamProxyUnavailableException>(error)?.Message ?? "连接或 TLS 校验失败，请检查地址、端口、证书及项目设置里的代理。";
     }
 
-    /// <summary>上游回 5xx 时的原因与下一步：可能是上游暂时故障，也可能是按地区屏蔽了当前网络出口；附上当前代理方式，指向「查代理出口」而不是「查地址」。</summary>
-    private string Unavailable() => $"上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。当前代理设置：{_proxy.Describe()}请检查代理出口后重试。";
+    /// <summary>
+    /// 上游回 5xx 时的原因与下一步：可能是上游暂时故障，也可能是按地区屏蔽了当前网络出口；指向「查代理出口」而不是「查地址」。
+    /// 本机的代理地址不读进页面（本机信息不带，GZ-S-002），只指向本机管理页的项目设置。
+    /// </summary>
+    private static string Unavailable() => "上游暂时不可用，或者拒绝了当前网络出口（例如按地区屏蔽）。请在本机管理页「项目设置」里检查代理和网络出口后重试。";
 
     /// <summary>获取模型失败时的结果：认证方式未确定，目录为空。</summary>
     private static ModelCatalog Failed(string message) => new(CatalogStatus.Failed, null, [], message);

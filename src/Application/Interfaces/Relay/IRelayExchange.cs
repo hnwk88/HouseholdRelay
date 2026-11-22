@@ -42,6 +42,9 @@ public interface IRelayExchange
     /// <summary>取一个请求头的值；没有时为空值。</summary>
     StringValues Header(string name);
 
-    /// <summary>按 Anthropic 错误格式写出中转失败；响应已开始或客户端已断开时直接中止连接。</summary>
-    Task Fail(RelayFailure error);
+    /// <summary>
+    /// 按 Anthropic 错误格式写出中转失败，在 <c>error</c> 之后带上这次的中转请求编号 <c>request_id</c>（家人报错时报这串，管理员在事件日志里按它查）；
+    /// 响应已开始或客户端已断开时直接中止连接。
+    /// </summary>
+    Task Fail(RelayFailure error, string requestId);
 }

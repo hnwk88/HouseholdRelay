@@ -5,6 +5,14 @@
 <p>起个名字，填地址，贴密钥，按「获取模型」。认证方式和检测方式由程序自己判断；测通过后按名称切换，在途请求不受影响。</p>
 <div asp-validation-summary="All" role="alert"></div>
 @if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+@if (Model.Check is { Ended: false } running)
+{
+    <section class="card" aria-labelledby="check-heading" id="check"><h2 id="check-heading">后台检测</h2>
+        <p id="check-status" class="status" role="status" aria-live="polite" data-check-id="@running.Id" data-candidate-id="@running.UpstreamCandidateId">@running.Message</p>
+        <form method="post" asp-page-handler="CancelCheck" id="check-cancel"><input type="hidden" name="checkId" value="@running.Id" /><button type="submit" class="secondary">取消检测</button></form>
+        <small>检测在后台进行，不用刷新页面；结论出来时这里读一次。</small>
+    </section>
+}
 <section class="card" aria-labelledby="active-heading"><h2 id="active-heading">当前使用的上游</h2>
     @if (Model.MovedText is not null)
     {
@@ -64,9 +72,23 @@
 }
 @if (Model.Saved.Count > 0)
 {
-    <section class="card" aria-labelledby="saved-heading"><h2 id="saved-heading">已保存的上游（@Model.Saved.Count 个）</h2>
+    <section class="card" aria-labelledby="saved-heading" id="saved"><h2 id="saved-heading">已保存的上游（@Model.Saved.Count 个）</h2>
         @foreach (var item in Model.Saved)
         {
+            if (item.Damaged)
+            {
+                <article class="saved-upstream" aria-labelledby="saved-@item.Id"><h3 id="saved-@item.Id">@item.Name</h3>
+                    <p>@UpstreamModel.ResultText(item)</p>
+                    @if (item.Deletable)
+                    {
+                        <form method="post" asp-page-handler="Delete"><input type="hidden" name="candidateId" value="@item.Id" />
+                            <label class="checkbox"><input type="checkbox" name="deleteConfirmed" value="true" required />确认删除「@item.Name」（删除后不能恢复）</label>
+                            <button type="submit" class="secondary">删除「@item.Name」</button>
+                        </form>
+                    }
+                </article>
+                continue;
+            }
             <article class="saved-upstream" aria-labelledby="saved-@item.Id"><h3 id="saved-@item.Id">@item.Name@(item.Id == Model.Active.UpstreamCandidateId ? "（当前使用中）" : "")</h3>
                 <dl><dt>地址</dt><dd><code>@item.Options.BaseUrl</code></dd>
                     <dt>接入方式</dt><dd>@UpstreamModel.AccessText(item.Options)</dd>
@@ -106,8 +128,8 @@
         <p>把勾选的上游连同密钥加密成一个文件，拷到另一台电脑的中转里导入。导出密码当场设、不保存，导入时输入同一个密码；忘了就解不开。登录得到的官方账户导出后就搬走了：本机不再用它转发、不再续期，账户留在列表里，不需要时自己删除。官方账户的导出文件只在搬家那一刻有用，本机续期一次以后旧文件就可能失效；API 密钥的导出可以长期留作备份。</p>
         @if (Model.ExportWarning is not null) { <p class="status">@Model.ExportWarning</p> }
         <form method="post" asp-page-handler="Export" class="settings" aria-labelledby="export-heading">
-            <fieldset><legend>要导出的上游（默认全部）</legend>
-                @foreach (var item in Model.Saved)
+            <fieldset><legend>要导出的上游（默认全部，配置已损坏的不在其中）</legend>
+                @foreach (var item in Model.Saved.Where(saved => !saved.Damaged))
                 {
                     <label class="checkbox"><input type="checkbox" name="exportIds" value="@item.Id" checked />「@item.Name」，@UpstreamModel.AccessText(item.Options)@(item.ExportedAt is not null ? "，已经导出搬走过" : item.Options.OfficialLogin ? "，导出后本机不再用它" : "")</label>
                 }

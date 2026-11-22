@@ -9,7 +9,9 @@ using Core.Identity;
 using Core.Relay;
 using HouseholdRelay.Commands;
 using HouseholdRelay.Relay;
+using Application.Logging;
 using Infrastructure.DependencyInjection;
+using Infrastructure.Logging;
 using Infrastructure.Persistence;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -42,6 +44,8 @@ public static class CompositionRoot
     /// <summary>两种模式共用的中转宿主：准入控制与 HTTP 绑定；管理页经 <see cref="IHttpsListener"/> 读对外 HTTPS 是否已启动。</summary>
     private static IServiceCollection AddRelayHost(this IServiceCollection services)
     {
+        // 中转宿主共用所在容器的日志工厂；正式服务里基础设施已挂上文件日志，独立中转没有数据目录，这里只保证工厂在（重复登记不叠加）。
+        services.AddLogging();
         services.AddSingleton<Admission>();
         services.AddSingleton<RelayServer>();
         services.AddSingleton<IHttpsListener>(provider => provider.GetRequiredService<RelayServer>());
@@ -58,8 +62,19 @@ public static class CompositionRoot
         services.TryAddSingleton<IRelayEventLog, NullRelayEventLog>();
         services.AddStandaloneUpstreamConnections();
         services.AddSingleton<IRelayForwarder>(provider => RelayForwarder.Standalone(provider.GetRequiredService<RelayConfiguration>(), provider.GetRequiredService<ClientRegistry>(),
-            provider.GetRequiredService<Admission>(), provider.GetRequiredService<IUpstreamPool>(), provider.GetRequiredService<IRelayEventLog>(), provider.GetRequiredService<IUpstreamResponses>()));
+            provider.GetRequiredService<Admission>(), provider.GetRequiredService<IUpstreamPool>(), provider.GetRequiredService<IRelayEventLog>(), provider.GetRequiredService<IUpstreamResponses>(),
+            provider.GetRequiredService<ILogger<RelayForwarder>>()));
         return services.AddRelayHost();
+    }
+
+    /// <summary>正式服务的事件输出：每个中转请求一行，写服务窗口与数据目录 logs\events.log（限大小轮换，中文不转义，写不出去不抛）。</summary>
+    public static IServiceCollection AddServiceEventLog(this IServiceCollection services) => services.AddSingleton<IRelayEventLog, ServiceRelayEventLog>();
+
+    /// <summary>命令行兜底的日志：在数据目录 <paramref name="home"/> 的 logs\errors.log 记一行异常类型链与阶段；记日志本身写不出去也不抛出。</summary>
+    public static void RecordUnexpected(string home, string stage, Exception error)
+    {
+        using var loggers = LoggerFactory.Create(logging => logging.AddRelayFileLog(home));
+        RelayLog.Unexpected(loggers.CreateLogger("HouseholdRelay.Program"), error, stage);
     }
 
     /// <summary>命令行子命令（init、account、clients、client）使用的容器；构建时校验全部登记可解析，并校验单例不持有作用域服务。</summary>

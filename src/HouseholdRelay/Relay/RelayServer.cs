@@ -11,12 +11,13 @@ public sealed class RelayServer : IHttpsListener
 {
     private readonly RelayConfiguration _config;
     private readonly IRelayForwarder _forwarder;
+    private readonly ILoggerFactory _loggers;
 
-    /// <summary>两个依赖都必填，构造时当场判空。</summary>
-    public RelayServer(RelayConfiguration config, IRelayForwarder forwarder)
+    /// <summary>三个依赖都必填，构造时当场判空。<paramref name="loggers"/> 是所在容器的日志工厂，对外宿主共用它：同一份文件日志、同一个最低级别。</summary>
+    public RelayServer(RelayConfiguration config, IRelayForwarder forwarder, ILoggerFactory loggers)
     {
-        ArgumentNullException.ThrowIfNull(config); ArgumentNullException.ThrowIfNull(forwarder);
-        _config = config; _forwarder = forwarder;
+        ArgumentNullException.ThrowIfNull(config); ArgumentNullException.ThrowIfNull(forwarder); ArgumentNullException.ThrowIfNull(loggers);
+        _config = config; _forwarder = forwarder; _loggers = loggers;
     }
 
     /// <summary>对外 HTTPS 中转宿主是否已在本进程启动；只由 serve 命令在启动成功后置为真，管理页据此提示新证书是否需要重启。</summary>
@@ -28,7 +29,9 @@ public sealed class RelayServer : IHttpsListener
         if (certificate is null && testPort is null) throw new InvalidOperationException("正式服务必须启用 HTTPS。");
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [], ContentRootPath = AppContext.BaseDirectory });
         builder.Host.UseDefaultServiceProvider(options => { options.ValidateOnBuild = true; options.ValidateScopes = true; });
-        builder.Logging.ClearProviders();
+        // 对外宿主的日志交给所在容器的日志工厂：Kestrel 的警告与错误进同一份 logs\errors.log（只记类型），不另起一套、也不清空。
+        // 工厂是外部实例，对外宿主释放时不会释放它。
+        builder.Services.AddSingleton(_loggers);
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.AddServerHeader = false; options.Limits.MaxConcurrentConnections = 64;

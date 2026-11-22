@@ -2,7 +2,6 @@
 using Application.Interfaces.ClaudeCode;
 using Application.Interfaces.Configuration;
 using Application.Interfaces.Usage;
-using Application.Interfaces.Relay;
 using HouseholdRelay.Commands;
 using HouseholdRelay.Composition;
 using HouseholdRelay.Management;
@@ -17,6 +16,7 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
+        string? home = null;
         try
         {
             if (args.Length == 0) args = ["serve"];
@@ -31,7 +31,7 @@ public static class Program
                 if (text is null) return fallback;
                 return int.TryParse(text, out var port) ? port : throw new InvalidOperationException("端口必须是整数。");
             }
-            var home = Path.GetFullPath(Option("--home") ?? AppContext.BaseDirectory);
+            home = Path.GetFullPath(Option("--home") ?? AppContext.BaseDirectory);
             switch (args[0])
             {
                 case "init":
@@ -53,7 +53,7 @@ public static class Program
                 {
                     var adminPort = Port("--admin-port", 8788);
                     ServeCommand.CheckPort(adminPort);
-                    await using var admin = ManagementWeb.Build(home, adminPort, services => services.AddSingleton<IRelayEventLog, ConsoleRelayEventLog>());
+                    await using var admin = ManagementWeb.Build(home, adminPort, services => services.AddServiceEventLog());
                     await admin.Services.GetRequiredService<ServeCommand>().Run(admin, adminPort); break;
                 }
                 case "clients":
@@ -81,9 +81,19 @@ public static class Program
         // 文件、Windows 凭据、端口和加解密失败的原始消息可能带路径或密钥信息，这里只给归类后的排查方向。
         catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Console.Error.WriteLine("文件、Windows 凭据或端口操作失败。请检查路径、当前 Windows 用户及端口占用。"); return ExitCodes.Environment; }
-        // 兜底：未预料的异常不打印消息和堆栈，防止泄露令牌或配置内容，只返回失败码。
-        catch (Exception) { Console.Error.WriteLine("操作失败。请检查配置文件格式及 .NET 10 运行环境。"); return ExitCodes.Unexpected; }
+        // 兜底：未预料的异常不打印消息和堆栈，防止泄露令牌或配置内容，只返回失败码；类型链与子命令名记进数据目录 logs\errors.log，事后查得到是哪一类故障。
+        catch (Exception error) { RecordUnexpected(home, args, error); Console.Error.WriteLine("操作失败。请检查配置文件格式及 .NET 10 运行环境。"); return ExitCodes.Unexpected; }
     }
+
+    /// <summary>已知的子命令名；兜底日志的阶段只写这几个，其余写 command，不把操作者敲的任意文字落盘。</summary>
+    private static readonly string[] _commands = ["init", "account", "serve", "clients", "client"];
+
+    /// <summary>
+    /// 命令行兜底的日志：在数据目录（还没定下来时用程序所在目录）的 logs\errors.log 记一行异常类型链与阶段（command:子命令）。
+    /// 记日志本身失败也不影响退出码与控制台读句。
+    /// </summary>
+    internal static void RecordUnexpected(string? home, string[] args, Exception error) =>
+        CompositionRoot.RecordUnexpected(home ?? AppContext.BaseDirectory, args.Length > 0 && _commands.Contains(args[0]) ? "command:" + args[0] : "command", error);
     /// <summary>未知子命令时打印用法说明；由 <see cref="Main"/> 的默认分支调用，随后进程返回 1。</summary>
     private static void Help() => Console.WriteLine("""
         Household Relay — C# 单账号中转

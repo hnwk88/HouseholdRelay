@@ -104,7 +104,7 @@ static class DbTimeBenchmark
         /// <summary>计时写发送标记。</summary>
         public Task Dispatch(string requestId, long version, long? upstreamCandidateId, string? model) => Timed(() => inner.Dispatch(requestId, version, upstreamCandidateId, model));
         /// <summary>计时写结束结果，完成时记一次。</summary>
-        public async Task<bool> Finish(string requestId, UsageEnd result)
+        public async Task<UsageFinish> Finish(string requestId, UsageEnd result)
         {
             try { return await Timed(() => inner.Finish(requestId, result)); }
             // 无论写成没写成都记一次完成，基准循环靠它判断这一请求的库操作已结束。

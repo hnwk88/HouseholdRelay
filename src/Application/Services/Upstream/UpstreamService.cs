@@ -1,10 +1,12 @@
-﻿using System.Security.Cryptography;
+﻿using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Application.Contracts.Upstream;
 using Application.Contracts.Uploads;
 using Application.DependencyInjection;
 using Application.Interfaces.Configuration;
+using Application.Logging;
 using Application.Interfaces.Security;
 using Application.Interfaces.Upstream;
 using Core.Configuration;
@@ -12,6 +14,7 @@ using Core.Upstream;
 using Core.Usage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Repositories;
 
 namespace Application.Services.Upstream;
@@ -20,8 +23,12 @@ namespace Application.Services.Upstream;
 /// 网页和 CLI 共用的上游保存、获取模型、诊断、改名和原子切换服务。活动上游（upstream）与已保存上游（upstream_candidates）经通用仓储存取，每次操作一个作用域；
 /// 检测状态流转、能不能删、能不能切换都由实体 <see cref="UpstreamCandidate"/>、<see cref="ActiveUpstream"/> 的方法判断，这里只做场景编排。
 /// </summary>
-public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts, IPasswordCipher cipher, ISiteIdentityService siteIdentity) : IUpstreamService
+public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtector protector, IUpstreamProbe probe, IOfficialAccountLogin officialAccounts, IPasswordCipher cipher, ISiteIdentityService siteIdentity,
+    ILogger<UpstreamService> logger) : IUpstreamService
 {
+    /// <summary>已经记过「配置损坏」的已保存上游主键：每家每个进程只记一行，转发每次读备用上游都会碰到它，不能每次都写。</summary>
+    private readonly ConcurrentDictionary<long, bool> _damagedLogged = new();
+
     /// <summary>
     /// 读取活动上游组成快照（含关联的已保存上游主键与名称）：官方登录上游读它配置目录里的最新令牌，其余解密库中凭据；
     /// 活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>，未配置凭据（或登录凭据已不在）时快照的凭据为 null。
@@ -52,8 +59,8 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         {
             UpstreamOptions options; UpstreamReport? report;
             try { options = Parse<UpstreamOptions>(row.OptionsJson); report = Report(row.ReportJson); }
-            // 一家的配置坏了只让它不参与切换，在用的那家和其余备用照常；它在上游页上照样读得出来，由管理员重新测试或删除。
-            catch (Exception error) when (error is JsonException or InvalidOperationException) { continue; }
+            // 一家的配置坏了只让它不参与切换，在用的那家和其余备用照常；跳过时记一行日志（每家只记一次），上游页上把它读成「配置已损坏」，由管理员删除后重新添加。
+            catch (Exception error) when (error is JsonException or InvalidOperationException) { LogDamaged(row.Id, error, "standby"); continue; }
             var (credential, accountUuid, blocked, reason) = ReadCredential(options, row.Credential, false, row.Uid);
             snapshots.Add(new(active.Version, options, credential, report, row.Id, Named(row.Name), blockedByIdentity: blocked, accountUuid: accountUuid, blockedReason: reason));
         }
@@ -186,7 +193,12 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
                 await scope.Repository<UsagePriceRecord>().CountAsync(item => item.UpstreamCandidateId == id));
             return (references, candidate);
         });
-        if (Parse<UpstreamOptions>(removed.OptionsJson).OfficialLogin) officialAccounts.Remove(removed.Uid);
+        // 配置读不懂时分不出是不是官方登录：按对外编号删一次账户目录（没有这个目录时什么都不做），不留没有上游引用的账户。
+        bool official;
+        try { official = Parse<UpstreamOptions>(removed.OptionsJson).OfficialLogin; }
+        // 配置读不懂：当它可能是官方登录，删一次账户目录；行已经软删除，这里不再抛出。
+        catch (Exception error) when (error is JsonException or InvalidOperationException) { official = true; }
+        if (official) officialAccounts.Remove(removed.Uid);
         return references;
     }
 
@@ -197,25 +209,36 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// </summary>
     public async Task<ModelCatalog> DiscoverModels(long id, CancellationToken cancellation)
     {
-        var candidate = await ReadCandidate(id);
+        var candidate = await ReadUsable(id);
         using var operation = candidate.Options.OfficialAccount ? siteIdentity.Enter() : null;
         var (token, accountUuid) = await LoginToken(candidate, cancellation);
         var kept = candidate.Report is { } previous && (await ActiveCandidateId()) == id ? previous : null;
         var secret = await BeginTest(id);
-        ModelCatalog catalog;
-        try { catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation); }
-        // 在用的那个获取途中失败或被取消：写回原样，不让它停在「检测中」、丢掉测试结论。
-        catch when (kept is not null) { await FinishTest(id, candidate.State, Serialize(kept), Serialize(candidate.Options)); throw; }
-        if (kept is not null)
+        // 标记检测中之后的每一步都在收尾块里：出错或被取消时，在用的那一家写回原样，其余的写成「检测未完成」，不会停在检测中。
+        try
         {
-            await FinishTest(id, candidate.State, Serialize(catalog.Status == CatalogStatus.Passed ? kept with { Models = catalog.Models } : kept), Serialize(candidate.Options));
+            ModelCatalog catalog;
+            try { catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation); }
+            // 在用的那个获取途中失败或被取消：写回原样，不让它停在「检测中」、丢掉测试结论。
+            catch when (kept is not null) { await FinishTest(id, candidate.State, Serialize(kept), Serialize(candidate.Options)); throw; }
+            // 探测把管理员取消读成一份「已取消」目录照旧返回；不是在用的那一家这时不算拿到结论，写成「检测未完成」。在用的那一家照下面写回原样。
+            if (kept is null && cancellation.IsCancellationRequested) { await Interrupt(id, UpstreamReport.CancelledReason); return catalog; }
+            if (kept is not null)
+            {
+                await FinishTest(id, candidate.State, Serialize(catalog.Status == CatalogStatus.Passed ? kept with { Models = catalog.Models } : kept), Serialize(candidate.Options));
+                return catalog;
+            }
+            var options = catalog.Authentication is { } accepted && !candidate.Options.AuthenticationManual ? candidate.Options with { Authentication = accepted } : candidate.Options;
+            var report = new UpstreamReport(DateTimeOffset.UtcNow, catalog.Status == CatalogStatus.Failed ? CheckStatus.Failed : CheckStatus.Passed,
+                UpstreamDetection.AuthenticationCheck(catalog.Status), UpstreamDetection.DiscoveryCheck(catalog.Status), CheckStatus.Unverified, catalog.Models, null, catalog.Message);
+            await ResetToUntested(id, Serialize(options), Serialize(report));
             return catalog;
         }
-        var options = catalog.Authentication is { } accepted && !candidate.Options.AuthenticationManual ? candidate.Options with { Authentication = accepted } : candidate.Options;
-        var report = new UpstreamReport(DateTimeOffset.UtcNow, catalog.Status == CatalogStatus.Failed ? CheckStatus.Failed : CheckStatus.Passed,
-            UpstreamDetection.AuthenticationCheck(catalog.Status), UpstreamDetection.DiscoveryCheck(catalog.Status), CheckStatus.Unverified, catalog.Models, null, catalog.Message);
-        await ResetToUntested(id, Serialize(options), Serialize(report));
-        return catalog;
+        catch (Exception error) when (kept is null)
+        {
+            // 不是在用的那一家：任何异常（含取消）都先写成「检测未完成」再原样抛出，读句只说原因类别，细节由调用方记日志。
+            await Interrupt(id, UnfinishedReason(error, cancellation)); throw;
+        }
     }
 
     /// <summary>选定要测试的模型：名称按 <see cref="UpstreamOptions.Validated"/> 校验；与原值相同时不改动，不同时保留模型目录、清除旧的通过状态，须重新测试才能切换。</summary>
@@ -223,7 +246,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     {
         model = model.Trim();
         if (model.Length == 0) throw new InvalidOperationException("请先选择或填写要测试的模型。");
-        var candidate = await ReadCandidate(id);
+        var candidate = await ReadUsable(id);
         if (candidate.Options.Model == model) return;
         var options = (candidate.Options with { Model = model }).Validated();
         var report = candidate.Report is { } previous ? previous with { Call = CheckStatus.Unverified, VerifiedModel = null, Message = $"模型已改为 {model}，尚未测试。" } : null;
@@ -238,15 +261,40 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     public async Task<UpstreamReport> TestCandidate(long id, bool confirmed, CancellationToken cancellation)
     {
         if (!confirmed) throw new InvalidOperationException("请先确认最小模型测试可能消耗少量上游额度。");
-        var candidate = await ReadCandidate(id);
+        var candidate = await ReadUsable(id);
         using var operation = candidate.Options.OfficialAccount ? siteIdentity.Enter() : null;
         if (candidate.Options.Model.Length == 0) throw new InvalidOperationException("请先选择或填写要测试的模型，再测试。");
         var (token, accountUuid) = await LoginToken(candidate, cancellation);
         var secret = await BeginTest(id);
-        // 网络等待不占用写事务，也不接触当前服务的暂停和冷却状态。
-        var result = await probe.Run(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation);
-        await FinishTest(id, result.Report.CanActivate ? CandidateState.Passed : CandidateState.Failed, Serialize(result.Report), Serialize(result.Used));
-        return result.Report;
+        try
+        {
+            // 网络等待不占用写事务，也不接触当前服务的暂停和冷却状态。
+            var result = await probe.Run(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation);
+            // 探测自己把取消读成一份「已取消」报告照旧返回给调用方；但管理员取消的不算结论，这一家写成「检测未完成」，不记成未通过。超时仍按未通过记。
+            if (cancellation.IsCancellationRequested) { await Interrupt(id, UpstreamReport.CancelledReason); return result.Report; }
+            await FinishTest(id, result.Report.CanActivate ? CandidateState.Passed : CandidateState.Failed, Serialize(result.Report), Serialize(result.Used));
+            return result.Report;
+        }
+        catch (Exception error)
+        {
+            // 标记检测中之后出错或被取消：写成「检测未完成」再原样抛出，不停在检测中；已经写回结论的不覆盖。
+            await Interrupt(id, UnfinishedReason(error, cancellation)); throw;
+        }
+    }
+
+    /// <summary>
+    /// 服务启动时把库里残留的「检测中」一律写成「检测未完成」：检测任务只在内存里，进程重启后不会有谁再把它们写完。
+    /// 返回改了几家。只由正式服务的后台检测在启动时调用一次。
+    /// </summary>
+    public async Task<int> RecoverInterruptedChecks()
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var candidates = scope.Repository<UpstreamCandidate>();
+        var rows = await candidates.FindAsync(item => item.State == CandidateState.Testing);
+        var now = DateTimeOffset.UtcNow; var changed = 0;
+        foreach (var row in rows) if (row.Interrupt(now, UpstreamReport.RestartReason)) changed++;
+        if (changed > 0) await Commit(candidates, Changed);
+        return changed;
     }
 
     /// <summary>
@@ -260,7 +308,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// <summary>两个切换入口的汇合处：<paramref name="expectedVersion"/> 为空时由 <see cref="ActiveUpstream.Activate"/> 按候选保存时的版本核对。</summary>
     private async Task Activate(long id, long? expectedVersion)
     {
-        using var operation = (await ReadCandidate(id)).Options.OfficialAccount ? siteIdentity.Enter() : null;
+        using var operation = (await ReadUsable(id)).Options.OfficialAccount ? siteIdentity.Enter() : null;
         await using var scope = scopes.CreateAsyncScope();
         var active = scope.Repository<ActiveUpstream>();
         await active.ExecuteInTransactionAsync(async () =>
@@ -341,6 +389,12 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
                 }
                 // 这一家被拒（名称、地址不合规则，没装 Claude Code，代理取不到等）：记下原因，其余照导。
                 catch (InvalidOperationException error) { outcomes.Add(new(name, null, error.Message)); }
+                // 这一家遇到没有预料到的故障（数据库、文件、进程等）：记进它自己的结果并写一行日志，其余照导，整批结束后统一读出；取消照常向外抛。
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    RelayLog.Unexpected(logger, error, "upstream-import");
+                    outcomes.Add(new(name, null, "导入这一家时出现意外错误，错误类型已记进数据目录 logs 文件夹里的错误日志。请稍后在本机重新添加它。"));
+                }
             }
             return outcomes;
         }
@@ -418,6 +472,30 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         candidate.FinishTest(state, reportJson, optionsJson);
         await Commit(candidates, Changed);
     }
+
+    /// <summary>
+    /// 检测没有走到结论时写成「检测未完成」：那一家这期间被停用了，或已经写回结论，就什么都不改。收尾块里调用，自己不再抛出：
+    /// 库这时也写不进去的话，这一家停在检测中，过了检测窗口读作「检测未完成」，服务下次启动时再写成终态。
+    /// </summary>
+    private async Task Interrupt(long id, string reason)
+    {
+        try
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            var candidates = scope.Repository<UpstreamCandidate>();
+            if (await candidates.GetByIdAsync(id) is { } candidate && candidate.Interrupt(DateTimeOffset.UtcNow, reason)) await candidates.SaveChangesAsync();
+        }
+        // 收尾写不进去不能盖住原来的异常：原异常由调用方照常抛出，这一家由检测窗口与启动恢复兜住。
+        catch (Exception error) when (error is not OperationCanceledException) { RelayLog.Unexpected(logger, error, "upstream-check:interrupt", upstreamCandidateId: id); }
+    }
+
+    /// <summary>「检测未完成」的原因：管理员取消读取消；业务拒绝读它自己的中文读句；其余读「意外错误，类型已记进日志」。</summary>
+    private static string UnfinishedReason(Exception error, CancellationToken cancellation) => error switch
+    {
+        OperationCanceledException when cancellation.IsCancellationRequested => UpstreamReport.CancelledReason,
+        InvalidOperationException => error.Message.TrimEnd('。') + "。",
+        _ => UpstreamReport.FaultReason,
+    };
 
     /// <summary>写回获取模型或改选模型后的配置与报告（报告可为空），并把状态置为未测试；不存在时提示重新加载。</summary>
     private async Task ResetToUntested(long id, string optionsJson, string? reportJson)
@@ -497,10 +575,35 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// <summary>解析报告 JSON；没有时为 null。</summary>
     private static UpstreamReport? Report(string? json) => json is null ? null : Parse<UpstreamReport>(json);
 
-    /// <summary>把库中的已保存上游行解析成可展示的视图，带上此刻能不能删。</summary>
-    private static UpstreamCandidateView ToView(UpstreamCandidate row, long nowSeconds, long? activeCandidateId) => new(row.Id, row.Uid, Named(row.Name), row.ExpectedVersion,
-        Parse<UpstreamOptions>(row.OptionsJson), row.State, Report(row.ReportJson), row.Deletable(nowSeconds, activeCandidateId),
-        row.ExportedAt is { } at ? DateTimeOffset.FromUnixTimeMilliseconds(at) : null);
+    /// <summary>
+    /// 把库中的已保存上游行解析成可展示的视图，带上此刻能不能删与检测阶段。配置或报告读不懂时不抛出：视图标成配置已损坏、配置用占位，
+    /// 记一行日志（每家只记一次），上游页照常打开、把它读成「配置已损坏」，由管理员删除后重新添加。
+    /// </summary>
+    private UpstreamCandidateView ToView(UpstreamCandidate row, long nowSeconds, long? activeCandidateId)
+    {
+        UpstreamOptions options; UpstreamReport? report; var damaged = false;
+        try { options = Parse<UpstreamOptions>(row.OptionsJson); report = Report(row.ReportJson); }
+        // 一家读不懂不拖垮整页：只把这一家标成损坏，其余照常列出。
+        catch (Exception error) when (error is JsonException or InvalidOperationException) { LogDamaged(row.Id, error, "list"); options = new(); report = null; damaged = true; }
+        return new(row.Id, row.Uid, Named(row.Name), row.ExpectedVersion, options, row.State, report, row.Deletable(nowSeconds, activeCandidateId),
+            row.ExportedAt is { } at ? DateTimeOffset.FromUnixTimeMilliseconds(at) : null, row.Phase(nowSeconds), damaged);
+    }
+
+    /// <summary>配置损坏的那一家只记一行日志：类型链、阶段与主键，每家每个进程一次。</summary>
+    private void LogDamaged(long id, Exception error, string stage)
+    {
+        if (_damagedLogged.TryAdd(id, true)) RelayLog.DamagedUpstream(logger, error, "upstream-config:" + stage, id);
+    }
+
+    /// <summary>按主键读出要拿来获取模型、测试、切换或导出的那一家；配置已损坏时抛出 <see cref="InvalidOperationException"/> 读出下一步，不拿占位配置去做事。</summary>
+    private async Task<UpstreamCandidateView> ReadUsable(long id)
+    {
+        var candidate = await ReadCandidate(id);
+        return candidate.Damaged ? throw DamagedRefusal(candidate.Name) : candidate;
+    }
+
+    /// <summary>「配置已损坏」的拒绝读句。</summary>
+    private static InvalidOperationException DamagedRefusal(string name) => new($"「{name}」的配置已损坏，不能获取模型、测试、切换或导出。请删除它，再重新添加。");
 
     /// <summary>名称只做显示：库里为空串（旧版迁移时地址解析不出主机名，没写占位文字）时读「未命名上游」，管理员改名即补上；为 null（活动上游不是从已保存上游来的）时原样。</summary>
     [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(name))]

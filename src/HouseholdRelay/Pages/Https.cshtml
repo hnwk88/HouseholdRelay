@@ -9,22 +9,32 @@
     @if (Model.Info is { } info)
     {
         <p class="status">@(info.ValidUntil <= DateTimeOffset.UtcNow ? "证书已过期，请更新" : info.Mode == "private" ? "私有 CA · 每台客户端需安装一次信任" : "已导入通过系统信任检查的证书")</p>
+        @if (Model.ExpiryWarning is not null) { <p class="status">@Model.ExpiryWarning</p> }
         <p>域名：@info.Host；有效期至 @info.ValidUntil.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</p>
+        @if (Model.LegacyAuthorityText is not null) { <p>@Model.LegacyAuthorityText</p> }
         @if (info.CheckedAt != DateTimeOffset.MinValue) { <p>证书检查：@info.CheckedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</p> }
     }
     else { <p class="status">尚未配置 HTTPS</p> }
     <p>@(Model.Listening ? "本进程的 HTTPS 监听已启动；如刚更换证书或端口，仍须重启。" : "本进程尚未启动 HTTPS 监听。") 保存地址不会配置 DNS、防火墙或端口映射，请从实际客户端验证。</p>
     @if (Model.AuthorityFingerprint is not null)
     { <p>CA SHA-256：<code>@Model.AuthorityFingerprint</code></p><a asp-page="/Connection">下载公共信任包及安装说明</a> }
+    @if (Model.HasPrevious)
+    {
+        <form method="post" asp-page-handler="Restore"><input type="hidden" asp-for="Version" id="restore-version" />
+            <button type="submit" class="secondary">退回上一份证书（地址与端口一起退回，需重启服务）</button>
+        </form>
+    }
 </section>
 <form method="post" asp-page-handler="Private" class="card settings">
     <h2>私人设备：创建私有 CA</h2>
     <input type="hidden" asp-for="Version" id="private-version" />
     <label for="private-url">私人 HTTPS 根地址</label><input name="PublicUrl" id="private-url" value="@Model.PublicUrl" type="url" required maxlength="2048" placeholder="https://192.168.1.20:8787" />
     <label for="private-port">私人 HTTPS 本机监听端口</label><input name="ListenPort" id="private-port" value="@Model.ListenPort" type="number" required min="1024" max="65535" />
-    <small>本机试用可填 https://localhost:8787；其他电脑请使用主机的局域网地址或可解析的名称。CA 私钥只在签发期间存在于内存，服务器私钥加密保存。</small>
+    <small>本机试用可填 https://localhost:8787；其他电脑请使用主机的局域网地址或可解析的名称。CA 私钥与服务器私钥都由 DPAPI 加密保存在本机；换地址或续期只重签服务器证书，家人不用重装信任。</small>
+    @if (Model.CanReissue)
+    { <button type="submit" asp-page-handler="Reissue">用现有私有 CA 重签服务器证书（换地址、续期，家人不用重装信任）</button> }
     <label class="checkbox"><input asp-for="ReplaceExisting" /> 我确认更换已有证书，并为每台客户端重新安装新 CA 信任</label>
-    <button type="submit">创建私有 CA 与服务器证书</button>
+    <button type="submit" class="@(Model.CanReissue ? "secondary" : null)">创建私有 CA 与服务器证书</button>
 </form>
 <form method="post" enctype="multipart/form-data" class="card settings">
     <h2>已有证书：导入 PFX</h2>
@@ -35,6 +45,8 @@
     <small>入口端口可以与本机监听端口不同。管理网页继续只绑定本机回环地址。</small>
     <label asp-for="CertificateFile">PFX 证书文件（含私钥及中间证书链）</label><input asp-for="CertificateFile" type="file" accept=".pfx,.p12" required />
     <label asp-for="Password">PFX 密码（无密码可留空）</label><input asp-for="Password" type="password" autocomplete="new-password" maxlength="1024" />
-    <small>私钥加密保存在本机；密码不保存、不回填。不自动安装根证书。</small>
+    <small>私钥加密保存在本机；密码不保存、不回填。不自动安装根证书。导入前的证书会留一份，可以退回。</small>
+    @if (Model.AuthorityFingerprint is not null)
+    { <label class="checkbox"><input asp-for="ReplacePrivateConfirmed" /> 我确认用导入的证书替换现在的私有 CA（装了私有 CA 信任的电脑改用新证书）</label> }
     <button type="submit">验证并保存证书</button>
 </form>

@@ -1,0 +1,31 @@
+﻿{
+  "解法": "逐项核对",
+  "rule": "check_no_clear_logging_providers",
+  "诊断标识": "clear-logging-providers",
+  "在哪": [
+    {
+      "正则": "^src/.*\\.cs$"
+    }
+  ],
+  "怎么看": "正则",
+  "视图": "去注释",
+  "严重度": "error",
+  "不许有": [
+    {
+      "找": "\\.ClearProviders\\s*\\(",
+      "有了说": "清空了日志提供程序（GZ-T-117）：宿主里未预料的异常从此无处可查，事后连是哪一类故障都对不上。",
+      "建议": "不清空；文件日志经 RelayLogFiles.AddRelayFileLog 挂上（只写类型、阶段、编号），不想让框架消息进服务窗口就按类别、按提供程序过滤。确属一次性诊断宿主的，用 rule exception-add 写明理由。"
+    },
+    {
+      "找": "RemoveAll\\s*<\\s*(Microsoft\\.Extensions\\.Logging\\.)?ILoggerProvider\\s*>",
+      "有了说": "移除了全部日志提供程序登记，等于清空日志（GZ-T-117）。",
+      "建议": "不移除；要收紧去向用过滤规则。"
+    }
+  ],
+  "例外": [
+    {
+      "路径": "src/Infrastructure/ExternalSources/ClaudeCode/ClaudeCodeProbe.cs",
+      "理由": "Claude Code 检测用的一次性本机回环宿主：只活一次检测，只接受一次性本地令牌；开着默认提供程序会把它的监听地址等启动信息打到服务窗口，改变命令行输出。它的异常由 UpstreamProbe 读成检测结论，宿主外的兜底照常记日志。"
+    }
+  ]
+}

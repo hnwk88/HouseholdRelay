@@ -35,8 +35,8 @@ public sealed class ActiveUpstream : BaseEntity
     /// <summary>它来自的已保存上游主键；新实例或旧版迁移没关联时为空。</summary>
     public long? UpstreamCandidateId { get; set; }
 
-    /// <summary>自动切换开关：在用的那一家失败时是否按顺序换到其他测试通过的上游。</summary>
-    public bool Failover { get; set; } = true;
+    /// <summary>自动切换开关：在用的那一家失败时是否按顺序换到其他测试通过的上游。新实例默认关，由管理员打开；库里存的值原样读出。</summary>
+    public bool Failover { get; set; }
 
     /// <summary>页面或命令看到的版本还是不是此刻的活动版本；不是就抛出 <paramref name="message"/>。</summary>
     /// <param name="expectedVersion">调用方看到的版本。</param>

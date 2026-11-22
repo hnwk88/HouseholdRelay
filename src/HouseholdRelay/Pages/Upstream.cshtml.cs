@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Security.Cryptography;
 using Application.Contracts.Uploads;
+using Application.Contracts.Upstream;
 using Application.Interfaces.ClaudeCode;
 using Application.Interfaces.Identity;
 using Application.Interfaces.Upstream;
@@ -10,8 +11,11 @@ using Core.Upstream;
 namespace HouseholdRelay.Pages;
 
 /// <summary>上游接入页：起名字、填地址、贴密钥、获取模型、按写明费用的按钮测试，再按名称切换；认证方式与检测方式由程序探测。</summary>
-public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upstreamPool, IClaudeCodeIdentitySource identities, IClaudeCodeUpdater updater, IIdentityService people) : PageModel
+public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks checks, IUpstreamPool upstreamPool, IClaudeCodeIdentitySource identities, IClaudeCodeUpdater updater, IIdentityService people) : PageModel
 {
+    /// <summary>要在页面上读出的那次后台检测：刚建的、地址里点名的，或正在设置的那一家正在进行的；没有时为空。进行中时页面放状态区和「取消检测」，结束了读出结论。</summary>
+    public UpstreamCheck? Check { get; private set; }
+
     /// <summary>「API 供应商」表单。</summary>
     [BindProperty] public UpstreamInput Api { get; set; } = new();
     /// <summary>「官方账户」里贴账户访问令牌的表单；地址默认官方接口。</summary>
@@ -53,8 +57,24 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     /// <summary>刚导出的文件名。</summary>
     public string ExportFileName { get; private set; } = "";
 
-    /// <summary>打开上游页（需已登录）：<paramref name="candidateId"/> 指定时把它作为正在设置的上游，否则取最近一个还没测通过的；只读。</summary>
-    public Task OnGetAsync(long? candidateId) => Load(candidateId);
+    /// <summary>打开上游页（需已登录）：<paramref name="candidateId"/> 指定时把它作为正在设置的上游，否则取最近一个还没测通过的；<paramref name="checkId"/> 指定时读出那次后台检测的状态或结论；只读。</summary>
+    public Task OnGetAsync(long? candidateId, long? checkId) => Load(candidateId, checkId);
+
+    /// <summary>查一次后台检测的状态（需已登录）：页面脚本每秒查一次，结束时把结论放进状态区读一次。编号不认识时回 404。</summary>
+    public IActionResult OnGetCheck(long checkId) => checks.Read(checkId) is { } check
+        ? new JsonResult(new { ended = check.Ended, status = check.Status.ToString(), message = check.Message, candidateId = check.UpstreamCandidateId })
+        : NotFound();
+
+    /// <summary>取消检测（需已登录且通过防 CSRF 校验）：只发出取消，那一家由检测收尾写成「检测未完成」；页面读出取消结果。</summary>
+    public async Task<IActionResult> OnPostCancelCheckAsync(long checkId)
+    {
+        ModelState.Clear();
+        var check = checks.Read(checkId);
+        if (!checks.Cancel(checkId)) ModelState.AddModelError("", "这次检测已经结束了，不用取消。结果在下面。");
+        // 取消后等它收尾一小会儿（最多 5 秒），页面直接读出「检测未完成」，不用再按刷新；等不到就读出「正在取消」，状态区随后自动读出结论。
+        else for (var waited = 0; waited < 50 && checks.Read(checkId) is { Ended: false }; waited++) await Task.Delay(100, HttpContext.RequestAborted);
+        await Load(check?.UpstreamCandidateId, checkId); return Page();
+    }
 
     /// <summary>API 供应商：加密保存名称、地址、密钥后立刻获取模型（不花额度）；密钥只在这一次提交里出现，处理后清空。</summary>
     public Task<IActionResult> OnPostDiscoverApiAsync() => Discover(Api, Api.ToApiOptions());
@@ -69,17 +89,16 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public async Task<IActionResult> OnPostLoginAccountAsync()
     {
         ModelState.Clear();
-        long? working = null;
+        long? working = null; long? check = null;
         try
         {
             var id = await upstreams.LoginOfficial(Version, Login.ToLoginOptions(), Login.Name, HttpContext.RequestAborted); working = id;
-            var catalog = await upstreams.DiscoverModels(id, HttpContext.RequestAborted);
-            Notice = $"官方账户登录成功，已保存为「{(await upstreams.ReadCandidate(id)).Name}」。{catalog.Message}";
+            check = checks.StartDiscovery(id, $"官方账户登录成功，已保存为「{(await upstreams.ReadCandidate(id)).Name}」。");
             Login = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
         }
         // 未安装、登录取消或超时、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(working); return Page();
+        await Load(working, check); return Page();
     }
 
     /// <summary>
@@ -89,7 +108,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public async Task<IActionResult> OnPostImportAccountAsync()
     {
         ModelState.Clear();
-        long? working = null; byte[]? content = null;
+        long? working = null; long? check = null; byte[]? content = null;
         try
         {
             if (ImportFile is null || ImportFile.Length == 0) throw new InvalidOperationException("请先选择要导入的登录文件（.credentials.json），再按「导入登录文件」。");
@@ -99,32 +118,32 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
                 if (await input.ReadAtLeastAsync(content, content.Length, false, HttpContext.RequestAborted) < content.Length)
                     throw new InvalidOperationException("登录文件没有读完整，请重新选择后再按「导入登录文件」。");
             var id = await upstreams.ImportOfficial(Version, Import.ToLoginOptions(), content, Import.Name, HttpContext.RequestAborted); working = id;
-            var catalog = await upstreams.DiscoverModels(id, HttpContext.RequestAborted);
-            Notice = $"登录文件已导入，已保存为「{(await upstreams.ReadCandidate(id)).Name}」。{catalog.Message}";
+            check = checks.StartDiscovery(id, $"登录文件已导入，已保存为「{(await upstreams.ReadCandidate(id)).Name}」。");
             Import = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
         }
         // 文件不合格、未安装 Claude Code、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         // 登录文件里有访问令牌和刷新令牌：无论成败都清零字节、清掉文件绑定值。
         finally { if (content is not null) CryptographicOperations.ZeroMemory(content); ImportFile = null; }
-        await Load(working); return Page();
+        await Load(working, check); return Page();
     }
 
     /// <summary>
-    /// 测试（需已登录且通过防 CSRF 校验）：按钮文字已写明会消耗少量上游额度，按下即视为同意；先按需改选模型，再对已保存的上游做一次最小调用。
-    /// 浏览器断开时经 RequestAborted 取消对上游的调用；测试不会切换当前上游。
+    /// 测试（需已登录且通过防 CSRF 校验）：按钮文字已写明会消耗少量上游额度，按下即视为同意；先按需改选模型，再在后台对已保存的上游做一次最小调用。
+    /// 页面马上回来，状态区自动读出结论，可按「取消检测」；测试不会切换当前上游。
     /// </summary>
     public async Task<IActionResult> OnPostTestAsync(long candidateId, string? model)
     {
         ModelState.Clear();
+        long? check = null;
         try
         {
             if (model is not null) await upstreams.ChooseModel(candidateId, model);
-            Notice = (await upstreams.TestCandidate(candidateId, true, HttpContext.RequestAborted)).Message;
+            check = checks.StartTest(candidateId);
         }
         // 未选模型、模型名不合规则、上游不存在或正在检测：只作为表单错误读出，不改动活动上游。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(candidateId); return Page();
+        await Load(candidateId, check); return Page();
     }
 
     /// <summary>切换（需已登录且通过防 CSRF 校验）：把测试通过的上游原子切换为活动版本，核对的是本页打开时看到的版本；在途请求继续用旧版本，个人令牌和中转地址不变。</summary>
@@ -228,14 +247,11 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     public async Task<IActionResult> OnPostRediscoverAsync(long candidateId)
     {
         ModelState.Clear();
-        try
-        {
-            var catalog = await upstreams.DiscoverModels(candidateId, HttpContext.RequestAborted);
-            Notice = $"已重新获取「{(await upstreams.ReadCandidate(candidateId)).Name}」的模型。{catalog.Message}";
-        }
-        // 上游不存在、正在检测或官方登录凭据已不在：读出原因；上游自己的拒绝由目录读句说明，不走这里。
+        long? check = null;
+        try { check = checks.StartDiscovery(candidateId, $"已重新获取「{(await upstreams.ReadCandidate(candidateId)).Name}」的模型。"); }
+        // 上游不存在或正在检测：读出原因；上游自己的拒绝由目录读句说明，不走这里。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(candidateId); return Page();
+        await Load(candidateId, check); return Page();
     }
 
     /// <summary>删除（需已登录且通过防 CSRF 校验）：须勾选确认；当前使用中或正在检测的上游由服务拒绝。</summary>
@@ -259,12 +275,11 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
     /// <summary>两张表单共用的保存加获取模型：成功后清空表单并把它作为正在设置的上游；任一步拒绝都读出原因。密钥无论成败都清空。</summary>
     private async Task<IActionResult> Discover(UpstreamInput input, UpstreamOptions options)
     {
-        long? working = null;
+        long? working = null; long? check = null;
         try
         {
             var id = await upstreams.SaveCandidate(Version, options, input.Credential ?? "", input.Name ?? ""); working = id;
-            var catalog = await upstreams.DiscoverModels(id, HttpContext.RequestAborted);
-            Notice = $"已保存「{(await upstreams.ReadCandidate(id)).Name}」。{catalog.Message}";
+            check = checks.StartDiscovery(id, $"已保存「{(await upstreams.ReadCandidate(id)).Name}」。");
             ModelState.Clear(); Api = new(); Account = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
         }
         // 名称、地址、密钥不合规则或活动版本已变化：只作为表单错误读出；已保存但获取模型被拒的情况由目录读句说明，不走这里。
@@ -277,11 +292,17 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
             if (input.BaseUrl?.Contains(secret, StringComparison.Ordinal) == true) { input.BaseUrl = null; ModelState.Remove(prefix + "." + nameof(UpstreamInput.BaseUrl)); }
         }
         input.Credential = null; ModelState.Remove(prefix + "." + nameof(UpstreamInput.Credential));
-        await Load(working); return Page();
+        await Load(working, check); return Page();
     }
 
-    /// <summary>重新读取活动上游、已保存列表、正在设置的上游和上游池运行状态，并把版本号更新为最新。</summary>
-    private async Task Load(long? workingId)
+    /// <summary>重新读取页面，不点名后台检测（正在设置的那一家有进行中的检测时照样读出）。</summary>
+    private Task Load(long? workingId) => Load(workingId, null);
+
+    /// <summary>
+    /// 重新读取活动上游、已保存列表、正在设置的上游和上游池运行状态，并把版本号更新为最新；再读出要读的那次后台检测：
+    /// 点名的（<paramref name="checkId"/>），没点名就取正在设置的那一家进行中的。已结束的把结论放进提示（没走到结论的放进错误）。
+    /// </summary>
+    private async Task Load(long? workingId, long? checkId)
     {
         Active = await upstreams.ReadOverview(); Saved = await upstreams.ListCandidates(); Version = Active.Version; ModelState.Remove(nameof(Version));
         // 其他按钮的提交不带官方账户表单字段，绑定会给出空地址；补回官方地址，避免读屏读到一个空的必填框。
@@ -289,17 +310,23 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
         if (string.IsNullOrWhiteSpace(Login.BaseUrl)) Login.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         if (string.IsNullOrWhiteSpace(Import.BaseUrl)) Import.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         // 已导出搬走的不再获取模型、测试，不作为正在设置的上游。
-        Working = (workingId is null ? Saved.LastOrDefault(item => item.State != CandidateState.Passed) : Saved.FirstOrDefault(item => item.Id == workingId)) is { ExportedAt: null } chosen ? chosen : null;
-        var current = Saved.FirstOrDefault(item => item.Id == Active.UpstreamCandidateId);
-        MovedText = current?.ExportedAt is null ? null : MovedSentence(current.Name, Active.Failover);
-        ExportWarning = current is { ExportedAt: null, Options.OfficialLogin: true }
-            ? $"在用的「{current.Name}」是登录得到的官方账户，勾选它导出后它就搬走了：" + (Active.Failover
+        // 配置损坏的那一家也不作为正在设置的上游：它只能删除。
+        Working = (workingId is null ? Saved.LastOrDefault(item => item.State != CandidateState.Passed && !item.Damaged) : Saved.FirstOrDefault(item => item.Id == workingId)) is { ExportedAt: null, Damaged: false } chosen ? chosen : null;
+        Check = checkId is { } named ? checks.Read(named) : Working is { } current ? checks.Running(current.Id) : null;
+        if (Check is { Ended: true } ended)
+        {
+            if (ended.Status == UpstreamCheckStatus.Failed) ModelState.AddModelError("", ended.Message);
+            else Notice ??= ended.Message;
+        }
+        var inUse = Saved.FirstOrDefault(item => item.Id == Active.UpstreamCandidateId);
+        MovedText = inUse?.ExportedAt is null ? null : MovedSentence(inUse.Name, Active.Failover);
+        ExportWarning = inUse is { ExportedAt: null, Options.OfficialLogin: true }
+            ? $"在用的「{inUse.Name}」是登录得到的官方账户，勾选它导出后它就搬走了：" + (Active.Failover
                 ? "自动切换开着，之后的请求会按「已保存的上游」的顺序换到其他测试通过的上游。"
                 : "自动切换关着，导出后中转会没有可用上游。请先切换到别的上游，或者打开自动切换，再导出。")
             : null;
         var state = upstreamPool.Status(Active.Version);
-        RuntimeStatus = MovedText is not null ? "已导出搬走，本机不再用它" : !Active.Configured ? "未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0
-            ? $"上游冷却中，约 {state.CooldownSeconds} 秒后重试" : Active.Report?.CanActivate == true ? "已通过最小调用检测" : "已迁移凭据，调用尚未检测";
+        RuntimeStatus = Active.RuntimeText(MovedText is not null, state.Paused, state.CooldownSeconds);
         RoutingText = RoutingSentence(upstreamPool, Active, Saved);
         IdentityText = identities.Describe();
         var users = await people.List();
@@ -327,14 +354,19 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamPool upst
             ? UpstreamDetection.AuthenticationLabel(item.Options.Authentication) + (item.Options.AuthenticationManual ? "（手动指定）" : "")
             : "尚未确认";
 
-    /// <summary>列表里「最近一次检测」的读法：已导出搬走、通过、未通过（附原因）、正在检测或尚未测试。</summary>
-    public static string ResultText(UpstreamCandidateView item) => item.ExportedAt is { } moved
-        ? $"已导出搬走（{moved.ToLocalTime():yyyy-MM-dd HH:mm}）：本机不再用它转发、不再续期。不再需要时可以删除。"
-        : item.State switch
-    {
-        CandidateState.Passed => $"测试通过（{item.Report?.CheckedAt.ToLocalTime():yyyy-MM-dd HH:mm}）。{item.Report?.Message}",
-        CandidateState.Failed => "测试未通过：" + item.Report?.Message,
-        CandidateState.Testing => "正在检测，可稍后刷新页面",
-        CandidateState.Untested => item.Report?.Message ?? "尚未测试"
-    };
+    /// <summary>
+    /// 列表里「最近一次检测」的读法：配置已损坏、已导出搬走、正在检测、检测未完成（停在检测中却已过窗口），其余按结论读通过、未通过（附原因）或尚未测试。
+    /// 「正在检测」「检测未完成」只读服务给的检测阶段（<see cref="UpstreamCandidateView.Phase"/>），不看原始状态。
+    /// </summary>
+    public static string ResultText(UpstreamCandidateView item) => item.Damaged
+        ? "配置已损坏：读不懂这一家存的配置，不能获取模型、测试、切换或导出。请删除它，再重新添加。"
+        : item.ExportedAt is { } moved ? $"已导出搬走（{moved.ToLocalTime():yyyy-MM-dd HH:mm}）：本机不再用它转发、不再续期。不再需要时可以删除。"
+        : item.Phase switch
+        {
+            UpstreamCheckPhase.Checking => "正在检测，结果出来会自动读出。",
+            UpstreamCheckPhase.Interrupted => UpstreamReport.UnfinishedLead + UpstreamReport.WindowReason + UpstreamReport.UnfinishedNext,
+            _ => item.State == CandidateState.Passed ? $"测试通过（{item.Report?.CheckedAt.ToLocalTime():yyyy-MM-dd HH:mm}）。{item.Report?.Message}"
+                : item.State == CandidateState.Failed ? "测试未通过：" + item.Report?.Message
+                : item.Report?.Message ?? "尚未测试",
+        };
 }

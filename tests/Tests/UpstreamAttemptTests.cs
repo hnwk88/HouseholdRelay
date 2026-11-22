@@ -83,14 +83,18 @@ static class UpstreamAttemptTests
         await ForceActive(web, upstream.Options() with { BaseUrl = "https://127.0.0.1:" + ((IPEndPoint)silent.LocalEndpoint).Port }, "沉默上游");
         using (var request = Request(web, user.Token))
         using (var response = await web.Http.SendAsync(request))
-            Check(response.StatusCode == HttpStatusCode.GatewayTimeout && await response.Content.ReadAsStringAsync()
-                == """{"type":"error","error":{"type":"api_error","message":"Upstream request timed out."}}""", "Connect timeout body unchanged");
+            Check(response.StatusCode == HttpStatusCode.GatewayTimeout && SameError(await response.Content.ReadAsStringAsync(),
+                """{"type":"error","error":{"type":"api_error","message":"Upstream request timed out."}}"""), "Connect timeout body unchanged");
         var attempt = Only(await Settled(web, 1));
         Check(attempt.ErrorType == "connection_failed" && attempt.ConnectFailure == Core.Usage.ConnectFailure.ConnectTimeout && attempt.UpstreamStatus is null && attempt.HeadersMs is null
             && attempt.DurationMs >= 14000, $"Connect timeout attempt: {attempt}");
         Check(Events(logs).Last().GetProperty("upstream").GetString() == "沉默上游");
         Check((await UsagePage(web)).Contains("沉默上游，无响应，连不上上游：建连超时，"));
     }
+
+    /// <summary>错误体与改动前逐字相同，只在最后多一个中转请求编号 request_id（32 位小写十六进制）。</summary>
+    internal static bool SameError(string body, string before) =>
+        System.Text.RegularExpressions.Regex.IsMatch(body, "^" + System.Text.RegularExpressions.Regex.Escape(before[..^1]) + ",\"request_id\":\"[0-9a-f]{32}\"}$");
 
     /// <summary>
     /// TLS 失败：上游证书不受信任，凭据发出前就失败，客户端拿到与改动前相同的 502 固定正文，库里记 connection_failed / tls；
@@ -107,14 +111,14 @@ static class UpstreamAttemptTests
         const string failed = """{"type":"error","error":{"type":"api_error","message":"Upstream connection failed. Check host connectivity."}}""";
         using (var request = Request(web, user.Token))
         using (var response = await web.Http.SendAsync(request))
-            Check(response.StatusCode == HttpStatusCode.BadGateway && await response.Content.ReadAsStringAsync() == failed && untrusted.Calls.IsEmpty, "TLS failure body unchanged");
+            Check(response.StatusCode == HttpStatusCode.BadGateway && SameError(await response.Content.ReadAsStringAsync(), failed) && untrusted.Calls.IsEmpty, "TLS failure body unchanged");
         var tls = Only(await Settled(web, 1));
         Check(tls.ErrorType == "connection_failed" && tls.ConnectFailure == Core.Usage.ConnectFailure.Tls && tls.UpstreamStatus is null, $"TLS attempt: {tls}");
         var closed = new TcpListener(IPAddress.Loopback, 0); closed.Start(); var port = ((IPEndPoint)closed.LocalEndpoint).Port; closed.Stop();
         await ForceActive(web, upstream.Options() with { BaseUrl = "http://127.0.0.1:" + port }, "没人监听");
         using (var request = Request(web, user.Token))
         using (var response = await web.Http.SendAsync(request))
-            Check(response.StatusCode == HttpStatusCode.BadGateway && await response.Content.ReadAsStringAsync() == failed, "Refused body unchanged");
+            Check(response.StatusCode == HttpStatusCode.BadGateway && SameError(await response.Content.ReadAsStringAsync(), failed), "Refused body unchanged");
         var refused = (await Settled(web, 2)).Attempts.Values.Select(list => list.Single()).Single(item => item.Name == "没人监听");
         Check(refused.ErrorType == "connection_failed" && refused.ConnectFailure == Core.Usage.ConnectFailure.Refused, $"Refused attempt: {refused}");
         Check((await UsagePage(web)).Contains("证书不受信，无响应，连不上上游：TLS 握手失败，"));
@@ -156,7 +160,7 @@ static class UpstreamAttemptTests
         foreach (var (id, time) in new[] { ("expired", now.AddDays(-40).AddTicks(-1)), ("boundary", now.AddDays(-40)) })
         {
             clock.Set(time); await usage.Start(id, user, Core.Usage.UsageKind.Inference); await usage.Dispatch(id, 1, candidate, "fixture-model");
-            Check(await usage.Finish(id, new UsageEnd(Core.Usage.UsageOutcome.Failed, true, 503, 503, 1, Core.Usage.UsageCompleteness.Partial, new()) { Attempts = [new UpstreamAttempt(1, candidate, 1, time)] }));
+            Check(await usage.Finish(id, new UsageEnd(Core.Usage.UsageOutcome.Failed, true, 503, 503, 1, Core.Usage.UsageCompleteness.Partial, new()) { Attempts = [new UpstreamAttempt(1, candidate, 1, time)] }) == Core.Usage.UsageFinish.Saved);
         }
         int Count(string sql) { using var connection = process.Database.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
         Check(Count("SELECT COUNT(*) FROM usage_attempts") == 2);

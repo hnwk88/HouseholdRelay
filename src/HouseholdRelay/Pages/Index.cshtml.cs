@@ -36,13 +36,14 @@ public sealed class IndexModel(IConfigurationService settings, IIdentityService 
         // 在用的那家已导出搬走：照上游页同一句读出请求此刻怎么走和下一步，不读成「尚未配置」。
         var moved = saved.FirstOrDefault(item => item.Id == active.UpstreamCandidateId) is { ExportedAt: not null } current ? current : null;
         UpstreamName = moved?.Name ?? (!active.Configured ? "尚未选择" : active.Name ?? "未命名");
-        UpstreamStatus = moved is not null ? "已导出搬走" : !active.Configured ? "尚未配置" : state.Paused ? "凭据失效，需重新接入" : state.CooldownSeconds > 0 ? "上游冷却中"
-            : active.Report?.CanActivate == true ? "最小模型调用已验证" : "已有凭据 · 调用未检测";
+        // 运行状态与上游页读同一句（UpstreamOverview.RuntimeText），不各写一份。
+        UpstreamStatus = active.RuntimeText(moved is not null, state.Paused, state.CooldownSeconds);
         RoutingText = moved is not null ? UpstreamModel.MovedSentence(moved.Name, active.Failover)
             : active.Configured ? UpstreamModel.RoutingSentence(upstreamPool, active, saved) : "";
         UpgradeText = instance.LastUpgrade is { } upgrade ? $"{upgrade.At.ToLocalTime():yyyy-MM-dd HH:mm}：{upgrade.Sentence()}" : "";
-        var certificate = await certificates.ReadInfo(); CertificateStatus = certificate is not null
-            ? certificate.ValidUntil > DateTimeOffset.UtcNow ? certificate.Mode == "private" ? "私有 CA · 客户端安装一次信任" : "已导入可信证书" : "证书已过期"
-            : "尚未配置 HTTPS";
+        // 30 天内到期时读到期提示（与 HTTPS 页、连接说明同一句，见 CertificateInfo.ExpiryWarning），其余照旧。
+        var certificate = await certificates.ReadInfo(); var now = DateTimeOffset.UtcNow;
+        CertificateStatus = certificate is null ? "尚未配置 HTTPS" : certificate.Expired(now) ? "证书已过期"
+            : certificate.ExpiryWarning(now, await certificates.CanReissue()) ?? (certificate.Mode == "private" ? "私有 CA · 客户端安装一次信任" : "已导入可信证书");
     }
 }

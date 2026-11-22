@@ -1,4 +1,5 @@
 ﻿using System.Security.Cryptography;
+using System.Linq.Expressions;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Application.DependencyInjection;
@@ -13,11 +14,18 @@ using Repositories;
 namespace Infrastructure.Security;
 
 /// <summary>
-/// 导入系统信任的服务器证书或在设置事务内签发私有证书，复用 DPAPI 机密；只向客户端提供公共信任材料。
-/// 证书密文（secrets 的 tls）、展示信息与私有 CA 公共 PEM（public_assets 的 tls_info、legacy_ca）和设置经通用仓储存取，保存时与设置在同一个事务里。
+/// 导入系统信任的服务器证书、在设置事务内签发私有证书或用存下来的私有 CA 重签，复用 DPAPI 机密；只向客户端提供公共信任材料。
+/// 证书密文（secrets 的 tls）、私有 CA 密文（secrets 的 ca，含私钥）、展示信息、私有 CA 公共 PEM 与对外地址（public_assets 的 tls_info、legacy_ca、tls_address）和设置经通用仓储存取，
+/// 保存时与设置在同一个事务里；覆盖之前把当前这几样存成上一份（名字加 .previous），可以退回。
 /// </summary>
 internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretProtector protector, ICertificateFactory factory) : ICertificateService
 {
+    /// <summary>一起轮换的密文名字：服务器证书与私有 CA。</summary>
+    private static readonly string[] _secretNames = [ProtectedSecret.ServerCertificate, ProtectedSecret.Authority];
+
+    /// <summary>一起轮换的公共资产名字：展示信息、私有 CA 公共 PEM、对外地址。</summary>
+    private static readonly string[] _assetNames = [PublicAsset.CertificateInfoName, PublicAsset.AuthorityName, PublicAsset.AddressName];
+
     /// <summary>读取证书展示信息；迁移来的私有证书按当前对外地址补出展示信息。</summary>
     public async Task<CertificateInfo?> ReadInfo()
     {
@@ -35,14 +43,28 @@ internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretPro
         finally { CryptographicOperations.ZeroMemory(pfx); }
     }
 
-    /// <summary>按系统信任和吊销检查导入 PFX。</summary>
+    /// <summary>按系统信任和吊销检查导入 PFX；已有私有 CA 时拒绝。</summary>
     public Task Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password)
-        => Import(settingsVersion, publicUrl, listenPort, pfx, password, null);
+        => Import(settingsVersion, publicUrl, listenPort, pfx, password, false, null);
 
-    /// <summary>导入 PFX 的实际实现：限制 1 MB 以内，校验对外地址与端口，要求恰好一个带私钥的服务器证书并通过链校验，再把整套证书导出、经 DPAPI 加密后与设置一起按 <paramref name="settingsVersion"/> 乐观并发保存。<paramref name="testRoots"/> 仅供测试，用自定义根代替系统信任。明文 PFX 和加载的证书对象在方法内清零或释放。</summary>
-    internal async Task Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password, X509Certificate2Collection? testRoots)
+    /// <summary>按系统信任和吊销检查导入 PFX；已有私有 CA 时须 <paramref name="replacePrivateConfirmed"/> 为真。</summary>
+    public Task Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password, bool replacePrivateConfirmed)
+        => Import(settingsVersion, publicUrl, listenPort, pfx, password, replacePrivateConfirmed, null);
+
+    /// <summary>测试用：以自定义根代替系统信任导入（不覆盖私有 CA 的确认项按「已确认」处理，用例只验链）。</summary>
+    internal Task Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password, X509Certificate2Collection? testRoots)
+        => Import(settingsVersion, publicUrl, listenPort, pfx, password, true, testRoots);
+
+    /// <summary>
+    /// 导入 PFX 的实际实现：限制 1 MB 以内，已有私有 CA 而没有确认时拒绝，校验对外地址与端口，要求恰好一个带私钥的服务器证书并通过链校验，
+    /// 再把整套证书导出、经 DPAPI 加密后与设置一起按 <paramref name="settingsVersion"/> 乐观并发保存（覆盖前留上一份）。<paramref name="testRoots"/> 仅供测试，用自定义根代替系统信任。
+    /// 明文 PFX 和加载的证书对象在方法内清零或释放。
+    /// </summary>
+    private async Task Import(long settingsVersion, string publicUrl, int listenPort, byte[] pfx, string? password, bool replacePrivateConfirmed, X509Certificate2Collection? testRoots)
     {
         if (pfx.Length is 0 or > 1024 * 1024) throw new InvalidOperationException("PFX 文件必须小于 1 MB，且包含服务器私钥和证书链。");
+        if (!replacePrivateConfirmed && await ReadAuthorityPem() is not null)
+            throw new InvalidOperationException("现在用的是私有 CA。导入后，装了私有 CA 信任的电脑改用新证书（公网可信证书一般不用另装信任）。请先勾选导入表单里的确认项，再导入；导入前的证书会留一份，可以退回。");
         var config = await Settings();
         config.PublicUrl = publicUrl.Trim(); config.ListenPort = listenPort; config.Validate();
         var url = PublicAddress(config.PublicUrl);
@@ -60,7 +82,7 @@ internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretPro
             try
             {
                 var encrypted = protector.Protect(plain);
-                await Save(settingsVersion, config, encrypted, info, null);
+                await Save(settingsVersion, config, encrypted, info, null, null);
             }
             // 导出的明文 PFX 只用于加密，保存成功或失败都立即清零，库里只留 DPAPI 密文。
             finally { CryptographicOperations.ZeroMemory(plain); }
@@ -136,7 +158,13 @@ internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretPro
         return authority.GetCertHashString(HashAlgorithmName.SHA256);
     }
 
-    /// <summary>签发新的私有 CA 与服务器证书并与设置同事务保存。</summary>
+    /// <summary>当前是私有 CA 且存着 CA 私钥：可以只重签服务器证书。</summary>
+    public async Task<bool> CanReissue() => await Secret(ProtectedSecret.Authority) is not null && await ReadAuthorityPem() is not null;
+
+    /// <summary>有没有上一份证书可以退回。</summary>
+    public async Task<bool> HasPrevious() => await Secret(ProtectedSecret.ServerCertificate + ProtectedSecret.PreviousSuffix) is not null;
+
+    /// <summary>签发新的私有 CA 与服务器证书，CA 私钥经 DPAPI 加密后与设置同事务保存（覆盖前留上一份）。</summary>
     public async Task CreatePrivate(long settingsVersion, string publicUrl, int listenPort, bool replaceExisting = false)
     {
         if (await ProtectedCertificate() is not null && !replaceExisting)
@@ -144,15 +172,66 @@ internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretPro
         var config = await Settings();
         config.PublicUrl = publicUrl.Trim(); config.ListenPort = listenPort; config.Validate();
         var address = PublicAddress(config.PublicUrl);
-        using var leaf = factory.CreateCertificate(address.DnsSafeHost, out var pem);
-        using var authority = X509Certificate2.CreateFromPem(pem);
-        Validate(leaf, new X509Certificate2Collection(authority), address.DnsSafeHost, new X509Certificate2Collection(authority));
+        using var authority = factory.CreateAuthority();
+        var authorityPlain = authority.Export(X509ContentType.Pkcs12);
+        try { await IssueAndSave(settingsVersion, config, address, authority, protector.Protect(authorityPlain)); }
+        // CA 的明文 PFX 含 CA 私钥，只用于加密存库：签发与保存成败都清零。
+        finally { CryptographicOperations.ZeroMemory(authorityPlain); }
+    }
+
+    /// <summary>用存下来的私有 CA 为新的对外地址重签服务器证书：CA 不变，客户端不用重装信任；旧版建的私有 CA 没有私钥时拒绝并读出下一步。</summary>
+    public async Task ReissuePrivate(long settingsVersion, string publicUrl, int listenPort)
+    {
+        var protectedAuthority = await Secret(ProtectedSecret.Authority);
+        if (protectedAuthority is null || await ReadAuthorityPem() is null)
+            throw new InvalidOperationException("现在的证书没有存着私有 CA 的私钥（旧版建的私有 CA 或导入的可信证书），不能只重签服务器证书。请用「创建私有 CA」新建一次并勾选确认替换，之后每台客户端要重新安装一次信任。");
+        var config = await Settings();
+        config.PublicUrl = publicUrl.Trim(); config.ListenPort = listenPort; config.Validate();
+        var address = PublicAddress(config.PublicUrl);
+        var authorityPlain = protector.Unprotect(protectedAuthority);
+        try
+        {
+            using var authority = X509CertificateLoader.LoadPkcs12(authorityPlain, null, X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+            await IssueAndSave(settingsVersion, config, address, authority, protectedAuthority);
+        }
+        // 解密出的 CA 私钥只在签发期间留在内存里：签发与保存成败都清零。
+        finally { CryptographicOperations.ZeroMemory(authorityPlain); }
+    }
+
+    /// <summary>退回上一份证书：在一个事务里把当前与上一份对调（证书、CA、展示信息、公共 PEM、对外地址），设置里的对外地址与端口也一起退回。</summary>
+    public async Task RestorePrevious(long settingsVersion)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var settings = scope.Repository<RelaySettings>(); var secrets = scope.Repository<ProtectedSecret>(); var assets = scope.Repository<PublicAsset>();
+        await settings.ExecuteInTransactionAsync(async () =>
+        {
+            if (await secrets.FirstOrDefaultAsync(item => item.Name == ProtectedSecret.ServerCertificate + ProtectedSecret.PreviousSuffix) is null)
+                throw new InvalidOperationException("没有上一份证书可以退回。");
+            foreach (var name in _secretNames) await Swap(secrets, name, SecretNamed, NewSecret, item => item.Protected, (item, value) => item.Protected = value);
+            foreach (var name in _assetNames) await Swap(assets, name, AssetNamed, NewAsset, item => item.Value, (item, value) => item.Value = value);
+            var row = await settings.LoadSettings();
+            var config = row.Snapshot().Value;
+            // 退回来的那份证书当初配的是哪个地址和端口，就把设置退回到那里；旧版没记地址的保持现在的设置。
+            if (await assets.FirstOrDefaultAsync(item => item.Name == PublicAsset.AddressName) is { } address
+                && JsonSerializer.Deserialize<CertificateAddress>(address.Value, ConfigurationFiles.Json) is { } saved)
+            { config.PublicUrl = saved.PublicUrl; config.ListenPort = saved.ListenPort; }
+            row.Replace(settingsVersion, config);
+            return await settings.SaveChangesAsync();
+        });
+    }
+
+    /// <summary>用给定私有 CA 为地址签发服务器证书，按本实例根校验后与 CA 公共 PEM、CA 密文一起保存。</summary>
+    private async Task IssueAndSave(long settingsVersion, RelayConfiguration config, Uri address, X509Certificate2 authority, byte[] protectedAuthority)
+    {
+        using var leaf = factory.IssueServer(authority, address.DnsSafeHost);
+        var pem = authority.ExportCertificatePem();
+        using var root = X509Certificate2.CreateFromPem(pem);
+        Validate(leaf, new X509Certificate2Collection(root), address.DnsSafeHost, new X509Certificate2Collection(root));
         var plain = leaf.Export(X509ContentType.Pkcs12);
         try
         {
-            var encrypted = protector.Protect(plain);
             var info = new CertificateInfo("private", address.DnsSafeHost, leaf.NotAfter.ToUniversalTime(), leaf.Thumbprint, DateTimeOffset.UtcNow);
-            await Save(settingsVersion, config, encrypted, info, pem);
+            await Save(settingsVersion, config, protector.Protect(plain), info, pem, protectedAuthority);
         }
         // 新签发证书的明文 PFX 只用于加密，保存成败都立即清零。
         finally { CryptographicOperations.ZeroMemory(plain); }
@@ -162,10 +241,13 @@ internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretPro
     private async Task<byte[]?> LoadCertificate() => await ProtectedCertificate() is byte[] encrypted ? protector.Unprotect(encrypted) : null;
 
     /// <summary>读取库中服务器证书的 DPAPI 密文；未配置时为空。</summary>
-    private async Task<byte[]?> ProtectedCertificate()
+    private Task<byte[]?> ProtectedCertificate() => Secret(ProtectedSecret.ServerCertificate);
+
+    /// <summary>按名字读取一份密文；没有时为空。</summary>
+    private async Task<byte[]?> Secret(string name)
     {
         await using var scope = scopes.CreateAsyncScope();
-        return (await scope.Repository<ProtectedSecret>().FirstOrDefaultAsync(item => item.Name == ProtectedSecret.ServerCertificate))?.Protected;
+        return (await scope.Repository<ProtectedSecret>().FirstOrDefaultAsync(item => item.Name == name))?.Protected;
     }
 
     /// <summary>按名字读取一段公共资产；没有时为空。</summary>
@@ -183,24 +265,87 @@ internal sealed class CertificateService(IServiceScopeFactory scopes, ISecretPro
     }
 
     /// <summary>
-    /// 在一个事务里保存证书：设置按 <paramref name="settingsVersion"/> 乐观并发写入（设备编号不许变），写入或覆盖证书密文与展示信息；
-    /// 给了 <paramref name="authorityPem"/>（私有证书）就写入私有 CA 公共 PEM，没给（导入的可信证书）就物理删除旧私有 CA。
+    /// 在一个事务里保存证书：设置按 <paramref name="settingsVersion"/> 乐观并发写入（设备编号不许变）；已有证书时先把当前的证书、CA、展示信息、公共 PEM 与地址存成上一份；
+    /// 再写入证书密文、展示信息与地址。给了 <paramref name="authorityPem"/>、<paramref name="protectedAuthority"/>（私有证书）就写入，没给（导入的可信证书）就删掉当前这一份（上一份留着）。
     /// </summary>
-    private async Task Save(long settingsVersion, RelayConfiguration config, byte[] protectedPfx, CertificateInfo info, string? authorityPem)
+    private async Task Save(long settingsVersion, RelayConfiguration config, byte[] protectedPfx, CertificateInfo info, string? authorityPem, byte[]? protectedAuthority)
     {
         await using var scope = scopes.CreateAsyncScope();
         var settings = scope.Repository<RelaySettings>(); var secrets = scope.Repository<ProtectedSecret>(); var assets = scope.Repository<PublicAsset>();
         await settings.ExecuteInTransactionAsync(async () =>
         {
-            (await settings.LoadSettings()).Replace(settingsVersion, config);
-            var secret = await secrets.FirstOrDefaultAsync(item => item.Name == ProtectedSecret.ServerCertificate);
-            if (secret is null) await secrets.AddAsync(secret = new ProtectedSecret { Name = ProtectedSecret.ServerCertificate });
-            secret.Protected = protectedPfx;
+            var row = await settings.LoadSettings();
+            var before = row.Snapshot().Value;
+            if (await secrets.FirstOrDefaultAsync(item => item.Name == ProtectedSecret.ServerCertificate) is not null)
+            {
+                // 覆盖之前留一份：新证书出问题（装了旧 CA 的家人连不上）时能退回；旧版没记地址的，按覆盖前的设置补上。
+                if (await assets.FirstOrDefaultAsync(item => item.Name == PublicAsset.AddressName) is null)
+                    await Put(assets, PublicAsset.AddressName, JsonSerializer.Serialize(new CertificateAddress(before.PublicUrl, before.ListenPort), ConfigurationFiles.Json));
+                foreach (var name in _secretNames) await KeepPrevious(secrets, name, SecretNamed, NewSecret, item => item.Protected, (item, value) => item.Protected = value);
+                foreach (var name in _assetNames) await KeepPrevious(assets, name, AssetNamed, NewAsset, item => item.Value, (item, value) => item.Value = value);
+            }
+            row.Replace(settingsVersion, config);
+            await PutSecret(secrets, ProtectedSecret.ServerCertificate, protectedPfx);
             await Put(assets, PublicAsset.CertificateInfoName, JsonSerializer.Serialize(info, ConfigurationFiles.Json));
+            await Put(assets, PublicAsset.AddressName, JsonSerializer.Serialize(new CertificateAddress(config.PublicUrl, config.ListenPort), ConfigurationFiles.Json));
             if (authorityPem is not null) await Put(assets, PublicAsset.AuthorityName, authorityPem);
             else if (await assets.FirstOrDefaultAsync(item => item.Name == PublicAsset.AuthorityName) is { } authority) await assets.DeleteAsync(authority, isHardDelete: true);
+            if (protectedAuthority is not null) await PutSecret(secrets, ProtectedSecret.Authority, protectedAuthority);
+            else if (await secrets.FirstOrDefaultAsync(item => item.Name == ProtectedSecret.Authority) is { } key) await secrets.DeleteAsync(key, isHardDelete: true);
             return await settings.SaveChangesAsync();
         });
+    }
+
+    /// <summary>按名字新建一行密文。</summary>
+    private static ProtectedSecret NewSecret(string name) => new() { Name = name };
+
+    /// <summary>按名字新建一行公共资产。</summary>
+    private static PublicAsset NewAsset(string name) => new() { Name = name };
+
+    /// <summary>按名字查密文行的条件（名字作参数交给 SQL）。</summary>
+    private static Expression<Func<ProtectedSecret, bool>> SecretNamed(string name) => item => item.Name == name;
+
+    /// <summary>按名字查公共资产行的条件（名字作参数交给 SQL）。</summary>
+    private static Expression<Func<PublicAsset, bool>> AssetNamed(string name) => item => item.Name == name;
+
+    /// <summary>
+    /// 把名为 <paramref name="name"/> 的当前那份抄成上一份（只登记，不提交）；当前没有这一份时删掉上一份，让上一份与当前一一对应。
+    /// <paramref name="named"/> 按名字给查询条件，<paramref name="create"/> 按名字新建一行，<paramref name="read"/>、<paramref name="write"/> 读写值。
+    /// </summary>
+    private static async Task KeepPrevious<TEntity, TValue>(IRepository<TEntity> repository, string name, Func<string, Expression<Func<TEntity, bool>>> named,
+        Func<string, TEntity> create, Func<TEntity, TValue> read, Action<TEntity, TValue> write) where TEntity : BaseEntity
+    {
+        var previousName = name + ProtectedSecret.PreviousSuffix;
+        var current = await repository.FirstOrDefaultAsync(named(name));
+        var previous = await repository.FirstOrDefaultAsync(named(previousName));
+        // 当前没有这一份（例如导入的可信证书没有 CA）：上一份也不该留着别的证书的那一份，硬删除（名字唯一，软删除的行会挡住以后同名写入）。
+        if (current is null) { if (previous is not null) await repository.DeleteAsync(previous, isHardDelete: true); return; }
+        if (previous is null) await repository.AddAsync(previous = create(previousName));
+        write(previous, read(current));
+    }
+
+    /// <summary>把名为 <paramref name="name"/> 的当前那份与上一份对调值（只登记，不提交）；一边没有时，另一边挪过去、原处删掉。按值对调，不改名字，不碰唯一约束。</summary>
+    private static async Task Swap<TEntity, TValue>(IRepository<TEntity> repository, string name, Func<string, Expression<Func<TEntity, bool>>> named,
+        Func<string, TEntity> create, Func<TEntity, TValue> read, Action<TEntity, TValue> write) where TEntity : BaseEntity
+    {
+        var previousName = name + ProtectedSecret.PreviousSuffix;
+        var current = await repository.FirstOrDefaultAsync(named(name));
+        var previous = await repository.FirstOrDefaultAsync(named(previousName));
+        if (current is null && previous is null) return;
+        if (current is not null && previous is not null) { var value = read(current); write(current, read(previous)); write(previous, value); return; }
+        // 只有一边：值挪到另一边，原处删掉（硬删除：名字唯一，软删除的行会挡住以后同名写入）。
+        var (from, toName) = current is not null ? (current, previousName) : (previous!, name);
+        var moved = create(toName); write(moved, read(from));
+        await repository.DeleteAsync(from, isHardDelete: true);
+        await repository.AddAsync(moved);
+    }
+
+    /// <summary>写入或覆盖一份密文（只登记，不提交）。</summary>
+    private static async Task PutSecret(IRepository<ProtectedSecret> secrets, string name, byte[] value)
+    {
+        var secret = await secrets.FirstOrDefaultAsync(item => item.Name == name);
+        if (secret is null) await secrets.AddAsync(secret = new ProtectedSecret { Name = name });
+        secret.Protected = value;
     }
 
     /// <summary>写入或覆盖一段公共资产（只登记，不提交）。</summary>

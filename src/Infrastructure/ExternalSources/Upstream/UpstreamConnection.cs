@@ -48,7 +48,10 @@ internal sealed class UpstreamConnection : IUpstreamLease
         {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false, AutomaticDecompression = DecompressionMethods.None,
             MaxConnectionsPerServer = maxConnections, PooledConnectionLifetime = TimeSpan.FromMinutes(2), ConnectTimeout = TimeSpan.FromSeconds(15),
-            ConnectCallback = (context, cancellation) => UpstreamDialer.Connect(context, snapshot.Options, proxy, cancellation)
+            ConnectCallback = (context, cancellation) => UpstreamDialer.Connect(context, snapshot.Options, proxy, cancellation),
+            // 不往上游请求里加跟踪头（traceparent、tracestate）：宿主开着日志就会给每个请求建跟踪活动，HttpClient 默认会把它传给上游，
+            // 那样发往官方与 API 上游的字节就和客户端原生直连不一样了。发出去的头只由转发规则决定。
+            ActivityHeadersPropagator = null
         };
         _http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }
