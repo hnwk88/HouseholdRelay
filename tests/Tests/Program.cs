@@ -288,6 +288,9 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: usage tap counts tokens from streams and json without touching bytes", SiyuUsageTests.TapCountsTokens),
     ("siyu: proxy feeds usage while forwarding the original bytes", SiyuUsageTests.ProxyFeedsUsageWithoutChangingBytes),
     ("siyu: usage is started, dispatched and finished like the old path", SiyuSessionTests.UsageIsRecordedLikeTheOldPath),
+    ("siyu: closing the old entry refuses official accounts locally", DeviceMetadataPathTests.LegacyOfficialClosedRefusesLocally),
+    ("siyu: administrator lists and stops sessions", SiyuSessionTests.AdministratorListsAndStopsSessions),
+    ("siyu: messages identity is verified read only before dispatch", SiyuSessionTests.MessagesIdentityIsVerifiedReadOnly),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

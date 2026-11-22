@@ -9,6 +9,27 @@ namespace Tests;
 /// <summary>两种设备格式经完整业务与真实探测实现到达回环模拟官方的矩阵；CLI 使用独立假进程。</summary>
 public static class DeviceMetadataPathTests
 {
+    /// <summary>旧接法的官方账户请求关闭后：活动上游是官方账户、又没有别的上游可用时本地拒绝 403，读句叫人改用思域，模拟官方一次都没被调用。</summary>
+    public static async Task LegacyOfficialClosedRefusesLocally()
+    {
+        using var claude = new FakeClaudeLauncher("success");
+        await using var mock = await UpstreamFixture.Create();
+        await using var web = await WebFixture.Create(configuration => configuration.LegacyOfficialClosed = true, claude.Register);
+        var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
+        var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, options, FakeClaude.Credential("fixture-protocol-token", 60), "模拟官方", CancellationToken.None);
+        var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);
+        Check(report.CanActivate, report.Message); await web.Upstreams.Activate(candidate);
+        var token = (await web.Identities.Create("旧接法客户端")).Token;
+        var before = mock.Calls.Count;
+        using (var request = UsageFixture.Request(web, token, "legacy-closed", body: Sample(false, new string('a', 64), "fixture-model", claude.Version, "sdk-cli")))
+        using (var response = await web.Http.SendAsync(request))
+        {
+            var text = await response.Content.ReadAsStringAsync();
+            Check((int)response.StatusCode == 403 && text.Contains("思域", StringComparison.Ordinal), "应本地 403 并读出改用思域：" + text);
+        }
+        Check(mock.Calls.Count == before, "关闭后旧接法一次都不发往官方账户");
+    }
+
     /// <summary>关闭兼容归一选项后，四个业务与四个探测样本仍统一设备；八类业务反例均不出站。</summary>
     public static async Task BusinessAndProbeMatrix()
     {

@@ -14,6 +14,7 @@ public static class SiyuCloseReasons
         SiyuCloseReason.ProfileChanged => "profile-changed",
         SiyuCloseReason.Reauthentication => "official-reauthentication-required",
         SiyuCloseReason.ServiceStopping => "service-stopping",
+        SiyuCloseReason.AdministratorStopped => "stopped-by-administrator",
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 
@@ -28,6 +29,7 @@ public static class SiyuCloseReasons
         SiyuCloseReason.ProfileChanged => "这个官方账户的资料变了，思域已停止。请重新启动思域，让它带上新的资料。",
         SiyuCloseReason.Reauthentication => "此官方账户需要重新登录。请在中转机管理页重新登录该账户，再启动思域。",
         SiyuCloseReason.ServiceStopping => "中转服务已重启，思域会话已结束，请重新启动；未确认完成的操作不会自动重发。",
+        SiyuCloseReason.AdministratorStopped => "管理员在中转机上结束了这个思域会话。需要时请重新启动思域；未确认完成的操作不会自动重发。",
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 }

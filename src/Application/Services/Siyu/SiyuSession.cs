@@ -6,13 +6,19 @@ namespace Application.Services.Siyu;
 /// 内存里的一个思域会话：固定绑定、账户目录键、票据哈希，以及只在 <see cref="SiyuSessionService"/> 的锁内改动的状态、租约与名额计数。
 /// <see cref="Stop"/> 在进入 Closing 时于锁外取消，隧道与发送许可都挂在它上面。
 /// </summary>
-internal sealed class SiyuSession(SiyuBinding binding, string accountUid, byte[] ticketHash, DateTimeOffset leaseExpiresAt)
+internal sealed class SiyuSession(SiyuBinding binding, string accountUid, string accountUuid, string deviceId, byte[] ticketHash, DateTimeOffset leaseExpiresAt)
 {
     /// <summary>固定绑定。</summary>
     public SiyuBinding Binding { get; } = binding;
 
     /// <summary>官方账户目录键（上游 Uid），只在服务端用来取凭据，不对外。</summary>
     public string AccountUid { get; } = accountUid;
+
+    /// <summary>这个官方账户的编号（启动资料的 accountUuid）：Messages 正文的账户段必须等于它。</summary>
+    public string AccountUuid { get; } = accountUuid;
+
+    /// <summary>创建时的站点设备编号：Messages 正文的设备段必须等于它（站点换号时会话随维护收口）。</summary>
+    public string DeviceId { get; } = deviceId;
 
     /// <summary>票据的 SHA256；票据原文不留。</summary>
     public byte[] TicketHash { get; } = ticketHash;

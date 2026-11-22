@@ -28,7 +28,7 @@ public interface ISiyuPermit : IAsyncDisposable
     Core.Usage.UsageAccumulator? Usage { get; }
 
     /// <summary>
-    /// 真正写给官方之前调用一次：把用量记录标记为已发出（模型名取请求体顶层的 model）。记不下就抛 <see cref="Core.Siyu.SiyuRefusal"/> 503，这次请求不发
+    /// 真正写给官方之前调用一次：先只读核对 Messages 正文的设备段与账户段（不一致抛 <see cref="Core.Siyu.SiyuRefusal"/> 403，不发），再把用量记录标记为已发出（模型名取请求体顶层的 model）。记不下就抛 503，这次请求不发
     /// （与旧接法同一规则：不产生无法计量的官方调用）。没有用量记录的用途什么也不做。
     /// </summary>
     Task Dispatching(ReadOnlyMemory<byte> body, CancellationToken cancellation);

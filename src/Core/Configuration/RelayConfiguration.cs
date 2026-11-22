@@ -19,6 +19,12 @@ public sealed class RelayConfiguration
     /// <summary>思域代理入口的 HTTPS 监听端口，默认 8789，复用站点证书；对外公布的端口与它同号（路由器要按同一端口转发）。不能与 <see cref="ListenPort"/> 相同；重启服务后生效。</summary>
     public int SiyuProxyPort { get; set; } = 8789;
 
+    /// <summary>
+    /// 旧接法（客户端经 ANTHROPIC_BASE_URL 直接发到中转）的官方账户请求是否关闭，默认不关。关上后旧接法选上游时跳过一切官方账户（含备用的），
+    /// 独立 API 与兼容中转照旧；一家都不剩就本地拒绝并读出改用思域。家里每台电脑都换成思域、双机验收之后才关；重启服务后生效。与 <see cref="SiyuEnabled"/> 是两个开关。
+    /// </summary>
+    public bool LegacyOfficialClosed { get; set; }
+
     /// <summary>家人访问用的对外 HTTPS 根地址；空字符串表示尚未配置。格式与证书域名一致性由配置服务保存时另行校验。</summary>
     public string PublicUrl { get; set; } = "";
 

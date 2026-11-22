@@ -44,6 +44,36 @@ internal static class DeviceMetadataRewrite
         catch (InvalidOperationException) { throw Rejected(); }
     }
 
+    /// <summary>
+    /// 只读核对 Messages 正文：与 <see cref="Apply"/> 同一套定位（唯一 metadata、唯一字符串 user_id、两种已支持格式），设备段等于 <paramref name="deviceId"/>、
+    /// 账户段等于 <paramref name="accountUuid"/> 才算一致；不复制、不改写正文。缺失、重复、损坏、格式不认识一律 <see cref="DeviceMetadataCheck.Unsupported"/>。
+    /// </summary>
+    internal static DeviceMetadataCheck Check(ReadOnlySpan<byte> body, string deviceId, string accountUuid)
+    {
+        try
+        {
+            var reader = new Utf8JsonReader(body);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) return DeviceMetadataCheck.Unsupported;
+            Identifier? identifier = null;
+            while (reader.Read())
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1 || !reader.ValueTextEquals("metadata")) continue;
+                if (identifier is not null) return DeviceMetadataCheck.Unsupported;
+                identifier = ReadMetadata(ref reader);
+            }
+            if (identifier is not { } found || string.IsNullOrWhiteSpace(found.Value)) return DeviceMetadataCheck.Unsupported;
+            var segments = Locate(found.Value, accountRequired: true);
+            if (segments.Single(segment => segment.Kind == Part.Device).Current != deviceId) return DeviceMetadataCheck.DeviceDiffers;
+            return segments.Single(segment => segment.Kind == Part.Account).Current == accountUuid ? DeviceMetadataCheck.Match : DeviceMetadataCheck.AccountDiffers;
+        }
+        // 定位规则判为不支持（与改写路径同一条规则）：只给结论，不抛给调用方。
+        catch (RelayFailure) { return DeviceMetadataCheck.Unsupported; }
+        // 语法错误：同上。
+        catch (JsonException) { return DeviceMetadataCheck.Unsupported; }
+        // 孤立代理项等解码失败：同上。
+        catch (InvalidOperationException) { return DeviceMetadataCheck.Unsupported; }
+    }
+
     /// <summary>检查唯一 metadata 对象中的唯一字符串 user_id；读取到对象结尾，避免漏掉后置重复键。</summary>
     private static Identifier ReadMetadata(ref Utf8JsonReader reader)
     {

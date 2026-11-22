@@ -29,4 +29,10 @@ public interface ISiyuSessionService
 
     /// <summary>结束一个官方账户（上游主键）上的全部会话，并作废它的 MCP 发现集合；账户删除、搬走、停用、换登录时调用。</summary>
     void CloseAccount(long officialAccountId, SiyuCloseReason reason);
+
+    /// <summary>管理页用：全部还在内存里的会话（存活、收尾中、保留期内已结束的），按建立先后排列。</summary>
+    IReadOnlyList<SiyuSessionSummary> List();
+
+    /// <summary>管理员结束一个会话（本机管理员会话已鉴权，不需要个人令牌）；找不到或已结束什么也不做。</summary>
+    void CloseByAdministrator(string sessionId);
 }

@@ -106,7 +106,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
             var binding = new SiyuBinding(ServerInstanceId, sessionId, access.UserId.Value, access.TokenId.Value, access.TokenVersion ?? 0, request.OfficialAccountId,
                 identity.Version, profile.ProfileVersion, request.ClientProtocolVersion, request.ClaudeVersion, request.Entrypoint);
             var at = _clock.GetUtcNow();
-            session = new SiyuSession(binding, account.Uid, SHA256.HashData(Encoding.UTF8.GetBytes(ticket)), at + SiyuContract.LeaseDuration);
+            session = new SiyuSession(binding, account.Uid, profile.AccountUuid, identity.DeviceId, SHA256.HashData(Encoding.UTF8.GetBytes(ticket)), at + SiyuContract.LeaseDuration);
             _sessions[sessionId] = session;
             created = new SiyuSessionCreated(View(session),
                 new SiyuLaunchIdentity(identity.DeviceId, profile.OAuthAccountJson, profile.CredentialMetadataJson),
@@ -191,6 +191,25 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         foreach (var session in affected) CloseSession(session, reason);
     }
 
+    /// <summary>管理页的会话一览：锁内取快照，按使用者、会话编号排列。</summary>
+    public IReadOnlyList<SiyuSessionSummary> List()
+    {
+        // 计数与状态在锁内读成一份一致的快照。
+        lock (_sync)
+            return [.. _sessions.Values.OrderBy(s => s.Binding.UserId).ThenBy(s => s.Binding.SessionId, StringComparer.Ordinal)
+                .Select(s => new SiyuSessionSummary(s.Binding, s.State, s.LeaseExpiresAt, s.Tunnels, s.Permits, s.Reason))];
+    }
+
+    /// <summary>管理员结束一个会话：与使用者停止同一个关闭流程，原因记为管理员结束；找不到什么也不做。</summary>
+    public void CloseByAdministrator(string sessionId)
+    {
+        ArgumentNullException.ThrowIfNull(sessionId);
+        SiyuSession? session;
+        // 只在锁内查找，关闭在锁外做。
+        lock (_sync) _sessions.TryGetValue(sessionId, out session);
+        if (session is not null) CloseSession(session, SiyuCloseReason.AdministratorStopped);
+    }
+
     /// <summary>外层 CONNECT 的准入：票据对得上、会话存活、隧道名额未满才给隧道，否则 null（不说明是哪一项）。</summary>
     public ISiyuTunnel? OpenTunnel(string sessionId, string ticket, OfficialHost host)
     {
@@ -262,7 +281,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
             // 记不下开始记录就不发（与旧接法同一规则）：归还站点许可与会话名额，本地拒绝。
             catch (RelayFailure) { operation.Dispose(); ReleasePermit(session); throw UsageUnavailable(); }
         }
-        return new SiyuPermit(this, session, operation, credential, route, admittedAt, CancellationTokenSource.CreateLinkedTokenSource(session.Stop.Token), requestId);
+        return new SiyuPermit(this, session, operation, credential, route, admittedAt, CancellationTokenSource.CreateLinkedTokenSource(session.Stop.Token), requestId, access.Name);
     }
 
     /// <summary>思域用途对应的用量种类：推理、估算、模型目录三种记用量（与旧接法同一套），其余用途不记。</summary>
@@ -324,6 +343,23 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         catch (System.Text.Json.JsonException) { return null; }
     }
 
+    /// <summary>
+    /// Messages 正文的只读核对（不改任何字节）：设备段必须是这个会话创建时的站点设备编号、账户段必须是这个官方账户的编号；
+    /// 不一致或格式不认识就本地拒绝 403，读句说清是哪位使用者、哪一段不对、去 MyCoAI 重新连接。其余用途不核对正文。
+    /// </summary>
+    internal void VerifyBody(SiyuSession session, SiyuRoute route, ReadOnlySpan<byte> body, string userName)
+    {
+        if (route.Purpose != SiyuPurpose.Messages) return;
+        var (code, part) = DeviceMetadata.Check(body, session.DeviceId, session.AccountUuid) switch
+        {
+            DeviceMetadataCheck.Match => (null, null),
+            DeviceMetadataCheck.DeviceDiffers => ("device-mismatch", "设备段和中转机的设备编号不一致"),
+            DeviceMetadataCheck.AccountDiffers => ("account-mismatch", "账户段和这个官方账户的编号不一致"),
+            _ => ("identity-unsupported", "里没有可核对的设备与账户信息"),
+        };
+        if (code is null) return;
+        throw new SiyuRefusal(403, code, $"使用者 {userName} 这台电脑发来的请求{part}，思域没有发给官方。请在 MyCoAI 里重新连接思域，让它重新准备这台电脑的配置。");
+    }
     /// <summary>用量记不下时的本地拒绝。</summary>
     private static SiyuRefusal UsageUnavailable() => new(503, "usage-unavailable", "中转暂时记不下用量，这次请求没有发给官方。请稍等一会儿再试。");
 

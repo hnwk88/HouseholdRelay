@@ -155,7 +155,7 @@ public static class SiyuSessionTests
         var messages = new SiyuRoute(SiyuPurpose.Messages, null);
         await using (var permit = await tunnel.Admit(messages, Alice, default))
         {
-            await permit.Dispatching("{\"max_tokens\":1,\"model\":\"claude-haiku-5-5\",\"messages\":[]}"u8.ToArray(), default);
+            await permit.Dispatching(MessagesBody(new string('d', 64), ProfileAccountUuid), default);
             permit.Usage!.Json("{\"type\":\"message\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}"u8.ToArray());
             rig.Clock.Advance(TimeSpan.FromMilliseconds(1500));
             permit.Observe(200); permit.Completed(200, true);
@@ -173,7 +173,7 @@ public static class SiyuSessionTests
         calls.Clear();
         await using (var permit = await tunnel.Admit(messages, Alice, default))
         {
-            await permit.Dispatching("{}"u8.ToArray(), default);
+            await permit.Dispatching(MessagesBody(new string('d', 64), ProfileAccountUuid), default);
             permit.Observe(200); permit.Completed(200, false);
         }
         Check(((Core.Usage.UsageEnd)calls[^1].Args[1]!).Outcome == Core.Usage.UsageOutcome.Interrupted, "回应没转完记中断");
@@ -194,7 +194,7 @@ public static class SiyuSessionTests
         Check(rig.Site.Active == 0, "开始写不进时站点许可已归还");
         rig.UsageFails = "Dispatch";
         var held = await tunnel.Admit(messages, Alice, default);
-        try { await held.Dispatching("{}"u8.ToArray(), default); Check(false, "已发出写不进应拒绝"); }
+        try { await held.Dispatching(MessagesBody(new string('d', 64), ProfileAccountUuid), default); Check(false, "已发出写不进应拒绝"); }
         // 预期的本地拒绝。
         catch (SiyuRefusal refusal) { Check(refusal.Code == "usage-unavailable", "已发出写不进回 usage-unavailable"); }
         await held.DisposeAsync();
@@ -203,6 +203,77 @@ public static class SiyuSessionTests
         tunnel.Dispose();
         Check((await rig.Service.Read(Alice, created.Session.Binding.SessionId)).State == SiyuSessionState.Closed, "许可都归还了，隧道一放就 Closed");
     }
+
+    /// <summary>管理页一览：按使用者列出会话与隧道、在途计数；管理员结束后隧道立即取消、原因记为管理员结束，找不到的编号什么也不做。</summary>
+    public static async Task AdministratorListsAndStopsSessions()
+    {
+        using var rig = new Rig();
+        var bob = await rig.Service.Create(Bob, Request("b"), default);
+        var alice = await rig.Service.Create(Alice, Request("a"), default);
+        var tunnel = rig.Service.OpenTunnel(alice.Session.Binding.SessionId, alice.Proxy.Ticket, OfficialHost.Api)!;
+        var listed = rig.Service.List();
+        Check(listed.Select(s => s.Binding.UserId).SequenceEqual([1L, 2L]) && listed[0].Tunnels == 1 && listed[0].State == SiyuSessionState.Active && listed[0].CloseReason is null, "按使用者排列，带隧道计数");
+        rig.Service.CloseByAdministrator("no-such-session");
+        rig.Service.CloseByAdministrator(alice.Session.Binding.SessionId);
+        Check(tunnel.Closed.IsCancellationRequested, "管理员结束即取消隧道");
+        var after = rig.Service.List().Single(s => s.Binding.UserId == 1);
+        Check(after.State == SiyuSessionState.Closing && after.CloseReason == SiyuCloseReason.AdministratorStopped, "原因记为管理员结束");
+        Check(rig.Service.List().Single(s => s.Binding.UserId == 2).State == SiyuSessionState.Active, "别人的会话不受影响");
+        tunnel.Dispose();
+        var view = await rig.Service.Read(Alice, alice.Session.Binding.SessionId);
+        Check(view.State == SiyuSessionState.Closed && view.CloseCode == "stopped-by-administrator", "使用者查询读到管理员结束");
+        _ = bob;
+    }
+
+    /// <summary>
+    /// Messages 正文只读核对：两段都对才放行（内嵌 JSON 与旧格式都认，转义也认）；设备段不对、账户段为空或不对、没有 metadata 都本地 403，
+    /// 读句带使用者名与哪一段；被拒时用量不记已发出；估算不核对正文。
+    /// </summary>
+    public static async Task MessagesIdentityIsVerifiedReadOnly()
+    {
+        using var rig = new Rig();
+        var created = await rig.Service.Create(Alice, Request("v"), default);
+        var tunnel = rig.Service.OpenTunnel(created.Session.Binding.SessionId, created.Proxy.Ticket, OfficialHost.Api)!;
+        var messages = new SiyuRoute(SiyuPurpose.Messages, null);
+        var device = new string('d', 64);
+        async Task Expect(byte[] body, string? code, string label)
+        {
+            rig.UsageCalls.Clear();
+            await using var permit = await tunnel.Admit(messages, Alice, default);
+            try
+            {
+                await permit.Dispatching(body, default);
+                Check(code is null, label + "：应拒绝 " + code);
+                Check(rig.UsageCalls.Any(call => call.Method == "Dispatch"), label + "：放行后记已发出");
+            }
+            // 预期的本地拒绝：核对原因码、读句与用量。
+            catch (SiyuRefusal refusal)
+            {
+                Check(refusal.Status == 403 && refusal.Code == code && refusal.Sentence.Contains("alice", StringComparison.Ordinal) && refusal.Sentence.Contains("MyCoAI", StringComparison.Ordinal),
+                    $"{label}：应是 403 {code}，实际 {refusal.Status} {refusal.Code}");
+                Check(rig.UsageCalls.All(call => call.Method != "Dispatch"), label + "：被拒时不记已发出");
+            }
+        }
+        await Expect(MessagesBody(device, ProfileAccountUuid), null, "两段都对");
+        await Expect(Encoding.UTF8.GetBytes("{\"metadata\":{\"user_id\":\"user_" + device + "_account_" + ProfileAccountUuid + "_session_x\"},\"model\":\"m\"}"), null, "旧格式两段都对");
+        await Expect(Encoding.UTF8.GetBytes("{\"metadata\":{\"user_id\":\"{\\\"device_id\\\":\\\"" + device + "\\\",\\\"account_uuid\\\":\\\"\\u0030f6c2a1e-3b7d-4c55-9a10-2f4e8d9b1c01\\\"}\"}}"), null, "转义写法两段都对");
+        await Expect(MessagesBody(new string('e', 64), ProfileAccountUuid), "device-mismatch", "设备段不对");
+        await Expect(MessagesBody(device, ""), "account-mismatch", "账户段为空（没配好的客户端）");
+        await Expect(MessagesBody(device, "11111111-2222-3333-4444-555555555555"), "account-mismatch", "账户段是别的账户");
+        await Expect("{\"model\":\"m\",\"messages\":[]}"u8.ToArray(), "identity-unsupported", "没有 metadata");
+        await Expect(Encoding.UTF8.GetBytes("{\"metadata\":{\"user_id\":\"a\"},\"metadata\":{\"user_id\":\"b\"}}"), "identity-unsupported", "重复 metadata");
+        rig.UsageCalls.Clear();
+        await using (var permit = await tunnel.Admit(new SiyuRoute(SiyuPurpose.CountTokens, null), Alice, default))
+            await permit.Dispatching("{\"model\":\"m\",\"messages\":[]}"u8.ToArray(), default);
+        Check(rig.UsageCalls.Any(call => call.Method == "Dispatch"), "估算不核对正文，照常记已发出");
+    }
+
+    /// <summary>测试台资料里的账户编号。</summary>
+    private const string ProfileAccountUuid = "0f6c2a1e-3b7d-4c55-9a10-2f4e8d9b1c01";
+
+    /// <summary>带内嵌 JSON 格式 user_id 的 Messages 正文（与 2.1.325 实测格式同形）。</summary>
+    private static byte[] MessagesBody(string device, string account) => Encoding.UTF8.GetBytes(
+        "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1,\"messages\":[],\"metadata\":{\"user_id\":" + System.Text.Json.JsonSerializer.Serialize("{\"device_id\":\"" + device + "\",\"account_uuid\":\"" + account + "\",\"session_id\":\"s-1\"}") + "}}");
 
     /// <summary>轮询等条件成立，最多 5 秒。</summary>
     private static async Task WaitUntil(Func<bool> condition)

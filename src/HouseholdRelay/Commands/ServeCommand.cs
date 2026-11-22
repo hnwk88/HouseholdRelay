@@ -10,7 +10,7 @@ namespace HouseholdRelay.Commands;
 
 /// <summary>命令行 serve：加载证书、启动本机管理网页和对外 HTTPS 中转两个宿主，并在控制台给出引导信息。</summary>
 public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, ICertificateService certificates, IAdministratorService administrators, Application.Interfaces.Configuration.IRelayInstance instance,
-    Lazy<Siyu.SiyuControl> siyuControl, Lazy<Siyu.SiyuProxyHost> siyuProxy, ILogger<ServeCommand> logger)
+    Lazy<Siyu.SiyuControl> siyuControl, Lazy<Siyu.SiyuProxyHost> siyuProxy, Siyu.SiyuHostState siyuState, ILogger<ServeCommand> logger)
 {
     /// <summary>管理端口须在 1024 至 65535 之间；在打开数据目录前检查。</summary>
     public static void CheckPort(int adminPort)
@@ -29,7 +29,9 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
         { RelayLog.Unexpected(logger, error, "serve:certificate"); Console.WriteLine("HTTPS 证书无法启用，请在本机管理页面检查证书链、域名和有效期后重新导入。"); }
         using var certificate = loaded;
         await admin.StartAsync();
+        if (certificate is null && config.SiyuEnabled) siyuState.Problem = "对外 HTTPS 证书没有启用，思域代理跟着没有起来。请在 HTTPS 入口页创建或导入证书后重启。";
         await using var proxy = certificate is null || !config.SiyuEnabled ? null : await StartSiyu(certificate);
+        siyuState.Active = proxy is not null;
         RequestDelegate siyu = proxy is null ? Siyu.SiyuControl.Disabled : siyuControl.Value.Handle;
         await using var api = certificate is null ? null : relay.Build(certificate.Certificate, certificateChain: certificate.Chain, siyuControl: siyu);
         if (api is not null) { await api.StartAsync(); relay.HttpsActive = true; }
@@ -61,10 +63,10 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
             return proxy;
         }
         // 没填对外地址：读句本身就是给管理员的下一步。
-        catch (InvalidOperationException error) { RelayLog.Unexpected(logger, error, "serve:siyu"); Console.WriteLine("思域没有启用：" + error.Message); }
+        catch (InvalidOperationException error) { RelayLog.Unexpected(logger, error, "serve:siyu"); siyuState.Problem = error.Message; Console.WriteLine("思域没有启用：" + error.Message); }
         // 端口被占用、代理 CA 存取失败：原始消息可能带路径，只给归类后的下一步。
         catch (Exception error) when (error is IOException or CryptographicException or UnauthorizedAccessException)
-        { RelayLog.Unexpected(logger, error, "serve:siyu"); Console.WriteLine($"思域没有启用：代理端口 {config.SiyuProxyPort} 打不开或代理证书读写失败。请检查端口占用，或在项目设置里换一个思域代理端口后重启。"); }
+        { RelayLog.Unexpected(logger, error, "serve:siyu"); siyuState.Problem = $"代理端口 {config.SiyuProxyPort} 打不开或代理证书读写失败。请检查端口占用，或在项目设置里换一个思域代理端口后重启。"; Console.WriteLine("思域没有启用：" + siyuState.Problem); }
         // 启动失败的代理宿主要释放，不留半开的监听。
         if (proxy is not null) await proxy.DisposeAsync();
         return null;

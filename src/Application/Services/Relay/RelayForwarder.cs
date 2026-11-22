@@ -135,7 +135,14 @@ public sealed class RelayForwarder : IRelayForwarder
             // 每家按自己的接入方式用同一份请求体重建请求：账户模式统一设备元数据，API 模式原样；请求体只读了一次。
             byte[] Body(IUpstreamLease target) => method == "POST" && !target.Snapshot.Options.OfficialAccount && target.Snapshot.Options.Mode == UpstreamMode.OAuth && _config.NormalizeDeviceMetadata
                 ? normalized ??= DeviceMetadata.Normalize(body, compatibleDevice) : body;
-            var upstream = (await route.Next(model))!;
+            // 旧接法的官方账户请求关闭后，选上游时跳过一切官方账户（含备用的，不能借备用官方绕过）；独立 API 与兼容中转照旧，一家都不剩就本地拒绝。
+            async Task<IUpstreamLease?> Next()
+            {
+                var next = await route.Next(model);
+                while (_config.LegacyOfficialClosed && next?.Snapshot.Options.OfficialAccount == true) next = await route.Next(model);
+                return next;
+            }
+            var upstream = await Next() ?? throw new RelayFailure(403, LegacyOfficialClosedSentence);
             // 发往官方账户要和原生直连一致，家里的 Claude Code 得开「按官方直连发请求」开关（它开了每个对话请求都带 X-Client-Request-Id）。
             // 没开就少一批只有客户端自己能生成的值，这次不发往官方，把开开关的命令读给使用者，复制执行、重开 Claude Code 再发即可。
             if (path == "/v1/messages" && upstream.Snapshot.Options.OfficialAccount
@@ -197,7 +204,7 @@ public sealed class RelayForwarder : IRelayForwarder
                             if (!attempt.Switchable && !identityBlocked) throw;
                             IUpstreamLease? after;
                             // 维护/配置拒绝不通过换另一个官方账户绕过；只允许现有策略中的独立 API 候选。
-                            do { after = await route.Next(model); } while (identityBlocked && after?.Snapshot.Options.OfficialAccount == true);
+                            do { after = await Next(); } while (identityBlocked && after?.Snapshot.Options.OfficialAccount == true);
                             if (after is null) throw;
                             attempt.PassOn();
                             if (!identityBlocked) route.Avoid(upstream, attempt);
@@ -211,7 +218,7 @@ public sealed class RelayForwarder : IRelayForwarder
                             attempt.Headers(upstreamStatus.Value, UpstreamRequestId(response), redact);
                             upstream.Observe(response);
                             // 还没向客户端写出任何字节：5xx、429、401、403 且顺序里还有下一家时，只读出这家的错误说明记进尝试，丢弃响应，换下一家。
-                            if (attempt.Switchable && await route.Next(model) is { } next)
+                            if (attempt.Switchable && await Next() is { } next)
                             {
                                 var discarded = new UsageAccumulator(kind);
                                 await _responses.Inspect(response, secret, discarded, timeout.Token);
@@ -287,6 +294,9 @@ public sealed class RelayForwarder : IRelayForwarder
             finally { for (var index = heldOfficialOperations.Count - 1; index >= 0; index--) heldOfficialOperations[index].Dispose(); }
         }
     }
+
+    /// <summary>旧接法官方账户请求关闭后、又没有别的上游可用时读给使用者的话。</summary>
+    internal const string LegacyOfficialClosedSentence = "这台中转已经不再接受旧接法发来的官方账户请求。请在 MyCoAI 里改用思域启动 Claude Code。";
 
     /// <summary>只从既有解析结果分类错误，不额外读取或复制正文，也不把错误原话放进诊断样本。</summary>
     private static string? DiagnosticError(int status, UsageAccumulator usage)

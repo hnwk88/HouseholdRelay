@@ -23,6 +23,8 @@
         <label class="checkbox"><input asp-for="Input.SiyuEnabled" />接受新的思域会话</label>
         <label asp-for="Input.SiyuProxyPort">思域代理端口</label><input asp-for="Input.SiyuProxyPort" type="number" min="@SettingLimits.ListenPort.Min" max="@SettingLimits.ListenPort.Max" required />
         <small id="siyu-help">思域是 MyCoAI 里经中转使用官方账户的启动方式。打开后重启服务，中转才在这个端口接受思域连接；路由器要按同一个端口号转发到本机。关掉后不再接受新的思域会话，旧的接法照常。</small>
+        <label class="checkbox"><input asp-for="Input.LegacyOfficialClosed" aria-describedby="legacy-help" />关闭旧接法的官方账户请求</label>
+        <small id="legacy-help">旧接法是客户端把地址直接指向中转。勾上并重启后，旧接法的请求不再发往任何官方账户，只走独立 API 上游；家里每台电脑都改用思域之后再勾。</small>
     </fieldset>
     <details><summary>转发与限流设置</summary>
         <label asp-for="Input.MaxConcurrent">上游最大并发</label><input asp-for="Input.MaxConcurrent" type="number" min="@SettingLimits.MaxConcurrent.Min" max="@SettingLimits.MaxConcurrent.Max" required />

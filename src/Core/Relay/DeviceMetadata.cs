@@ -24,6 +24,16 @@ public static partial class DeviceMetadata
         return DeviceMetadataRewrite.Apply(route, body, deviceId!, officialLogin ? accountUuid : null);
     }
 
+    /// <summary>
+    /// 思域的只读核对：Messages 正文里的设备段必须等于站点设备编号、账户段必须等于这个官方账户的编号；定位规则与 <see cref="ForOfficial"/> 同一套，不改任何字节。
+    /// 编号本身不合格（设备编号格式不对、账户编号不是标准 UUID）时按格式不支持处理。
+    /// </summary>
+    public static DeviceMetadataCheck Check(ReadOnlySpan<byte> body, string? deviceId, string? accountUuid)
+    {
+        if (!SiteDeviceIdentity.IsValid(deviceId) || !Guid.TryParseExact(accountUuid, "D", out _)) return DeviceMetadataCheck.Unsupported;
+        return DeviceMetadataRewrite.Check(body, deviceId!, accountUuid!);
+    }
+
     // Only recognized metadata.user_id formats are changed. Session IDs, account IDs,
     // prompts and signed attribution text are never rewritten.
     /// <summary>

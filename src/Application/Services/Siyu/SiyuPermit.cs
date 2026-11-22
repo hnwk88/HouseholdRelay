@@ -9,7 +9,7 @@ namespace Application.Services.Siyu;
 /// 释放时先写用量结束记录，再依次归还站点许可、取消源与会话名额，只做一次。
 /// </summary>
 internal sealed class SiyuPermit(SiyuSessionService owner, SiyuSession session, IDisposable operation, OfficialCredentialLease credential, SiyuRoute route, DateTimeOffset admittedAt,
-    CancellationTokenSource cancel, string? usageRequestId) : ISiyuPermit
+    CancellationTokenSource cancel, string? usageRequestId, string userName) : ISiyuPermit
 {
     private int _disposed;
     private bool _dispatched;
@@ -39,9 +39,11 @@ internal sealed class SiyuPermit(SiyuSessionService owner, SiyuSession session, 
     /// <summary>报告一次成功的连接器发现，按准入时刻替换发现集合（迟于失效或更新发现的旧结果不生效）。</summary>
     public void ReportDiscovery(byte[] requestTemplate, IReadOnlyList<string> connectorIds) => owner.Discovered(session, route, admittedAt, requestTemplate, connectorIds);
 
-    /// <summary>写给官方之前把用量记录标记为已发出；只做一次。</summary>
+    /// <summary>写给官方之前：先核对 Messages 正文的身份两段，再把用量记录标记为已发出（只做一次）。</summary>
     public async Task Dispatching(ReadOnlyMemory<byte> body, CancellationToken cancellation)
     {
+        // 先只读核对身份（Messages 的设备段与账户段），不一致就本地拒绝，用量也不记已发出。
+        owner.VerifyBody(session, route, body.Span, userName);
         if (usageRequestId is null || _dispatched) return;
         await owner.DispatchUsage(session, usageRequestId, body);
         _dispatched = true;

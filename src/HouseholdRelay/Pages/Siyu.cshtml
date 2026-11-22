@@ -1,0 +1,50 @@
+﻿@page
+@model SiyuModel
+@{ ViewData["Title"] = "思域"; }
+<p class="eyebrow">官方账户</p><h1>思域</h1>
+<p>思域是 MyCoAI 里经中转使用官方账户的启动方式。这里列出正在用思域的会话：谁在用、用哪个官方账户、还开着几条连接。</p>
+<div asp-validation-summary="All" role="alert"></div>
+@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<section class="card" aria-labelledby="siyu-state">
+    <h2 id="siyu-state">状态</h2>
+    @if (!Model.Enabled)
+    {
+        <p>思域没有打开。要打开，请在<a asp-page="/Settings">项目设置</a>里勾选「接受新的思域会话」，保存后重启中转服务。</p>
+    }
+    else if (!Model.Active)
+    {
+        <p>思域已勾选，但代理没有起来：@(Model.Problem ?? "请查看中转服务窗口里的提示。")</p>
+    }
+    else if (Model.Unavailable is not null)
+    {
+        <p>思域打开了，但用不起来：@Model.Unavailable</p>
+    }
+    else
+    {
+        <p>思域已打开，代理端口 @Model.ProxyPort。当前共有 @Model.Rows.Count 个会话。</p>
+    }
+    <p>@(Model.LegacyClosed ? "旧接法的官方账户请求已关闭：客户端把地址直接指向中转时，不再发往任何官方账户。" : "旧接法的官方账户请求仍然开着：家里还没改用思域的电脑照常可用。")</p>
+</section>
+@if (Model.Active && Model.Unavailable is null && Model.Rows.Count == 0)
+{
+    <p>现在没有思域会话。</p>
+}
+<div class="users">
+@foreach (var row in Model.Rows)
+{
+    var session = row.Session;
+    <section class="card user" data-session-id="@session.Binding.SessionId">
+        <div class="row"><h2>@row.UserName 用 @row.AccountName</h2><span class="badge">@SiyuModel.StateName(session.State)</span></div>
+        <ul>
+            <li>租约到 @session.LeaseExpiresAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")（MyCoAI 每 40 秒续一次）</li>
+            <li>开着 @session.Tunnels 条连接，@session.Permits 个请求正在进行</li>
+            <li>Claude Code @session.Binding.ClaudeVersion，令牌第 @session.Binding.TokenVersion 版</li>
+            @if (SiyuModel.CloseSentence(session.CloseReason) is { } sentence) { <li>结束原因：@sentence</li> }
+        </ul>
+        @if (session.State == Core.Siyu.SiyuSessionState.Active)
+        {
+            <form method="post" asp-page-handler="Close"><input type="hidden" name="sessionId" value="@session.Binding.SessionId" /><button type="submit" class="secondary">结束这个会话（正在进行的请求会被取消）</button></form>
+        }
+    </section>
+}
+</div>

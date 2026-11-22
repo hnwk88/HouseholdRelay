@@ -26,4 +26,7 @@ public enum SiyuCloseReason
 
     /// <summary>中转服务退出。</summary>
     ServiceStopping,
+
+    /// <summary>管理员在中转机管理页结束了这个会话。</summary>
+    AdministratorStopped,
 }

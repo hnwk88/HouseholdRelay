@@ -32,10 +32,13 @@ public static class CompositionRoot
         services.AddSingleton(provider => SiyuEndpoint(provider.GetRequiredService<RelayConfiguration>()));
         services.AddRelayServer();
         // 处理思域控制面请求、负责构建思域代理宿主；选 Singleton 的原因：都只转交给同一个会话服务，无状态。serve 经 Lazy 取，只有开了思域才构造（会话服务随之构造并订阅失效源）。
+        // 记录思域代理在本进程是否起来；选 Singleton 的原因：serve 写、管理页读，全进程共享一份。
+        services.AddSingleton<Siyu.SiyuHostState>();
         services.AddSingleton<Siyu.SiyuControl>();
         services.AddSingleton(provider => new Siyu.SiyuProxyHost(provider.GetRequiredService<RelayConfiguration>(),
             provider.GetRequiredService<Infrastructure.ExternalSources.Siyu.SiyuProxyConnectionHandler>(), provider.GetRequiredService<ILoggerFactory>()));
         services.AddSingleton(provider => new Lazy<Siyu.SiyuControl>(provider.GetRequiredService<Siyu.SiyuControl>));
+        services.AddSingleton(provider => new Lazy<Application.Interfaces.Siyu.ISiyuSessionService>(provider.GetRequiredService<Application.Interfaces.Siyu.ISiyuSessionService>));
         services.AddSingleton(provider => new Lazy<Siyu.SiyuProxyHost>(provider.GetRequiredService<Siyu.SiyuProxyHost>));
         services.AddSingleton<ManagementCommands>();
         services.AddSingleton<ServeCommand>();

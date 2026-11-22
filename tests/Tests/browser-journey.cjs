@@ -131,6 +131,11 @@ async function login(page, url) {
     await page.goto(url + '/Settings'); assert.equal(await page.getByLabel('中转监听端口').inputValue(), '9797');
     assert.equal(await page.getByLabel('接受新的思域会话').isChecked(), true, '思域开关没有保留');
     assert.equal(await page.getByLabel('思域代理端口').inputValue(), '9799', '思域代理端口没有保留');
+    assert.equal(await page.getByLabel('关闭旧接法的官方账户请求').isChecked(), false, '旧接法开关默认不该关');
+    await page.getByRole('link', { name: '思域', exact: true }).click();
+    assert.ok((await page.locator('main').innerText()).includes('思域已勾选，但代理没有起来：对外 HTTPS 证书没有启用'), '思域页没有读出没起来的原因：' + await page.locator('main').innerText());
+    assert.ok((await page.locator('main').innerText()).includes('旧接法的官方账户请求仍然开着'), '思域页没有读出旧接法状态');
+    await shot(page, '07-siyu');
     assert.equal((await context.request.get(url + '/Setup')).status(), 404);
     await page.setViewportSize({ width: 390, height: 844 }); await page.goto(url + '/Users'); await shot(page, '06-mobile-after-restart');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, '窄屏出现水平溢出');
