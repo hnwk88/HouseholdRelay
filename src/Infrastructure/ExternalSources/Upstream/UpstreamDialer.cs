@@ -26,16 +26,26 @@ public static class UpstreamDialer
     {
         var target = context.DnsEndPoint;
         var plain = options.BaseUrl.StartsWith("http://", StringComparison.Ordinal);
-        var route = proxySettings.Resolve(new UriBuilder(plain ? "http" : "https", target.Host, target.Port).Uri);
-        var addresses = await Resolve(target.Host, options.AllowPrivateNetwork, plain, cancellation);
-        if (route.Address is null) return await Open(addresses, target.Port, cancellation);
+        return await OpenTarget(target.Host, target.Port, plain, options.AllowPrivateNetwork, proxySettings, cancellation);
+    }
+
+    /// <summary>
+    /// 按主机与端口建底层连接（不做 TLS），规则与 <see cref="Connect"/> 相同：先按全局设置解析代理，再校验目标地址；直连连已校验的 IP，
+    /// 走代理时连已校验的内网代理并 CONNECT 到已校验的目标 IP。<paramref name="plain"/> 为真表示明文 http 上游（只许内网）。返回的流由调用方持有并释放。
+    /// </summary>
+    public static async Task<Stream> OpenTarget(string host, int port, bool plain, bool allowPrivate, IUpstreamProxy proxySettings, CancellationToken cancellation)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(host); ArgumentNullException.ThrowIfNull(proxySettings);
+        var route = proxySettings.Resolve(new UriBuilder(plain ? "http" : "https", host, port).Uri);
+        var addresses = await Resolve(host, allowPrivate, plain, cancellation);
+        if (route.Address is null) return await Open(addresses, port, cancellation);
         var proxy = UpstreamAddress.Proxy(route.Address.AbsoluteUri);
         var proxyAddresses = await Resolve(proxy.DnsSafeHost, true, true, cancellation);
         var stream = await Open(proxyAddresses, proxy.Port, cancellation);
         try
         {
             // 代理也连接已检查的目标 IP，不让代理重新解析目标主机而绕过地址范围限制。
-            var address = addresses[0]; var authority = address.AddressFamily == AddressFamily.InterNetworkV6 ? $"[{address}]:{target.Port}" : $"{address}:{target.Port}";
+            var address = addresses[0]; var authority = address.AddressFamily == AddressFamily.InterNetworkV6 ? $"[{address}]:{port}" : $"{address}:{port}";
             await stream.WriteAsync(Encoding.ASCII.GetBytes($"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n"), cancellation);
             var header = new List<byte>(); var one = new byte[1];
             while (header.Count < 8192)

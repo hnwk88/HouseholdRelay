@@ -28,10 +28,26 @@ public static class CompositionRoot
         // 启动时读一次设置作为本进程的中转配置；监听端口和转发限制改动在重启服务后生效。
         // 依赖注入的工厂是同步合同，只能在这里同步等待一次；Microsoft.Data.Sqlite 的异步读在内部同步完成，没有同步上下文，不会死锁。
         services.AddSingleton(provider => provider.GetRequiredService<IConfigurationService>().Read().GetAwaiter().GetResult().Value);
+        // 提供思域代理对外公布的地址（选 Singleton 的原因：启动时定一次）：主机取对外地址，端口取思域代理端口（对外与监听同号），只在开了思域、真要建会话服务时才算。
+        services.AddSingleton(provider => SiyuEndpoint(provider.GetRequiredService<RelayConfiguration>()));
         services.AddRelayServer();
+        // 处理思域控制面请求、负责构建思域代理宿主；选 Singleton 的原因：都只转交给同一个会话服务，无状态。serve 经 Lazy 取，只有开了思域才构造（会话服务随之构造并订阅失效源）。
+        services.AddSingleton<Siyu.SiyuControl>();
+        services.AddSingleton(provider => new Siyu.SiyuProxyHost(provider.GetRequiredService<RelayConfiguration>(),
+            provider.GetRequiredService<Infrastructure.ExternalSources.Siyu.SiyuProxyConnectionHandler>(), provider.GetRequiredService<ILoggerFactory>()));
+        services.AddSingleton(provider => new Lazy<Siyu.SiyuControl>(provider.GetRequiredService<Siyu.SiyuControl>));
+        services.AddSingleton(provider => new Lazy<Siyu.SiyuProxyHost>(provider.GetRequiredService<Siyu.SiyuProxyHost>));
         services.AddSingleton<ManagementCommands>();
         services.AddSingleton<ServeCommand>();
         return services;
+    }
+
+    /// <summary>思域代理入口对外公布的地址：https、对外地址的主机名、思域代理端口；对外地址没填或不是 HTTPS 根地址时拒绝并读出下一步。</summary>
+    internal static Application.Contracts.Siyu.SiyuProxyEndpoint SiyuEndpoint(RelayConfiguration config)
+    {
+        if (!PublicAddress.IsHttpsRoot(config.PublicUrl, out var address))
+            throw new InvalidOperationException("思域需要先在项目设置里填好对外 HTTPS 地址，代理入口用它的域名。");
+        return new(new UriBuilder(Uri.UriSchemeHttps, address.DnsSafeHost, config.SiyuProxyPort).Uri);
     }
 
     /// <summary>正式服务的中转：转发服务的十二个依赖全部由容器交进来，漏登记任何一个在构建容器时就报；启动配置、鉴权名单、上游连接池和事件日志由其他登记提供。</summary>

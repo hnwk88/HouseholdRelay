@@ -19,6 +19,11 @@
         <label asp-for="Input.ProxyUrl">代理地址（手动指定时使用）</label><input asp-for="Input.ProxyUrl" maxlength="2048" placeholder="http://127.0.0.1:7897" />
         <small>上游转发、获取模型、测试和 Claude Code 检测都用这一份。已启用代理却取不到地址时，请求会被拒绝，不会悄悄直连。</small>
     </fieldset>
+    <fieldset aria-describedby="siyu-help"><legend>思域</legend>
+        <label class="checkbox"><input asp-for="Input.SiyuEnabled" />接受新的思域会话</label>
+        <label asp-for="Input.SiyuProxyPort">思域代理端口</label><input asp-for="Input.SiyuProxyPort" type="number" min="@SettingLimits.ListenPort.Min" max="@SettingLimits.ListenPort.Max" required />
+        <small id="siyu-help">思域是 MyCoAI 里经中转使用官方账户的启动方式。打开后重启服务，中转才在这个端口接受思域连接；路由器要按同一个端口号转发到本机。关掉后不再接受新的思域会话，旧的接法照常。</small>
+    </fieldset>
     <details><summary>转发与限流设置</summary>
         <label asp-for="Input.MaxConcurrent">上游最大并发</label><input asp-for="Input.MaxConcurrent" type="number" min="@SettingLimits.MaxConcurrent.Min" max="@SettingLimits.MaxConcurrent.Max" required />
         <label asp-for="Input.MaxPerClient">每人最大并发</label><input asp-for="Input.MaxPerClient" type="number" min="@SettingLimits.MaxPerClient.Min" max="@SettingLimits.MaxPerClient.Max" required />

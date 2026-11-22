@@ -56,6 +56,13 @@ public static class ApplicationServiceCollectionExtensions
         // 维护按上游、按模型的单价；选 Singleton 的原因：数据每次经独立作用域的仓储读写，服务本身无状态。
         services.AddSingleton<IUsagePricingService, UsagePricingService>();
         services.AddSingleton<UsageMaintenance>();
+        // 负责按官方账户与资料代次记 MCP 发现集合；选 Singleton 的原因：集合只存内存，会话层与代理准入共用一份。
+        services.AddSingleton(provider => new Core.Siyu.McpDiscoveryRegistry(provider.GetRequiredService<TimeProvider>()));
+        // 维护思域会话的唯一登记处并负责准入；选 Singleton 的原因：会话、票据哈希与订阅只存内存，控制面与代理入口必须是同一份。
+        // 它在构造时订阅令牌名单与账户退役，所以正式服务开了思域就在启动时先解析它（见 serve 命令），不能等第一个请求。
+        services.AddSingleton<Services.Siyu.SiyuSessionService>();
+        services.AddSingleton<Interfaces.Siyu.ISiyuSessionService>(provider => provider.GetRequiredService<Services.Siyu.SiyuSessionService>());
+        services.AddSingleton<Interfaces.Siyu.ISiyuGate>(provider => provider.GetRequiredService<Services.Siyu.SiyuSessionService>());
         return services;
     }
 

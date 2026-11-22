@@ -114,6 +114,17 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IUpstreamProbe, UpstreamProbe>();
         // 维护到各上游的连接与暂避计时；选 Singleton 的原因：连接与暂避状态必须全进程共享，按请求新建会丢掉连接复用。正式服务的连接池要站点身份（维护中不发往官方）。
         services.AddSingleton<IUpstreamPool, UpstreamPool>();
+
+        // 维护思域代理 CA（DPAPI 存 secrets 的 siyu_proxy_ca，和站点 CA 分开）与叶证书；选 Singleton 的原因：CA 私钥与叶证书只在内存里留一份。
+        // 证书接口是同步合同，只能在这里同步等待一次读库；Microsoft.Data.Sqlite 的异步读在内部同步完成，没有同步上下文，不会死锁。
+        services.AddSingleton<Application.Interfaces.Siyu.ISiyuProxyCertificates>(provider => SiyuProxyCertificates.Load(provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<ICertificateFactory>(), provider.GetRequiredService<TimeProvider>()).GetAwaiter().GetResult());
+        // 提供思域的官方出口；选 Singleton 的原因：无状态，每次各开一条连接，代理设置每次重读。
+        services.AddSingleton<Application.Interfaces.Siyu.IOfficialConnector, ExternalSources.Siyu.OfficialConnector>();
+        // 提供思域代理入口的限时与请求体上限（上限沿用启动配置）；选 Singleton 的原因：启动时定一次，全进程共享。
+        services.AddSingleton(provider => ExternalSources.Siyu.SiyuProxyLimits.Default(provider.GetRequiredService<RelayConfiguration>().MaxBodyBytes));
+        // 处理思域代理入口的每条连接；选 Singleton 的原因：无状态，每条连接各自处理。
+        services.AddSingleton<ExternalSources.Siyu.SiyuProxyConnectionHandler>();
         return services.AddUpstreamResponses();
     }
 

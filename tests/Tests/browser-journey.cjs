@@ -114,6 +114,8 @@ async function login(page, url) {
     await page.getByRole('link', { name: '项目设置', exact: true }).click();
     await page.getByLabel('对外地址（可稍后填写）').fill('https://relay.example.com:5433');
     await page.getByLabel('中转监听端口').fill('9797');
+    await page.getByLabel('接受新的思域会话').check();
+    await page.getByLabel('思域代理端口').fill('9799');
     await page.getByRole('button', { name: '保存设置' }).click();
     assert.ok((await page.locator('[role="status"]').textContent()).includes('设置已保存'));
     await shot(page, '05-settings');
@@ -127,6 +129,8 @@ async function login(page, url) {
     assert.equal((await context.request.get(url + '/status', { headers: { Authorization: 'Bearer ' + firstToken } })).status(), 401);
     assert.equal((await context.request.get(url + '/status', { headers: { Authorization: 'Bearer ' + secondToken } })).status(), 401);
     await page.goto(url + '/Settings'); assert.equal(await page.getByLabel('中转监听端口').inputValue(), '9797');
+    assert.equal(await page.getByLabel('接受新的思域会话').isChecked(), true, '思域开关没有保留');
+    assert.equal(await page.getByLabel('思域代理端口').inputValue(), '9799', '思域代理端口没有保留');
     assert.equal((await context.request.get(url + '/Setup')).status(), 404);
     await page.setViewportSize({ width: 390, height: 844 }); await page.goto(url + '/Users'); await shot(page, '06-mobile-after-restart');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, '窄屏出现水平溢出');

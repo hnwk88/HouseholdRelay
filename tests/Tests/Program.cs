@@ -277,6 +277,9 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: deleting an official upstream publishes its retirement", SiyuSessionTests.DeletingOfficialUpstreamRetiresIt),
     ("siyu: client commands run inside the running service", IdentityCommandChannelTests.RunningServiceExecutesClientCommands),
     ("siyu: client commands refuse without saving when the running service is unreachable", IdentityCommandChannelTests.UnreachableServiceRefusesWithoutSaving),
+    ("siyu: proxy authority is stored apart from the site authority and reused", SiyuWiringTests.ProxyAuthorityIsStoredAndReused),
+    ("siyu: control plane translates status codes and keeps profile bytes", SiyuWiringTests.ControlTranslatesHttp),
+    ("siyu: product wiring serves the proxy with the real gate", SiyuWiringTests.ProductWiringServesProxy),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

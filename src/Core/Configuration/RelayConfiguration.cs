@@ -10,6 +10,15 @@ public sealed class RelayConfiguration
     /// <summary>HTTPS 监听端口，默认 8787；<see cref="Validate"/> 只接受 1024–65535，避开需要管理员权限的低端口。</summary>
     public int ListenPort { get; set; } = 8787;
 
+    /// <summary>
+    /// 新思域会话准入的上线开关，默认关：关着时不开思域代理端口，建会话一律回 503。它只管新思域会话，和「旧 BASE_URL 接法的官方账户请求」是两个开关；
+    /// 改动在重启服务后生效。
+    /// </summary>
+    public bool SiyuEnabled { get; set; }
+
+    /// <summary>思域代理入口的 HTTPS 监听端口，默认 8789，复用站点证书；对外公布的端口与它同号（路由器要按同一端口转发）。不能与 <see cref="ListenPort"/> 相同；重启服务后生效。</summary>
+    public int SiyuProxyPort { get; set; } = 8789;
+
     /// <summary>家人访问用的对外 HTTPS 根地址；空字符串表示尚未配置。格式与证书域名一致性由配置服务保存时另行校验。</summary>
     public string PublicUrl { get; set; } = "";
 
@@ -72,6 +81,8 @@ public sealed class RelayConfiguration
             || !SiteDeviceIdentity.IsValid(DeviceId) || string.IsNullOrWhiteSpace(UpstreamUserAgent)
             || UpstreamUserAgent.Length > 256 || UpstreamUserAgent.Any(char.IsControl))
             throw new InvalidOperationException("中转配置格式或范围错误。");
+        if (!SettingLimits.ListenPort.Contains(SiyuProxyPort) || SiyuProxyPort == ListenPort)
+            throw new InvalidOperationException("思域代理端口要在 1024 到 65535 之间，并且不能和中转监听端口相同。");
         if (UpstreamProxy is not null && (!Uri.TryCreate(UpstreamProxy, UriKind.Absolute, out var proxy)
             || proxy.Scheme is not ("http" or "https"))) throw new InvalidOperationException("上游代理必须是 HTTP/HTTPS 地址。");
         if (ProxyMode == ProxyMode.Manual && string.IsNullOrWhiteSpace(ProxyUrl)) throw new InvalidOperationException("已选择手动指定代理，请填写代理地址，例如 http://127.0.0.1:7897。");

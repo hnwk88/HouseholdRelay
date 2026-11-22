@@ -83,8 +83,10 @@ static class DatabaseUpgradeTests
         catch (IOException error) when (error.Message == "fixture-checkpoint") { rejected = true; }
         Check(rejected && Version(Database(home.Path)) == 3 && Snapshot(Database(home.Path)).Rows.SequenceEqual(before.Rows));
         Check(Directory.GetFiles(Path.Combine(home.Path, ".state", "upgrade-backups"), "relay.db", SearchOption.AllDirectories).Length == 1);
-        var upgraded = new TestProcess(home.Path);
-        Check(Version(upgraded.Database.Path) == RelayDatabase.CurrentVersion && (await upgraded.Usage.Query(new() { From = DateTimeOffset.UtcNow.AddDays(-1) })).Total == 6);
+        // 夹具的 6 条用量都在 2026-11-19 04:12（UTC，见夹具 SOURCE.txt）；时钟固定在它之后一小时，查询窗口不随真实日期漂走。
+        var clock = new UsageClock(new DateTimeOffset(2026, 11, 19, 5, 12, 0, TimeSpan.Zero));
+        var upgraded = new TestProcess(home.Path, clock);
+        Check(Version(upgraded.Database.Path) == RelayDatabase.CurrentVersion && (await upgraded.Usage.Query(new() { From = clock.GetUtcNow().AddDays(-1) })).Total == 6);
     }
 
     /// <summary>备份做不成就不升级：备份目录的位置被一个同名文件占住时启动报错、读出「没有升级」，库仍是版本 8。</summary>

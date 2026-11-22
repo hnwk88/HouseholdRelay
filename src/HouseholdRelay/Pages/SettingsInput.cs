@@ -35,6 +35,10 @@ public sealed class SettingsInput
     public string ProxyMode { get; set; } = Wire<Core.Configuration.ProxyMode>.Name(_defaults.ProxyMode);
     /// <summary>手动指定的代理地址；可以省略 http://，写回时补齐；其余方式下原样保存。</summary>
     public string? ProxyUrl { get; set; }
+    /// <summary>新思域会话准入开关（默认关）；重启服务后生效。</summary>
+    public bool SiyuEnabled { get; set; } = _defaults.SiyuEnabled;
+    /// <summary>思域代理端口（1024–65535，不能与中转监听端口相同）；重启服务后生效。</summary>
+    public int SiyuProxyPort { get; set; } = _defaults.SiyuProxyPort;
     /// <summary>由当前实例设置生成表单初值，只复制设置页可编辑的字段。</summary>
     public static SettingsInput From(RelayConfiguration config) => new()
     {
@@ -42,7 +46,8 @@ public sealed class SettingsInput
         MaxPerClient = config.MaxPerClient, MaxQueued = config.MaxQueued, RequestsPerMinute = config.RequestsPerMinute,
         QueueTimeoutSeconds = config.QueueTimeoutSeconds, UploadTimeoutSeconds = config.UploadTimeoutSeconds,
         RequestTimeoutSeconds = config.RequestTimeoutSeconds, NormalizeDeviceMetadata = config.NormalizeDeviceMetadata,
-        UpstreamUserAgent = config.UpstreamUserAgent, ProxyMode = Wire<Core.Configuration.ProxyMode>.Name(config.ProxyMode), ProxyUrl = config.ProxyUrl
+        UpstreamUserAgent = config.UpstreamUserAgent, ProxyMode = Wire<Core.Configuration.ProxyMode>.Name(config.ProxyMode), ProxyUrl = config.ProxyUrl,
+        SiyuEnabled = config.SiyuEnabled, SiyuProxyPort = config.SiyuProxyPort
     };
     /// <summary>把表单字段写回传入的设置对象，只覆盖本类列出的字段，其余设置（证书、设备标识等）原样保留；不做校验，校验在配置服务保存时进行。</summary>
     public void Apply(RelayConfiguration config)
@@ -53,6 +58,7 @@ public sealed class SettingsInput
         config.QueueTimeoutSeconds = QueueTimeoutSeconds; config.UploadTimeoutSeconds = UploadTimeoutSeconds;
         config.RequestTimeoutSeconds = RequestTimeoutSeconds; config.NormalizeDeviceMetadata = NormalizeDeviceMetadata;
         config.UpstreamUserAgent = UpstreamUserAgent;
+        config.SiyuEnabled = SiyuEnabled; config.SiyuProxyPort = SiyuProxyPort;
         config.ProxyMode = Wire<Core.Configuration.ProxyMode>.TryParse(ProxyMode, out var mode) ? mode : throw new InvalidOperationException("请选择不使用代理、自动检测系统代理或手动指定地址。");
         var proxy = ProxyUrl?.Trim();
         config.ProxyUrl = string.IsNullOrEmpty(proxy) ? null : proxy.Contains("://", StringComparison.Ordinal) ? proxy : "http://" + proxy;
