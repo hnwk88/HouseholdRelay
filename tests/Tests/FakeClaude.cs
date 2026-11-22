@@ -60,6 +60,8 @@ static class FakeClaude
         if (command.StartsWith("-p /usage", StringComparison.Ordinal))
         {
             if (scenario == "slow-refresh") Thread.Sleep(TimeSpan.FromSeconds(30));
+            // 续期失败：不写新令牌，以 1 退出，凭据文件保持原样（思域据此验证过期后绝不退回旧令牌）。
+            if (scenario == "refresh-fails") return 1;
             Write(directory, RefreshedToken, 60); Console.WriteLine("{}"); return 0;
         }
         if (command == "--version") { Console.WriteLine(OwnVersion() + " (Claude Code)"); return 0; }

@@ -24,6 +24,12 @@ public interface IClaudeConfigurationPreparation
     /// </summary>
     void RecordAccount(string accountId, Core.Upstream.OfficialAccountProfile profile);
 
+    /// <summary>
+    /// 思域启动资料用：重读账户私有配置并核对设备编号与站点一致，返回顶层 oauthAccount 值的原始字节；没有 oauthAccount 时返回空数组。
+    /// 不走缓存、不写文件；私有配置缺失、损坏或设备编号不一致时抛 <see cref="Core.Configuration.ClaudeConfigurationUnavailableException"/>。
+    /// </summary>
+    byte[] ReadOAuthAccount(string accountId);
+
     /// <summary>为本次隔离回环诊断准备设备编号；目录必须属于工程命名的临时诊断目录。</summary>
     void PrepareTransient(string configDirectory);
 

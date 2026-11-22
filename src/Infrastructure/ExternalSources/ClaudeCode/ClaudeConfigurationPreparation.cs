@@ -112,6 +112,19 @@ internal sealed class ClaudeConfigurationPreparation(IServiceScopeFactory scopes
         catch (JsonException) { return null; }
     }
 
+    /// <summary>思域启动资料：重读私有配置、核对设备编号，返回顶层 oauthAccount 值的原始字节（没有时为空数组）；不走缓存、不写文件。</summary>
+    public byte[] ReadOAuthAccount(string accountId)
+    {
+        // 与准备、记录资料共锁，读到的不会是改写到一半的配置；设备编号不一致说明身份还没对齐，不能拿去建会话。
+        lock (_sync)
+        {
+            var bytes = Read(AccountDirectory(accountId), false);
+            if (Inspect(bytes).Value != DeviceId) throw Invalid("官方账户的私有设备配置尚未对齐，请在本机管理页完成身份准备。");
+            var (offset, length) = AccountValue(bytes);
+            return offset < 0 ? [] : bytes.AsSpan(offset, length).ToArray();
+        }
+    }
+
     /// <summary>仅接受系统临时目录下工程创建的独立诊断配置，个人 Claude/MyCoAI 目录不在可写范围。</summary>
     public void PrepareTransient(string configDirectory)
     {

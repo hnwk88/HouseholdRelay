@@ -221,6 +221,8 @@ static class SiteIdentityMaintenanceTests
         public string AccountUuid(string accountId) => throw new NotSupportedException();
         /// <summary>本组测试不保存账户资料。</summary>
         public void RecordAccount(string accountId, OfficialAccountProfile profile) => throw new NotSupportedException();
+        /// <summary>本组测试不读思域启动资料。</summary>
+        public byte[] ReadOAuthAccount(string accountId) => throw new NotSupportedException();
         /// <summary>本组测试不启动诊断CLI。</summary>
         public void PrepareTransient(string configDirectory) => throw new NotSupportedException();
         /// <summary>执行同步准备并完整登记生命周期，取消与异常都归还活跃计数。</summary>

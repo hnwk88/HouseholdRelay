@@ -263,6 +263,10 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: profile version changes only with relevant items", SiyuContractTests.ProfileVersionTracksRelevantChanges),
     ("siyu: version 1 session values hang together", SiyuContractTests.ContractValuesHang),
     ("siyu: mcp discovery set expires, replaces whole and never revives", SiyuContractTests.McpDiscoveryLifecycle),
+    ("siyu: official credential is valid or refused, never the stale token", SiyuCredentialTests.AcquireCredentialNeverFallsBack),
+    ("siyu: expired credential with failed renewal is refused", SiyuCredentialTests.ExpiredAndRefreshFailedIsRefused),
+    ("siyu: cancelling a credential wait leaves the renewal running", SiyuCredentialTests.CancellationOnlyStopsTheWaiter),
+    ("siyu: launch profile is read from the account directory and checked", SiyuCredentialTests.LaunchProfileFromAccountDirectory),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

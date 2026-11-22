@@ -7,6 +7,8 @@ using Application.Interfaces.ClaudeCode;
 using Application.Interfaces.Configuration;
 using Application.Interfaces.Relay;
 using Application.Interfaces.Upstream;
+using Core.Configuration;
+using Core.Siyu;
 using Core.Upstream;
 
 namespace Infrastructure.ExternalSources.ClaudeCode;
@@ -52,6 +54,8 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     private readonly HashSet<string> _moved = new(StringComparer.Ordinal);
     /// <summary>搬走时最多等正在跑的刷新结束这么久：刷新本身限时 60 秒，多留一点余量。</summary>
     private static readonly TimeSpan _moveWait = TimeSpan.FromSeconds(70);
+    /// <summary>每个账户最近见到的访问令牌哈希与凭据代次；只在内存，服务重启从 1 重新开始（会话也随重启失效）。</summary>
+    private readonly Dictionary<string, (byte[] Hash, long Generation)> _generations = new(StringComparer.Ordinal);
 
     /// <summary>
     /// 定位 claude.exe、按全局设置解析代理（启用却取不到时抛出 <see cref="UpstreamProxyUnavailableException"/>），建好受保护的配置目录后运行 <c>claude auth login</c> 等它结束；
@@ -144,6 +148,100 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
         if (expires > _clock.GetUtcNow()) return credential.AccessToken;
         refresh.Wait(_refreshWait);
         return Read(directory)?.AccessToken ?? credential.AccessToken;
+    }
+
+    /// <summary>
+    /// 思域发送用的有效凭据：离到期远就用当前令牌；快到期时起后台续期（同 <see cref="Refresh"/> 的单飞）并用仍有效的当前令牌；
+    /// 已过期就等那次续期（最多 <see cref="_refreshWait"/>，按调用方令牌可单独放弃等待）再重读，仍过期一律拒发。等待期间不占站点维护许可。
+    /// </summary>
+    public async Task<OfficialCredentialLease> AcquireCredential(string accountId, CancellationToken cancellation)
+    {
+        ThrowIfGone(accountId);
+        var directory = Directory(accountId);
+        var credential = Guarded(() => { _configuration.ValidateAccount(accountId); return Read(directory); });
+        if (credential is null) throw Reauthenticate();
+        if (credential.ExpiresAt is not { } expires)
+            throw new SiyuRefusal(503, "official-expiry-unknown", "这个官方账户的凭据没有写到期时间，思域不能确认它仍有效。请在中转机管理页重新登录该账户，再启动思域。");
+        if (expires - _clock.GetUtcNow() > _refreshMargin) return Lease(accountId, credential.AccessToken, expires);
+        var refresh = Guarded(() => Refresh(accountId, directory));
+        if (expires > _clock.GetUtcNow()) return Lease(accountId, credential.AccessToken, expires);
+        try { await refresh.WaitAsync(_refreshWait, _clock, cancellation); }
+        // 等到上限还没续完：不再等，按重读结果判断；调用方自己的取消不在这里接，原样抛出。
+        catch (TimeoutException) { }
+        var renewed = Guarded(() => Read(directory));
+        if (renewed?.ExpiresAt is { } renewedExpires && renewedExpires > _clock.GetUtcNow()) return Lease(accountId, renewed.AccessToken, renewedExpires);
+        throw Reauthenticate();
+    }
+
+    /// <summary>思域启动资料：私有配置的 oauthAccount 原字节加凭据文件的 claudeAiOauth，交给字段表核对；不触发续期。</summary>
+    public SiyuLaunchProfile ReadLaunchProfile(string accountId)
+    {
+        ThrowIfGone(accountId);
+        var directory = Directory(accountId);
+        return Guarded(() =>
+        {
+            var account = _configuration.ReadOAuthAccount(accountId);
+            var credential = ReadOAuthSection(directory) ?? throw Reauthenticate();
+            return SiyuLaunchProfileContract.Read(account, credential);
+        });
+    }
+
+    /// <summary>已删除或搬走的账户不再给思域用。</summary>
+    private void ThrowIfGone(string accountId)
+    {
+        // 与删除、搬走共用这把锁，读到的是最新状态。
+        lock (_refreshes)
+            if (_removed.Contains(accountId) || _moved.Contains(accountId))
+                throw new SiyuRefusal(503, "official-account-gone", "这个官方账户已经删除或搬走，思域不能再用它。请在 MyCoAI 改选别的账户。");
+    }
+
+    /// <summary>在站点维护许可内做一次只读操作；维护中、私有配置不可用都换成思域的本地拒绝，许可在返回前就归还，不跨等待。</summary>
+    private T Guarded<T>(Func<T> read)
+    {
+        try
+        {
+            using var operation = _siteIdentity.Enter();
+            return read();
+        }
+        // 维护中：官方收不到请求，按维护读句拒绝，不进暂停冷却。
+        catch (SiteIdentityUnavailableException)
+        { throw new SiyuRefusal(503, "site-maintenance", "思域因设备维护已停止。维护完成后请重新启动，原会话不会自动换号。"); }
+        // 私有配置的拒绝读句是固定说明（不含文件内容），原样带给使用者。
+        catch (ClaudeConfigurationUnavailableException error)
+        { throw new SiyuRefusal(503, "account-configuration", error.Message); }
+    }
+
+    /// <summary>官方凭据过期且续期失败、或凭据不在。</summary>
+    private static SiyuRefusal Reauthenticate() =>
+        new(503, "official-reauthentication-required", "此官方账户需要重新登录。请在中转机管理页重新登录该账户，再启动思域。");
+
+    /// <summary>按令牌内容给出凭据代次：与这个账户上一次见到的令牌相同就沿用，变了就加一。比较材料只留哈希、只在内存。</summary>
+    private OfficialCredentialLease Lease(string accountId, string accessToken, DateTimeOffset expiresAt)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(accessToken));
+        long generation;
+        // 并发取凭据时比较与登记新代次必须原子，否则同一新令牌可能被记成两个代次。
+        lock (_generations)
+        {
+            if (_generations.TryGetValue(accountId, out var last) && CryptographicOperations.FixedTimeEquals(last.Hash, hash)) generation = last.Generation;
+            else { generation = last.Generation + 1; _generations[accountId] = (hash, generation); }
+        }
+        return new OfficialCredentialLease(accountId, accessToken, expiresAt, generation);
+    }
+
+    /// <summary>读凭据文件里 claudeAiOauth 对象的原始字节；文件不在、不是对象或读不全时返回 null。读出的整文件字节用完清零。</summary>
+    private static byte[]? ReadOAuthSection(string directory)
+    {
+        var content = ReadFile(directory);
+        if (content is null) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            return document.RootElement.TryGetProperty("claudeAiOauth", out var oauth) && oauth.ValueKind == JsonValueKind.Object
+                ? Encoding.UTF8.GetBytes(oauth.GetRawText()) : null;
+        }
+        // 文件里有访问令牌和刷新令牌：无论成败都清零读到的整份。
+        finally { CryptographicOperations.ZeroMemory(content); }
     }
 
     /// <summary>读官方账户当前的 oauthAccount.accountUuid（发往官方时对齐账户段用）；已删除或搬走的账户返回 null，缺失或格式不对时抛出由上游读取处按本地身份阻断处理。不读令牌、不触发续期。</summary>

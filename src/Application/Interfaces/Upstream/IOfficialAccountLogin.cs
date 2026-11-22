@@ -26,6 +26,19 @@ public interface IOfficialAccountLogin
     /// <summary>读取 <paramref name="accountId"/> 目录里最新的访问令牌；快到期时让 CLI 刷新，已过期时等刷新结束（有上限）再读。没有凭据时返回 null。</summary>
     string? ReadAccessToken(string accountId);
 
+    /// <summary>
+    /// 思域发送用：取一份确实有效的官方凭据。离到期还远就直接用；快到期时照旧让 CLI 在后台续期（每账户单飞）并用当前令牌；
+    /// 已过期就等那次续期结束（有上限）再重读。重读后仍过期、没有凭据、文件不写真实到期时刻、账户已删除或搬走，一律抛 <see cref="Core.Siyu.SiyuRefusal"/>，绝不退回旧令牌。
+    /// <paramref name="cancellation"/> 只取消本调用者的等待，不取消别的请求还在用的那次续期。
+    /// </summary>
+    Task<Core.Siyu.OfficialCredentialLease> AcquireCredential(string accountId, CancellationToken cancellation);
+
+    /// <summary>
+    /// 思域启动资料：账户私有配置的 oauthAccount 原字节与凭据文件的 claudeAiOauth，按 <see cref="Core.Siyu.SiyuLaunchProfileContract"/> 核对；不读缓存、不触发续期。
+    /// 不合表、账户已删除或搬走、私有配置不可用时抛 <see cref="Core.Siyu.SiyuRefusal"/>。
+    /// </summary>
+    Core.Siyu.SiyuLaunchProfile ReadLaunchProfile(string accountId);
+
     /// <summary>读 <paramref name="accountId"/> 的 oauthAccount.accountUuid（发往官方时对齐账户段用）；已删除或搬走的账户返回 null，缺失或格式不对时按本地身份阻断抛出。不读令牌、不触发续期。</summary>
     string? ReadAccountUuid(string accountId);
 
