@@ -247,6 +247,12 @@ var tests = new (string Name, Func<Task> Test)[]
     ("stability: hourly cleanup survives unexpected faults", StabilityTests.CleanupLoopSurvivesFaults),
     ("stability: only Claude Code failures read as Claude Code incomplete", StabilityTests.ProbeAttributesOnlyClaudeCodeFailures),
     ("stability: errors carry request ids; personal usage hides upstream quotes", StabilityTests.ErrorsCarryRequestIdAndPersonalUsageHidesQuotes),
+    ("siyu: connect targets are the two exact official authorities", SiyuHttp1Tests.TargetsAreExact),
+    ("siyu: routes match host, method and exact path only", SiyuHttp1Tests.RoutesAreExact),
+    ("siyu: inner request contract rejects every ambiguity with a fixed code", SiyuHttp1Tests.RequestContract),
+    ("siyu: pipelined requests are read in order", SiyuHttp1Tests.PipelinedRequestsStayInOrder),
+    ("siyu: authorization swap changes one value and nothing else", SiyuHttp1Tests.AuthorizationSwapTouchesOneValue),
+    ("siyu: upstream response framing forwards bytes and refuses smuggling", SiyuHttp1Tests.ResponseContract),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();
