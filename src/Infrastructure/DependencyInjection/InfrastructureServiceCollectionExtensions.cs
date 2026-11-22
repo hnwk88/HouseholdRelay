@@ -121,6 +121,8 @@ public static class InfrastructureServiceCollectionExtensions
             provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<ICertificateFactory>(), provider.GetRequiredService<TimeProvider>()).GetAwaiter().GetResult());
         // 提供思域的官方出口；选 Singleton 的原因：无状态，每次各开一条连接，代理设置每次重读。
         services.AddSingleton<Application.Interfaces.Siyu.IOfficialConnector, ExternalSources.Siyu.OfficialConnector>();
+        // 执行思域单飞补发现的出站重发；选 Singleton 的原因：无状态，每次各开一条连接。
+        services.AddSingleton<Application.Interfaces.Siyu.IMcpDiscoveryProbe, ExternalSources.Siyu.McpDiscoveryProbe>();
         // 提供思域代理入口的限时与请求体上限（上限沿用启动配置）；选 Singleton 的原因：启动时定一次，全进程共享。
         services.AddSingleton(provider => ExternalSources.Siyu.SiyuProxyLimits.Default(provider.GetRequiredService<RelayConfiguration>().MaxBodyBytes));
         // 处理思域代理入口的每条连接；选 Singleton 的原因：无状态，每条连接各自处理。

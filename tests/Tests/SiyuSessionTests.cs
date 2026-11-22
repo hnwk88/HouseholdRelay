@@ -90,6 +90,65 @@ public static class SiyuSessionTests
         Check((await rig.Service.Create(Bob, Request("bob"), default)).Session.Binding.UserId == 2, "别人不受影响");
     }
 
+    /// <summary>
+    /// 连接器发现：客户端真实发现成功才登记集合与模板；非发现路由的报告不算；没有模板时不自己拼请求；集合失效后同一账户单飞补一次（模板原样、官方令牌），
+    /// 等待者各自取消不影响别人；补不到就拒绝并不新增；账户收口清掉模板。
+    /// </summary>
+    public static async Task DiscoveryIsLearnedAndRediscovered()
+    {
+        using var rig = new Rig();
+        var created = await rig.Service.Create(Alice, Request("m"), default);
+        var tunnel = rig.Service.OpenTunnel(created.Session.Binding.SessionId, created.Proxy.Ticket, OfficialHost.Api)!;
+        var connector = new SiyuRoute(SiyuPurpose.McpConnector, "mcpsrv_1");
+        await Refused(() => tunnel.Admit(connector, Alice, default), 403, "mcp-not-discovered", "没有模板时拒绝");
+        Check(rig.ProbeCalls.Count == 0, "没见过客户端真实的发现请求就不自己拼请求");
+
+        var template = "GET /v1/mcp_servers?limit=1000 HTTP/1.1\r\nHost: api.anthropic.com\r\nAuthorization: Bearer siyu-template\r\n\r\n"u8.ToArray();
+        await using ((await tunnel.Admit(new SiyuRoute(SiyuPurpose.Messages, null), Alice, default)).AsAsyncDisposable(out var other)) other.ReportDiscovery(template, ["mcpsrv_9"]);
+        await Refused(() => tunnel.Admit(new SiyuRoute(SiyuPurpose.McpConnector, "mcpsrv_9"), Alice, default), 403, "mcp-not-discovered", "非发现路由的报告不登记");
+        await using ((await tunnel.Admit(new SiyuRoute(SiyuPurpose.McpServers, null), Alice, default)).AsAsyncDisposable(out var discovery)) discovery.ReportDiscovery(template, ["mcpsrv_1"]);
+        await using ((await tunnel.Admit(connector, Alice, default)).AsAsyncDisposable(out _)) { }
+        Check(rig.ProbeCalls.Count == 0, "有效集合在时不补发现");
+
+        rig.Discovery.Invalidate(AccountId); rig.Clock.Advance(TimeSpan.FromSeconds(1));
+        var gate = new TaskCompletionSource<IReadOnlyList<string>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.ProbeResult = () => gate.Task;
+        var first = tunnel.Admit(connector, Alice, default);
+        var second = tunnel.Admit(connector, Alice, default);
+        using (var leave = new CancellationTokenSource())
+        {
+            var third = tunnel.Admit(connector, Alice, leave.Token);
+            await WaitUntil(() => rig.ProbeCalls.Count >= 1);
+            leave.Cancel();
+            try { await third; Check(false, "取消的等待者应放弃"); }
+            // 预期：只有这个等待者放弃，补发现照常进行。
+            catch (OperationCanceledException) { }
+        }
+        gate.SetResult(["mcpsrv_1"]);
+        await using ((await first).AsAsyncDisposable(out _)) { }
+        await using ((await second).AsAsyncDisposable(out _)) { }
+        Check(rig.ProbeCalls.Count == 1 && rig.ProbeCalls[0].Template.SequenceEqual(template) && rig.ProbeCalls[0].AccessToken == "official-token-g1", "同一账户只补一次，模板原样、用官方令牌");
+
+        rig.Discovery.Invalidate(AccountId); rig.Clock.Advance(TimeSpan.FromSeconds(1));
+        rig.ProbeResult = () => Task.FromResult<IReadOnlyList<string>?>(null);
+        await Refused(() => tunnel.Admit(connector, Alice, default), 403, "mcp-not-discovered", "补不到就拒绝");
+        Check(rig.ProbeCalls.Count == 2, "失败后下一次缺集合可以再补");
+
+        rig.Service.CloseAccount(AccountId, SiyuCloseReason.AccountUnavailable);
+        var again = await rig.Service.Create(Alice, Request("m2"), default);
+        var fresh = rig.Service.OpenTunnel(again.Session.Binding.SessionId, again.Proxy.Ticket, OfficialHost.Api)!;
+        rig.Clock.Advance(TimeSpan.FromSeconds(1));
+        await Refused(() => fresh.Admit(connector, Alice, default), 403, "mcp-not-discovered", "收口后的新会话没有集合");
+        Check(rig.ProbeCalls.Count == 2, "账户收口清掉了模板，不再补发现");
+    }
+
+    /// <summary>轮询等条件成立，最多 5 秒。</summary>
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition()) { Check(DateTime.UtcNow < deadline, "等待超时"); await Task.Delay(10); }
+    }
+
     /// <summary>隧道票据与名额、准入的令牌代次、连接器发现集合、被拒凭据代次、停止时 Closing 到 Closed。</summary>
     public static async Task TunnelsAndAdmission()
     {
@@ -291,8 +350,20 @@ public static class SiyuSessionTests
                 _ => throw new NotSupportedException(method.Name),
             });
             Service = new SiyuSessionService(Clients, upstreams, accounts, Site, new FixedSiyuProxyCertificates(_authority, new Dictionary<OfficialHost, X509Certificate2>()),
-                new SiyuProxyEndpoint(new Uri("https://relay.example.test:8789")), Discovery, Clock, Retirements);
+                new SiyuProxyEndpoint(new Uri("https://relay.example.test:8789")), Discovery,
+                FakeProxy<IMcpDiscoveryProbe>.Create((method, args) =>
+                {
+                    // 记下每次补发现用的模板与官方令牌；返回值由用例设定。
+                    lock (ProbeCalls) ProbeCalls.Add(((byte[])args![0]!, (string)args[1]!));
+                    return ProbeResult();
+                }), Clock, Retirements);
         }
+
+        /// <summary>补发现被调用时用的模板与官方令牌。</summary>
+        public List<(byte[] Template, string AccessToken)> ProbeCalls { get; } = [];
+
+        /// <summary>补发现的结果；默认补不到。</summary>
+        public Func<Task<IReadOnlyList<string>?>> ProbeResult { get; set; } = () => Task.FromResult<IReadOnlyList<string>?>(null);
 
         /// <summary>令牌名单。</summary>
         public ClientRegistry Clients { get; }

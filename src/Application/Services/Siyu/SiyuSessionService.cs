@@ -37,12 +37,18 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     private readonly Dictionary<(long UserId, long TokenId, string RequestId), SiyuCreateRecord> _creates = [];
     /// <summary>每个官方账户被官方明确拒绝过的最高凭据代次；同代次及更旧的凭据不再发送，新代次照常。</summary>
     private readonly Dictionary<string, long> _rejectedGenerations = new(StringComparer.Ordinal);
+    private readonly IMcpDiscoveryProbe _discoveryProbe;
+    /// <summary>每个官方账户（上游主键）最近一次客户端真实发出的连接器发现请求头（个人令牌已抹掉），单飞补发现时原样重发。</summary>
+    private readonly Dictionary<long, byte[]> _discoveryTemplates = [];
+    /// <summary>每个官方账户进行中的补发现；同一账户只跑一份，等的人各自用自己的取消。</summary>
+    private readonly Dictionary<long, Task> _discoveryFlights = [];
 
     /// <summary>依赖全部必填，构造时当场判空；订阅令牌名单变化，挂上定时清扫。</summary>
     public SiyuSessionService(ClientRegistry clients, IUpstreamService upstreams, IOfficialAccountLogin officialAccounts, ISiteIdentityService siteIdentity,
-        ISiyuProxyCertificates certificates, SiyuProxyEndpoint endpoint, McpDiscoveryRegistry discovery, TimeProvider clock, OfficialAccountRetirements retirements)
+        ISiyuProxyCertificates certificates, SiyuProxyEndpoint endpoint, McpDiscoveryRegistry discovery, IMcpDiscoveryProbe discoveryProbe, TimeProvider clock, OfficialAccountRetirements retirements)
     {
-        ArgumentNullException.ThrowIfNull(retirements);
+        ArgumentNullException.ThrowIfNull(retirements); ArgumentNullException.ThrowIfNull(discoveryProbe);
+        _discoveryProbe = discoveryProbe;
         ArgumentNullException.ThrowIfNull(clients); ArgumentNullException.ThrowIfNull(upstreams); ArgumentNullException.ThrowIfNull(officialAccounts);
         ArgumentNullException.ThrowIfNull(siteIdentity); ArgumentNullException.ThrowIfNull(certificates); ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(discovery); ArgumentNullException.ThrowIfNull(clock);
@@ -175,6 +181,8 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     {
         _discovery.Invalidate(officialAccountId);
         SiyuSession[] affected;
+        // 账户收口连同补发现模板一起清掉，换回来的账户要等客户端重新发现。
+        lock (_sync) _discoveryTemplates.Remove(officialAccountId);
         // 只在锁内挑出受影响的会话，关闭在锁外逐个做。
         lock (_sync) affected = _sessions.Values.Where(s => s.State == SiyuSessionState.Active && s.Binding.OfficialAccountId == officialAccountId).ToArray();
         foreach (var session in affected) CloseSession(session, reason);
@@ -202,15 +210,23 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     /// </summary>
     internal async Task<ISiyuPermit> Admit(SiyuSession session, SiyuRoute route, string bearerToken, CancellationToken cancellation)
     {
+        var admittedAt = _clock.GetUtcNow();
         var access = await Authenticate(bearerToken);
         if (access.TokenId != session.Binding.TokenId) throw Refuse(SiyuCloseReason.TokenInvalid, 401);
         CheckActive(session);
         if (route.Purpose == SiyuPurpose.McpConnector)
         {
             var check = _discovery.Check(session.Binding.OfficialAccountId, session.Binding.ProfileVersion, route.ConnectorId!);
-            if (check != McpDiscoveryCheck.Permitted)
-                throw new SiyuRefusal(403, check == McpDiscoveryCheck.Unknown ? "mcp-connector-unknown" : "mcp-not-discovered",
-                    "这个官方连接器不在这个账户当前的连接器列表里，思域没有转发。请在 Claude Code 里重新加载连接器后再试。");
+            // 没有有效集合（客户端用的是缓存、这次没主动发现，或集合已过期）：按账户单飞补一次，再查。
+            if (check == McpDiscoveryCheck.NotDiscovered)
+            {
+                await Rediscover(session, cancellation);
+                check = _discovery.Check(session.Binding.OfficialAccountId, session.Binding.ProfileVersion, route.ConnectorId!);
+            }
+            if (check == McpDiscoveryCheck.NotDiscovered)
+                throw new SiyuRefusal(403, "mcp-not-discovered", "思域还没拿到这个账户的官方连接器清单，这次连接器请求没有转发。请重新启动思域会话，Claude Code 启动时会重新取清单。");
+            if (check == McpDiscoveryCheck.Unknown)
+                throw new SiyuRefusal(403, "mcp-connector-unknown", "这个官方连接器不在这个账户当前的连接器列表里，思域没有转发。请在 Claude Code 里重新加载连接器后再试。");
         }
         OfficialCredentialLease credential;
         try { credential = await _officialAccounts.AcquireCredential(session.AccountUid, cancellation); }
@@ -232,7 +248,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
                     throw Refuse(SiyuCloseReason.Reauthentication, 503);
                 session.Permits++;
             }
-            return new SiyuPermit(this, session, operation, credential, route, CancellationTokenSource.CreateLinkedTokenSource(session.Stop.Token));
+            return new SiyuPermit(this, session, operation, credential, route, admittedAt, CancellationTokenSource.CreateLinkedTokenSource(session.Stop.Token));
         }
         // 没交出许可就归还站点许可，维护排空不会被一个被拒的请求拖住。
         catch { operation.Dispose(); throw; }
@@ -266,6 +282,67 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         lock (_sync)
             if (!_rejectedGenerations.TryGetValue(session.AccountUid, out var rejected) || credential.Generation > rejected)
                 _rejectedGenerations[session.AccountUid] = credential.Generation;
+    }
+
+    /// <summary>
+    /// 客户端经思域做的一次连接器发现成功了：记下请求模板，按准入时刻整份替换该账户的发现集合（迟于失效、或比现有集合更早开始的结果不生效）。
+    /// 只认发现路由；会话已不存活时不登记（它的回应也不会再转给客户端）。
+    /// </summary>
+    internal void Discovered(SiyuSession session, SiyuRoute route, DateTimeOffset admittedAt, byte[] requestTemplate, IReadOnlyList<string> connectorIds)
+    {
+        ArgumentNullException.ThrowIfNull(requestTemplate); ArgumentNullException.ThrowIfNull(connectorIds);
+        if (route.Purpose != SiyuPurpose.McpServers) return;
+        // 存活核对与模板登记同锁，账户收口不会插在中间留下旧账户的模板。
+        lock (_sync)
+        {
+            if (session.State != SiyuSessionState.Active) return;
+            _discoveryTemplates[session.Binding.OfficialAccountId] = requestTemplate;
+        }
+        _discovery.Replace(session.Binding.OfficialAccountId, session.Binding.ProfileVersion, connectorIds, admittedAt);
+    }
+
+    /// <summary>按账户单飞补一次发现：没有模板（从没见过客户端真实的发现请求）就什么都不做；调用方的取消只放弃自己的等待。</summary>
+    private async Task Rediscover(SiyuSession session, CancellationToken cancellation)
+    {
+        var accountId = session.Binding.OfficialAccountId;
+        Task flight;
+        // 查模板、查进行中的那一份与登记新的一份同锁，同一账户不会并发跑两份。
+        lock (_sync)
+        {
+            if (!_discoveryTemplates.TryGetValue(accountId, out var template)) return;
+            if (!_discoveryFlights.TryGetValue(accountId, out var running)) _discoveryFlights[accountId] = running = RunDiscovery(session, template);
+            flight = running;
+        }
+        await flight.WaitAsync(cancellation);
+    }
+
+    /// <summary>
+    /// 真正补发现的那一份：限时 <see cref="SiyuContract.McpDiscoveryTimeout"/>，先取有效凭据（不占站点许可），再占站点许可重发模板；
+    /// 被官方拒过的凭据代次不用。成功就按开始时刻替换集合；失败不新增、不延长。不论成败都从进行表里移除。
+    /// </summary>
+    private async Task RunDiscovery(SiyuSession session, byte[] template)
+    {
+        // 先让出一次，确保调用方已把这一份登记进进行表，结束时的移除不会早于登记。
+        await Task.Yield();
+        var accountId = session.Binding.OfficialAccountId;
+        try
+        {
+            var startedAt = _clock.GetUtcNow();
+            using var limit = new CancellationTokenSource(SiyuContract.McpDiscoveryTimeout, _clock);
+            var credential = await _officialAccounts.AcquireCredential(session.AccountUid, limit.Token);
+            // 拒绝代次只在锁内读。
+            lock (_sync)
+                if (_rejectedGenerations.TryGetValue(session.AccountUid, out var rejected) && credential.Generation <= rejected) return;
+            IReadOnlyList<string>? ids;
+            using (EnterOrRefuse()) ids = await _discoveryProbe.Discover(template, credential.AccessToken, limit.Token);
+            if (ids is not null) _discovery.Replace(accountId, session.Binding.ProfileVersion, ids, startedAt);
+        }
+        // 凭据或维护拒绝：这次补不到，连接器请求照旧按「没发现过」拒绝并读出怎么恢复。
+        catch (SiyuRefusal) { }
+        // 超时或服务退出：同上，不重试。
+        catch (OperationCanceledException) { }
+        // 不论成败都移除，下一次缺集合时可以再补。
+        finally { lock (_sync) _discoveryFlights.Remove(accountId); }
     }
 
     /// <summary>隧道释放：归还名额，会话在收尾中且已无占用就转 Closed。</summary>

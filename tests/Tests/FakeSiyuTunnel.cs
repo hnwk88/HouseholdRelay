@@ -26,6 +26,9 @@ public sealed class FakeSiyuTunnel(OfficialHost host) : ISiyuTunnel
     /// <summary>每次报告的状态码。</summary>
     public List<int> Observed { get; } = [];
 
+    /// <summary>许可报告过的发现（模板与编号），按报告顺序。</summary>
+    public List<(byte[] Template, IReadOnlyList<string> Ids)> Discoveries { get; } = [];
+
     /// <summary>会话关闭令牌。</summary>
     public CancellationToken Closed => _closed.Token;
 

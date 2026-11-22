@@ -280,6 +280,11 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: proxy authority is stored apart from the site authority and reused", SiyuWiringTests.ProxyAuthorityIsStoredAndReused),
     ("siyu: control plane translates status codes and keeps profile bytes", SiyuWiringTests.ControlTranslatesHttp),
     ("siyu: product wiring serves the proxy with the real gate", SiyuWiringTests.ProductWiringServesProxy),
+    ("siyu: mcp server list yields only well formed ids", SiyuMcpTests.ServerListReadsIdsOnly),
+    ("siyu: response entity decodes chunked and compressed bodies for inspection", SiyuMcpTests.EntityDecodesForInspectionOnly),
+    ("siyu: proxy learns discovery before forwarding the original bytes", SiyuMcpTests.ProxyLearnsDiscoveryAndForwardsBytes),
+    ("siyu: rediscovery replays the real template with the official token", SiyuMcpTests.ProbeReplaysTemplate),
+    ("siyu: discovery is learned from clients and rediscovered once per account", SiyuSessionTests.DiscoveryIsLearnedAndRediscovered),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

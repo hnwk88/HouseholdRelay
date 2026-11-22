@@ -17,4 +17,10 @@ public interface ISiyuPermit : IAsyncDisposable
 
     /// <summary>官方回了最终状态码（或本地因 3xx 拒绝转发）时报告一次，错误归属与用量由会话层决定。</summary>
     void Observe(int status);
+
+    /// <summary>
+    /// 连接器发现（<c>GET /v1/mcp_servers</c>）官方回了 200 且读出了编号：在把回应转给客户端之前报告，会话层按这次准入时刻整份替换该账户的发现集合，
+    /// 并记下 <paramref name="requestTemplate"/>（客户端真实发出的请求头，个人令牌已抹掉）供以后单飞补发现原样重发。
+    /// </summary>
+    void ReportDiscovery(byte[] requestTemplate, IReadOnlyList<string> connectorIds);
 }

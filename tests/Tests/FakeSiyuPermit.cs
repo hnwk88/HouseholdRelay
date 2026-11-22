@@ -18,6 +18,10 @@ public sealed class FakeSiyuPermit(FakeSiyuTunnel tunnel) : ISiyuPermit
     // 同一隧道上的许可可能在不同线程报告，记录表加锁。
     public void Observe(int status) { lock (tunnel.Observed) tunnel.Observed.Add(status); }
 
+    /// <summary>记下报告的发现（模板与编号）。</summary>
+    // 同一隧道上的许可可能在不同线程报告，记录表加锁。
+    public void ReportDiscovery(byte[] requestTemplate, IReadOnlyList<string> connectorIds) { lock (tunnel.Discoveries) tunnel.Discoveries.Add((requestTemplate, connectorIds)); }
+
     /// <summary>归还什么也不做。</summary>
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

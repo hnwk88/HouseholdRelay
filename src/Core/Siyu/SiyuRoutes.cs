@@ -60,7 +60,7 @@ public static class SiyuRoutes
         {
             if (query is not null || method is not ("POST" or "GET" or "DELETE") || !path.StartsWith(McpConnectorPrefix, StringComparison.Ordinal)) return false;
             var id = path[McpConnectorPrefix.Length..];
-            if (id.Length is 0 or > MaxConnectorIdLength || !id.All(c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_' or '-')) return false;
+            if (!McpServerList.IsConnectorId(id)) return false;
             route = new SiyuRoute(SiyuPurpose.McpConnector, id);
             return true;
         }

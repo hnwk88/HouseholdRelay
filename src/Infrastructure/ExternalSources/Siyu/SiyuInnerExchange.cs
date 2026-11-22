@@ -16,6 +16,9 @@ public sealed class SiyuInnerExchange
     private readonly ISiyuTunnel _tunnel;
     private readonly IOfficialConnector _connector;
     private readonly SiyuProxyLimits _limits;
+    /// <summary>补发现模板里代替个人令牌的占位值：模板只留在内存，重发时整段换成官方令牌，个人令牌不随模板留存。</summary>
+    internal const string TemplatePlaceholder = "siyu-template";
+
     private Stream? _upstream;
     private Http1Reader? _upstreamReader;
 
@@ -72,12 +75,12 @@ public sealed class SiyuInnerExchange
             try { permit.Recheck(); }
             // 读完请求体后会话已不可用：同样一字节都不发给官方。请求体已读完，连接本可复用，但会话已失效，关闭。
             catch (SiyuRefusal refusal) { await SiyuLocalReply.Write(_inner, refusal.Status, refusal.Code, refusal.Sentence, true, closed); return false; }
-            return await Send(head, body, permit);
+            return await Send(head, route, body, permit);
         }
     }
 
     /// <summary>写给官方并转发回应；返回内层连接还能不能接着用。</summary>
-    private async Task<bool> Send(Http1RequestHead head, byte[] body, ISiyuPermit permit)
+    private async Task<bool> Send(Http1RequestHead head, SiyuRoute route, byte[] body, ISiyuPermit permit)
     {
         var cancellation = permit.Cancellation;
         if (_upstream is null)
@@ -102,6 +105,19 @@ public sealed class SiyuInnerExchange
                     DropUpstream();
                     await SiyuLocalReply.Write(_inner, 502, "redirect-refused", "官方要求跳转到别的地址，思域不在合同外跟随，这次请求没有完成。", head.Close, cancellation);
                     return !head.Close;
+                }
+                if (!response.Interim && route.Purpose == SiyuPurpose.McpServers && response.Status == 200)
+                {
+                    // 连接器发现：先读全、旁路取出编号并登记，再把头和原字节一起转给客户端，客户端拿到清单时集合已经生效。
+                    var wire = await Http1BodyBuffer.Read(_upstreamReader, response, cancellation);
+                    if (Http1Entity.Decode(wire, response.Framing, response.Fields) is { } entity && McpServerList.TryReadIds(entity, out var ids))
+                        permit.ReportDiscovery(head.WithAuthorization(TemplatePlaceholder), ids);
+                    await _inner.WriteAsync(response.Raw, cancellation);
+                    await _inner.WriteAsync(wire, cancellation);
+                    await _inner.FlushAsync(cancellation);
+                    permit.Observe(response.Status);
+                    if (response.Close || response.Framing == Http1BodyFraming.UntilClose) DropUpstream();
+                    return !(head.Close || response.Framing == Http1BodyFraming.UntilClose);
                 }
                 await _inner.WriteAsync(response.Raw, cancellation);
                 await _inner.FlushAsync(cancellation);
