@@ -7,10 +7,17 @@ using Application.Interfaces.Upstream;
 namespace HouseholdRelay.Pages;
 
 /// <summary>以已验证模型和公开地址生成说明，个人令牌永远使用占位符。</summary>
-public sealed class ConnectionModel(IConfigurationService settings, IUpstreamService upstreams, ICertificateService certificates, IClientTrustPackage trustPackage) : PageModel
+public sealed class ConnectionModel(IConfigurationService settings, IUpstreamService upstreams, ICertificateService certificates, IClientTrustPackage trustPackage,
+    Core.Configuration.RelayConfiguration startup, Siyu.SiyuHostState siyu) : PageModel
 {
     /// <summary>设置里的对外公开地址，去掉末尾斜杠后用于拼接示例；未配置时为空串，示例改用 https://YOUR_RELAY_HOST 占位。</summary>
     public string RootUrl { get; private set; } = "";
+    /// <summary>思域代理在本进程真的起来了（以本次服务启动为准）。</summary>
+    public bool SiyuActive => siyu.Active;
+    /// <summary>思域代理端口（本次服务启动时的设置）。</summary>
+    public int SiyuPort => startup.SiyuProxyPort;
+    /// <summary>旧接法的官方账户请求是否已关闭（本次服务启动时的设置）。</summary>
+    public bool LegacyOfficialClosed => startup.LegacyOfficialClosed;
     /// <summary>当前生效上游的供应商名称；没有生效上游时为「尚未选择」，旧版迁移来的未命名上游为「未命名」。</summary>
     public string UpstreamName { get; private set; } = "尚未选择";
     /// <summary>活动上游测试报告里实际验证通过的模型；只有报告允许激活时才填，否则为空，页面据此提示尚未验证。</summary>

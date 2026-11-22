@@ -26,7 +26,15 @@
         <p>先打开根地址下的 /healthz 检查浏览器证书，再运行 Claude Code 最小会话。浏览器信任不代表客户端已继承新环境；不要关闭证书校验。更换 CA 后需重新核对和安装。</p>
     </section>
 }
-<section class="card"><h2>Claude Code（PowerShell）</h2>
+<section class="card"><h2>官方账户：用 MyCoAI 的思域启动（推荐）</h2>
+    @if (Model.SiyuActive)
+    { <p>这台中转已经打开思域，代理端口 @Model.SiyuPort。</p> }
+    else
+    { <p>这台中转还没有打开思域，请管理员在项目设置里打开并重启服务后再用。</p> }
+    <p>思域是 MyCoAI 里经中转使用官方账户的启动方式。家里的电脑在 MyCoAI 里选「思域」启动 Claude Code，只要填上面的根地址和自己的个人令牌；配置目录、代理和证书都由 MyCoAI 准备，不用手设环境变量，也不改这台电脑的系统设置，用你自己的账户或别的上游启动时一切照旧。</p>
+    <p>路由器要把思域代理端口（与根地址同一个域名）转发到中转所在电脑，和根地址的端口一样。思域发出的请求和这台中转机上原生 Claude Code 发出的一样；家里电脑配置不对时，中转会直接拒绝并读出是哪一项不对、去 MyCoAI 重新连接，不会发给官方。</p>
+</section><section class="card"><h2>Claude Code（PowerShell）</h2>
+    <p>@(Model.LegacyOfficialClosed ? "这台中转已关闭旧接法的官方账户请求：下面三个变量只能用于独立 API 上游，官方账户请改用思域。" : "这是旧接法：思域上线、家里每台电脑都换过去之前照常可用，之后管理员会关闭它的官方账户请求。")</p>
     <p>完成一次性信任后，日常在 Claude Code 所用终端设置下面三个变量，再按上方推荐名称选择模型。第三个让 Claude Code 按官方直连的方式发请求，三行一起复制粘贴即可。个人令牌不要写入共享脚本、网址或截图。</p>
     <pre><code id="claude-variables">@Model.Variables</code></pre><button type="button" data-copy="claude-variables">复制三个变量</button><span class="copy-status" role="status"></span>
 </section>

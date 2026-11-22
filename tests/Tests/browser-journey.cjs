@@ -136,6 +136,10 @@ async function login(page, url) {
     assert.ok((await page.locator('main').innerText()).includes('思域已勾选，但代理没有起来：对外 HTTPS 证书没有启用'), '思域页没有读出没起来的原因：' + await page.locator('main').innerText());
     assert.ok((await page.locator('main').innerText()).includes('旧接法的官方账户请求仍然开着'), '思域页没有读出旧接法状态');
     await shot(page, '07-siyu');
+    await page.goto(url + '/Connection');
+    const connection = await page.locator('main').innerText();
+    assert.ok(connection.includes('这台中转还没有打开思域') && connection.includes('这是旧接法'), '连接说明页没有读出思域与旧接法状态：' + connection.slice(0, 400));
+    await shot(page, '08-connection');
     assert.equal((await context.request.get(url + '/Setup')).status(), 404);
     await page.setViewportSize({ width: 390, height: 844 }); await page.goto(url + '/Users'); await shot(page, '06-mobile-after-restart');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, '窄屏出现水平溢出');
