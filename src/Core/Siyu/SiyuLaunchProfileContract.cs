@@ -32,6 +32,10 @@ public static class SiyuLaunchProfileContract
         new("organizationRole", SiyuProfileValueKind.Text, Required: false, Nullable: false, InProfileVersion: true),
         new("workspaceRole", SiyuProfileValueKind.UnverifiedScalar, Required: false, Nullable: true, InProfileVersion: true),
         new("organizationName", SiyuProfileValueKind.Text, Required: false, Nullable: false, InProfileVersion: true),
+        // 2026-11-22 真实链路窗口：同一个 2.1.325 原生运行刷新资料后多出这三项（organizationType、organizationRateLimitTier 是字符串，userRateLimitTier 只见过 null）。
+        new("organizationType", SiyuProfileValueKind.Text, Required: false, Nullable: false, InProfileVersion: true),
+        new("organizationRateLimitTier", SiyuProfileValueKind.Text, Required: false, Nullable: false, InProfileVersion: true),
+        new("userRateLimitTier", SiyuProfileValueKind.UnverifiedScalar, Required: false, Nullable: true, InProfileVersion: true),
     ];
 
     /// <summary>

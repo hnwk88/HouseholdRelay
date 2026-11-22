@@ -52,6 +52,9 @@ public static class SiyuContractTests
         Check(profile.ProfileVersion.Length == 16 && profile.ProfileVersion.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'), "资料代次应是 16 个小写十六进制字符");
         var account18 = Account17.Replace("\"seatTier\": null,", "\"seatTier\": null,\n  \"planDisplayName\": \"Max 5\",", StringComparison.Ordinal);
         Check(Read(account18, Credential).AccountUuid == profile.AccountUuid, "多 planDisplayName 的 18 项形状应能读");
+        // 2026-11-22 真实链路窗口：同一个 2.1.325 原生运行刷新资料后的 21 项形状（多 organizationType、organizationRateLimitTier 两个字符串与 userRateLimitTier: null）。
+        var account21 = account18.Replace("\"seatTier\": null,", "\"seatTier\": null,\n  \"organizationType\": \"claude_max\",\n  \"organizationRateLimitTier\": \"default_claude_max_5x\",\n  \"userRateLimitTier\": null,", StringComparison.Ordinal);
+        Check(Read(account21, Credential).ProfileVersion != Read(account18, Credential).ProfileVersion, "21 项形状应能读，且多出的三项进资料代次");
         var minimal = """{"accountUuid":"0f6c2a1e-3b7d-4c55-9a10-2f4e8d9b1c01","emailAddress":"someone@example.com","profileFetchedAt":1}""";
         Check(Read(minimal, """{"scopes":["user:inference"]}""").CredentialMetadataJson.Span.SequenceEqual("""{"scopes":["user:inference"]}"""u8), "可缺项缺了不补默认值");
         Check(Encoding.UTF8.GetString(Read(Account17, """{"scopes":["user:inference"],"subscriptionType":null}""").CredentialMetadataJson.Span) == """{"scopes":["user:inference"],"subscriptionType":null}""", "null 原样是 null");
@@ -129,7 +132,7 @@ public static class SiyuContractTests
         Check(SiyuContract.MaxTunnelsPerSession >= 9 && SiyuContract.MaxSessionsPerUser >= 1, "隧道上限应盖住实测的一整趟 9 条");
         Check(SiyuContract.CreateReplayRetention >= SiyuContract.LeaseDuration && SiyuContract.ClosedRetention >= SiyuContract.LeaseDuration, "保留期不短于租约");
         Check(SiyuContract.McpDiscoveryTimeout < SiyuContract.McpDiscoveryLifetime, "发现限时应短于集合有效期");
-        Check(SiyuLaunchProfileContract.OAuthAccountFields.Count == 18 && SiyuLaunchProfileContract.OAuthAccountFields.Select(f => f.Name).Distinct(StringComparer.Ordinal).Count() == 18, "字段表 18 项且不重名");
+        Check(SiyuLaunchProfileContract.OAuthAccountFields.Count == 21 && SiyuLaunchProfileContract.OAuthAccountFields.Select(f => f.Name).Distinct(StringComparer.Ordinal).Count() == 21, "字段表 21 项且不重名");
         Check(SiyuLaunchProfileContract.OAuthAccountFields.Single(f => !f.InProfileVersion).Name == "profileFetchedAt", "只有 profileFetchedAt 不进代次");
         Check(SiyuLaunchProfileContract.OAuthAccountFields.Where(f => f.Required).Select(f => f.Name).SequenceEqual(["accountUuid", "emailAddress"]), "必有项只有 accountUuid、emailAddress");
         return Task.CompletedTask;
