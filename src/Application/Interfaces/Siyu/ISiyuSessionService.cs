@@ -12,6 +12,12 @@ public interface ISiyuSessionService
     /// <summary>本服务进程的实例编号；重启换新，旧票据随之失效。</summary>
     string ServerInstanceId { get; }
 
+    /// <summary>只核对个人令牌（控制面在读请求体之前调用，无效 401、名单读不到 503）；不碰会话。</summary>
+    Task Authorize(string? personalToken);
+
+    /// <summary>凭个人令牌列出能用于思域的官方账户（主键与显示名称），判据与建会话绑定账户同一处定义；一个都没有回空表。按上游创建先后排列。</summary>
+    Task<IReadOnlyList<SiyuAccountOption>> ListAccounts(string? personalToken);
+
     /// <summary>
     /// 凭个人令牌为一个官方账户（上游主键）建会话：核对协议、版本、入口、传输与身份代次，读启动资料、确认凭据可用，再发会话与票据。
     /// 同一使用者同一令牌同一 requestId 的重试在保留期内返回原结果；字段不同 409；会话已结束 409。

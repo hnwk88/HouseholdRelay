@@ -269,6 +269,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: launch profile is read from the account directory and checked", SiyuCredentialTests.LaunchProfileFromAccountDirectory),
     ("siyu: session create, replay, read, renew and close", SiyuSessionTests.CreateReadRenewClose),
     ("siyu: session create refuses unverified clients, stale identity, unusable accounts and over limit", SiyuSessionTests.CreateRefusals),
+    ("siyu: account list shares the session account rule and proxy credentials stay unreserved characters", SiyuSessionTests.AccountsAndProxyCredentialAlphabet),
     ("siyu: tunnels and admission follow ticket, token, discovery and rejected credential generation", SiyuSessionTests.TunnelsAndAdmission),
     ("siyu: revocation and maintenance drop sessions at once", SiyuSessionTests.RevocationAndMaintenanceDropSessions),
     ("siyu: lease expiry stops admission without waiting for the sweep", SiyuSessionTests.LeaseExpiry),

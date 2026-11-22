@@ -23,7 +23,7 @@ public sealed class RelayServer : IHttpsListener
     /// <summary>对外 HTTPS 中转宿主是否已在本进程启动；只由 serve 命令在启动成功后置为真，管理页据此提示新证书是否需要重启。</summary>
     public bool HttpsActive { get; internal set; }
 
-    /// <summary>构建对外中转宿主（只构建不启动，由调用方启动）：正式服务必须提供证书并监听所有网卡上的 <see cref="RelayConfiguration.ListenPort"/>；只有测试可传 <paramref name="testPort"/> 改为监听本机回环且允许不启用 HTTPS。限制请求体、请求头大小与超时；给了 <paramref name="siyuControl"/> 时 <c>/v1/siyu/sessions</c> 前缀交给它（思域控制面），其余请求交给 <see cref="Handle"/>。</summary>
+    /// <summary>构建对外中转宿主（只构建不启动，由调用方启动）：正式服务必须提供证书并监听所有网卡上的 <see cref="RelayConfiguration.ListenPort"/>；只有测试可传 <paramref name="testPort"/> 改为监听本机回环且允许不启用 HTTPS。限制请求体、请求头大小与超时；给了 <paramref name="siyuControl"/> 时 <c>/v1/siyu</c> 前缀交给它（思域控制面），其余请求交给 <see cref="Handle"/>。</summary>
     public WebApplication Build(X509Certificate2? certificate, int? testPort = null, X509Certificate2Collection? certificateChain = null, RequestDelegate? siyuControl = null)
     {
         if (certificate is null && testPort is null) throw new InvalidOperationException("正式服务必须启用 HTTPS。");

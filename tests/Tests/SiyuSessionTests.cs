@@ -60,6 +60,44 @@ public static class SiyuSessionTests
         await Refused(() => rig.Service.Create(Alice, request, default), 409, "session-closed", "已结束的会话不因重放复活");
     }
 
+    /// <summary>
+    /// 账户列表：未知令牌 401；只列与建会话同一判据能用的官方账户（未通过检测、已导出、不是官方登录、损坏的都不列），按名单先后，只有主键与名称；一个都没有是空表。
+    /// 代理凭据字符集：每次建会话发的 sessionId 是 32 位小写十六进制、ticket 是 43 位 base64url，两样都只含 [A-Za-z0-9_-]，转义后原样不变。
+    /// </summary>
+    public static async Task AccountsAndProxyCredentialAlphabet()
+    {
+        using var rig = new Rig();
+        await Refused(() => rig.Service.ListAccounts("hr_unknown_token_value"), 401, "personal-token-invalid", "未知令牌");
+        try { await rig.Service.Authorize(null); Check(false, "没带令牌应拒绝"); }
+        // 预期的 401：与建会话同一个原因码。
+        catch (SiyuRefusal refusal) { Check(refusal.Status == 401 && refusal.Code == "personal-token-invalid", "没带令牌 401"); }
+        await rig.Service.Authorize(Alice);
+        var spare = rig.Account with { Id = 43, Uid = "spare", Name = "备用官方账户" };
+        rig.Candidates =
+        [
+            rig.Account,
+            rig.Account with { Id = 50, State = CandidateState.Untested },
+            rig.Account with { Id = 51, ExportedAt = DateTimeOffset.UtcNow },
+            rig.Account with { Id = 52, Options = new UpstreamOptions() },
+            rig.Account with { Id = 53, Damaged = true },
+            spare,
+        ];
+        var listed = await rig.Service.ListAccounts(Bob);
+        Check(listed.SequenceEqual([new SiyuAccountOption(AccountId, "家里的官方账户"), new SiyuAccountOption(43, "备用官方账户")]), "只列能用的两家，主键与名称，按名单先后");
+        rig.Candidates = [];
+        Check((await rig.Service.ListAccounts(Alice)).Count == 0, "一个都没有是空表");
+
+        var alphabet = new System.Text.RegularExpressions.Regex("^[" + SiyuContract.ProxyCredentialAlphabet + "]+$");
+        for (var i = 0; i < SiyuContract.MaxSessionsPerUser; i++)
+        {
+            var created = await rig.Service.Create(Alice, Request("alphabet-" + i), default);
+            var (id, ticket) = (created.Session.Binding.SessionId, created.Proxy.Ticket);
+            Check(id.Length == 32 && id.All(char.IsAsciiHexDigitLower) && ticket.Length == 43, $"第 {i} 次：会话编号 32 位小写十六进制、票据 43 位");
+            Check(alphabet.IsMatch(id) && alphabet.IsMatch(ticket), $"第 {i} 次：两样只含 [A-Za-z0-9_-]");
+            Check(Uri.EscapeDataString(id) == id && Uri.EscapeDataString(ticket) == ticket, $"第 {i} 次：转义后原样不变");
+        }
+    }
+
     /// <summary>令牌、协议、版本、入口、传输、身份代次、账户、维护、人数上限的拒绝。</summary>
     public static async Task CreateRefusals()
     {
@@ -474,8 +512,12 @@ public static class SiyuSessionTests
             var request = new CertificateRequest("CN=siyu test proxy authority", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
             request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, true, 0, true));
             _authority = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
-            var upstreams = FakeProxy<IUpstreamService>.Create((method, args) => method.Name == nameof(IUpstreamService.ReadCandidate)
-                ? Task.FromResult(Account) : throw new NotSupportedException(method.Name));
+            var upstreams = FakeProxy<IUpstreamService>.Create((method, args) => method.Name switch
+            {
+                nameof(IUpstreamService.ReadCandidate) => Task.FromResult(Account),
+                nameof(IUpstreamService.ListCandidates) => Task.FromResult(Candidates ?? [Account]),
+                _ => throw new NotSupportedException(method.Name),
+            });
             var accounts = FakeProxy<IOfficialAccountLogin>.Create((method, args) => method.Name switch
             {
                 nameof(IOfficialAccountLogin.ReadLaunchProfile) => (string)args![0]! == AccountUid ? Profile : throw new InvalidOperationException("wrong account"),
@@ -504,6 +546,9 @@ public static class SiyuSessionTests
                     };
                 }), Clock, Retirements);
         }
+
+        /// <summary>上游名单（账户列表用）；null 时只有 <see cref="Account"/> 一家。</summary>
+        public IReadOnlyList<UpstreamCandidateView>? Candidates { get; set; }
 
         /// <summary>用量服务收到的调用（方法名与参数），按顺序。</summary>
         public List<(string Method, object?[] Args)> UsageCalls { get; } = [];

@@ -67,6 +67,16 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     /// <summary>本服务进程的实例编号。</summary>
     public string ServerInstanceId { get; } = RandomNumberGenerator.GetHexString(32, lowercase: true);
 
+    /// <summary>只核对个人令牌。</summary>
+    public async Task Authorize(string? personalToken) => _ = await Authenticate(personalToken);
+
+    /// <summary>凭个人令牌列出能用于思域的官方账户（判据 <see cref="Usable"/>）。</summary>
+    public async Task<IReadOnlyList<SiyuAccountOption>> ListAccounts(string? personalToken)
+    {
+        _ = await Authenticate(personalToken);
+        return (await _upstreams.ListCandidates()).Where(Usable).Select(item => new SiyuAccountOption(item.Id, item.Name)).ToArray();
+    }
+
     /// <summary>凭个人令牌为一个官方账户建会话；幂等重放、上限、身份代次、资料与凭据都核对过才发票据。</summary>
     public async Task<SiyuSessionCreated> Create(string? personalToken, SiyuCreateRequest request, CancellationToken cancellation)
     {
@@ -589,16 +599,20 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         return access;
     }
 
-    /// <summary>读要绑定的官方账户：必须是未损坏、官方登录、未导出、检测已通过的那一家。</summary>
+    /// <summary>读要绑定的官方账户：必须是 <see cref="Usable"/> 的那一家。</summary>
     private async Task<UpstreamCandidateView> ReadAccount(long officialAccountId)
     {
         UpstreamCandidateView account;
         try { account = await _upstreams.ReadCandidate(officialAccountId); }
         // 不存在或已停用：上游服务的读句是给管理员的，这里换成给使用者的。
         catch (InvalidOperationException) { throw AccountUnavailable(); }
-        if (account.Damaged || !account.Options.OfficialLogin || account.ExportedAt is not null || account.State != CandidateState.Passed) throw AccountUnavailable();
+        if (!Usable(account)) throw AccountUnavailable();
         return account;
     }
+
+    /// <summary>能用于思域的官方账户判据，唯一定义处（建会话与账户列表共用）：未损坏、官方登录、未导出、检测已通过。</summary>
+    private static bool Usable(UpstreamCandidateView account)
+        => !account.Damaged && account.Options.OfficialLogin && account.ExportedAt is null && account.State == CandidateState.Passed;
 
     /// <summary>取站点官方操作许可；维护中按维护读句拒绝。</summary>
     private IDisposable EnterOrRefuse()

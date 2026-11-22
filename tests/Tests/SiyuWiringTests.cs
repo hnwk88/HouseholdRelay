@@ -72,6 +72,7 @@ public static class SiyuWiringTests
         SiyuSessionView View(SiyuSessionState state) => new(new SiyuBinding("inst", "sess-1", 1, 11, 2, 42, 7, "0123456789abcdef", 1, "2.1.325", "sdk-cli"),
             state, new DateTimeOffset(2026, 11, 22, 8, 2, 0, TimeSpan.Zero), 40, state == SiyuSessionState.Active ? null : "closed-by-client", state == SiyuSessionState.Active ? null : "已停止。");
         var closeState = SiyuSessionState.Closed;
+        SiyuAccountOption[] accounts = [new(42, "家里的官方账户"), new(43, "备用")];
         var sessions = FakeProxy<ISiyuSessionService>.Create((method, args) =>
         {
             var token = (string?)args![0];
@@ -79,6 +80,8 @@ public static class SiyuWiringTests
             if (token is null) throw new SiyuRefusal(401, "token-invalid", "个人令牌无效。");
             return method.Name switch
             {
+                nameof(ISiyuSessionService.Authorize) => Task.CompletedTask,
+                nameof(ISiyuSessionService.ListAccounts) => Task.FromResult<IReadOnlyList<SiyuAccountOption>>(accounts),
                 nameof(ISiyuSessionService.Create) when ((SiyuCreateRequest)args[1]!).RequestId == "stale"
                     => throw new SiyuRefusal(409, "identity-version-stale", "需要重新准备。") { CurrentIdentityVersion = 9 },
                 nameof(ISiyuSessionService.Create) => Task.FromResult(new SiyuSessionCreated(View(SiyuSessionState.Active), new SiyuLaunchIdentity(new string('d', 64), oauth, credential),
@@ -92,7 +95,7 @@ public static class SiyuWiringTests
         var control = new SiyuControl(sessions);
         const string create = """{"requestId":"r1","officialAccountId":42,"expectedIdentityVersion":null,"clientProtocolVersion":1,"claudeVersion":"2.1.325","binarySha256":"x","entrypoint":"sdk-cli","transport":"nativeHttpsProxy"}""";
 
-        var (status, headers, body) = await Send(control.Handle, "POST", "", "Bearer tok", create);
+        var (status, headers, body) = await Send(control.Handle, "POST", "/sessions", "Bearer tok", create);
         Check(status == 201 && headers.CacheControl == "no-store" && calls[^1] == "Create:tok", "建会话回 201、不缓存、令牌原样交给会话服务");
         Check(body.AsSpan().IndexOf(oauth) > 0 && body.AsSpan().IndexOf(credential) > 0, "oauthAccount 与凭据资料按原字节嵌入（连空格都不变）");
         using (var json = JsonDocument.Parse(body))
@@ -105,14 +108,18 @@ public static class SiyuWiringTests
                 "回应字段齐全、名字是驼峰");
         }
 
-        (status, headers, body) = await Send(control.Handle, "POST", "", null, create);
+        (status, headers, body) = await Send(control.Handle, "POST", "/sessions", null, create);
         Check(status == 401 && headers.WWWAuthenticate.ToString().StartsWith("Bearer", StringComparison.Ordinal) && Code(body) == "token-invalid", "没带令牌回 401 带 challenge");
         foreach (var bad in new[] { "Basic tok", "Bearer ", "Bearer a b" })
         {
-            await Send(control.Handle, "POST", "", bad, create);
-            Check(calls[^1] == "Create:null", "不合格的 Authorization 当作没带：" + bad);
+            await Send(control.Handle, "POST", "/sessions", bad, create);
+            Check(calls[^1] == "Authorize:null", "不合格的 Authorization 当作没带：" + bad);
         }
-        var before = calls.Count;
+        (status, _, body) = await Send(control.Handle, "POST", "/sessions", null, "requestId=r1", "application/x-www-form-urlencoded");
+        Check(status == 401 && Code(body) == "token-invalid" && calls[^1] == "Authorize:null", "先鉴权再读请求体：没带令牌又不是 JSON 回 401，不是 415");
+        (status, _, body) = await Send(control.Handle, "PUT", "/sessions/sess-1/lease", null, "x", "text/plain");
+        Check(status == 401 && calls[^1] == "Authorize:null", "续租同样先鉴权");
+        var before = calls.Count(call => call.StartsWith("Create:", StringComparison.Ordinal));
         foreach (var (label, text, type, code) in new[]
         {
             ("多出字段", create.Replace("}", ",\"extra\":1}", StringComparison.Ordinal), "application/json", "request-malformed"),
@@ -122,33 +129,53 @@ public static class SiyuWiringTests
             ("太大", create.Replace("\"x\"", "\"" + new string('x', SiyuControl.MaxBodyBytes) + "\"", StringComparison.Ordinal), "application/json", "body-too-large"),
         })
         {
-            (status, _, body) = await Send(control.Handle, "POST", "", "Bearer tok", text, type);
+            (status, _, body) = await Send(control.Handle, "POST", "/sessions", "Bearer tok", text, type);
             Check(Code(body) == code && status is 400 or 413 or 415, $"{label}：应回 {code}，实际 {status} {Code(body)}");
         }
-        Check(calls.Count == before, "请求体不合合同时不进会话服务");
+        Check(calls.Count(call => call.StartsWith("Create:", StringComparison.Ordinal)) == before && calls[^1] == "Authorize:tok", "请求体不合合同时只鉴权、不进建会话");
 
-        (status, _, body) = await Send(control.Handle, "POST", "", "Bearer tok", create.Replace("\"r1\"", "\"stale\"", StringComparison.Ordinal));
+        (status, _, body) = await Send(control.Handle, "POST", "/sessions", "Bearer tok", create.Replace("\"r1\"", "\"stale\"", StringComparison.Ordinal));
         using (var json = JsonDocument.Parse(body))
             Check(status == 409 && json.RootElement.GetProperty("error").GetProperty("type").GetString() == "siyu_refused"
                 && json.RootElement.GetProperty("error").GetProperty("currentIdentityVersion").GetInt64() == 9, "身份代次过时回 409 带当前代次");
 
-        (status, _, _) = await Send(control.Handle, "GET", "/sess-1", "Bearer tok", null);
+        (status, _, _) = await Send(control.Handle, "GET", "/sessions/sess-1", "Bearer tok", null);
         Check(status == 200 && calls[^1] == "Read:tok", "查询回 200");
-        (status, _, _) = await Send(control.Handle, "PUT", "/sess-1/lease", "Bearer tok", """{"leaseSequence":3}""");
+        (status, _, _) = await Send(control.Handle, "PUT", "/sessions/sess-1/lease", "Bearer tok", """{"leaseSequence":3}""");
         Check(status == 200 && calls[^1] == "Renew:tok", "续租回 200，序号原样交给会话服务");
-        (status, _, body) = await Send(control.Handle, "DELETE", "/sess-1", "Bearer tok", null);
+        (status, _, body) = await Send(control.Handle, "DELETE", "/sessions/sess-1", "Bearer tok", null);
         Check(status == 204 && body.Length == 0, "已 Closed 的停止回 204、无正文");
         closeState = SiyuSessionState.Closing;
-        (status, _, body) = await Send(control.Handle, "DELETE", "/sess-1", "Bearer tok", null);
+        (status, _, body) = await Send(control.Handle, "DELETE", "/sessions/sess-1", "Bearer tok", null);
         Check(status == 202 && JsonDocument.Parse(body).RootElement.GetProperty("state").GetString() == "closing", "还在收尾的停止回 202 带 closing");
-        foreach (var (method, path) in new[] { ("GET", ""), ("POST", "/sess-1"), ("PUT", "/sess-1/other"), ("PATCH", "/sess-1"), ("GET", "/a/b/c") })
+        foreach (var (method, path) in new[] { ("GET", "/sessions"), ("POST", "/sessions/sess-1"), ("PUT", "/sessions/sess-1/other"), ("PATCH", "/sessions/sess-1"), ("GET", "/sessions/a/b/c"),
+            ("GET", ""), ("GET", "/sess-1"), ("POST", "/accounts"), ("GET", "/accounts/42"), ("GET", "/other") })
         {
             (status, _, body) = await Send(control.Handle, method, path, "Bearer tok", null);
             Check(status == 404 && Code(body) == "not-found", $"{method} {path} 不是控制面地址");
         }
 
-        (status, headers, body) = await Send(SiyuControl.Disabled, "POST", "", "Bearer tok", create);
-        Check(status == 503 && Code(body) == "siyu-disabled" && headers.CacheControl == "no-store", "没开思域时回 503 并读出怎么打开");
+        (status, headers, body) = await Send(control.Handle, "GET", "/accounts", "Bearer tok", null);
+        Check(status == 200 && headers.CacheControl == "no-store" && calls[^1] == "ListAccounts:tok", "账户列表回 200、不缓存、令牌原样交给会话服务");
+        using (var json = JsonDocument.Parse(body))
+        {
+            var root = json.RootElement;
+            var items = root.GetProperty("accounts").EnumerateArray().ToArray();
+            Check(root.EnumerateObject().Count() == 1 && items.Length == 2 && items.All(item => item.EnumerateObject().Select(p => p.Name).SequenceEqual(["officialAccountId", "displayName"]))
+                && items[0].GetProperty("officialAccountId").GetInt64() == 42 && items[0].GetProperty("displayName").GetString() == "家里的官方账户"
+                && items[1].GetProperty("officialAccountId").GetInt64() == 43, "账户列表形状是 {accounts:[{officialAccountId,displayName}]}，只有这两个字段");
+        }
+        accounts = [];
+        (status, _, body) = await Send(control.Handle, "GET", "/accounts", "Bearer tok", null);
+        Check(status == 200 && Encoding.UTF8.GetString(body) == """{"accounts":[]}""", "一个都没有回空数组，不回 404");
+        (status, headers, body) = await Send(control.Handle, "GET", "/accounts", null, null);
+        Check(status == 401 && headers.WWWAuthenticate.ToString().StartsWith("Bearer", StringComparison.Ordinal) && Code(body) == "token-invalid", "账户列表没带令牌回 401，拒绝形状与控制面一致");
+
+        foreach (var (method, path) in new[] { ("POST", "/sessions"), ("GET", "/accounts") })
+        {
+            (status, headers, body) = await Send(SiyuControl.Disabled, method, path, "Bearer tok", method == "POST" ? create : null);
+            Check(status == 503 && Code(body) == "siyu-disabled" && headers.CacheControl == "no-store", $"没开思域时 {method} {path} 回 503 并读出怎么打开");
+        }
     }
 
     /// <summary>

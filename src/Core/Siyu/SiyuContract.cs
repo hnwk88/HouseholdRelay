@@ -21,6 +21,14 @@ public static class SiyuContract
     /// <summary>已验证的入口：实测记录里只出现过 sdk-cli；交互式入口没实测，不放进来。</summary>
     public static IReadOnlyList<string> SupportedEntrypoints { get; } = ["sdk-cli"];
 
+    /// <summary>
+    /// 代理凭据（<c>HTTPS_PROXY=https://sessionId:ticket@站点:端口</c> 的用户名与密码）的字符集：
+    /// sessionId 是 32 位小写十六进制；ticket 是 32 个随机字节去掉补位的 base64url（43 个字符）。
+    /// 两样都只含 <c>[A-Za-z0-9_-]</c>，全是 RFC 3986 的非保留字符，MyCoAI 用 <c>Uri.EscapeDataString</c> 处理后原样不变。
+    /// 代理入口只做 Basic 的 base64 解码、不做百分号解码，同一个值只有一种写法。
+    /// </summary>
+    public const string ProxyCredentialAlphabet = "A-Za-z0-9_-";
+
     /// <summary>后台清扫（租约到期、终态与幂等结果过期）的间隔。</summary>
     public static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(5);
 

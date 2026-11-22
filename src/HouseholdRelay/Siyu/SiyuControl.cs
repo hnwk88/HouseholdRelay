@@ -8,14 +8,15 @@ using Core.Siyu;
 namespace HouseholdRelay.Siyu;
 
 /// <summary>
-/// 思域控制面的 HTTP 绑定，挂在站点对外 HTTPS（与中转同一端口）的 <c>/v1/siyu/sessions</c> 前缀下：
-/// <c>POST</c> 建会话（201）、<c>GET /{id}</c> 查询（200）、<c>PUT /{id}/lease</c> 续租（200）、<c>DELETE /{id}</c> 停止（Closed 回 204，Closing 回 202 带视图）。
-/// 只做 HTTP 与 JSON 的翻译，规则全在 <see cref="ISiyuSessionService"/>；个人令牌只认 <c>Authorization: Bearer</c>，不进 URL、日志或回应。所有回应 <c>Cache-Control: no-store</c>。
+/// 思域控制面的 HTTP 绑定，挂在站点对外 HTTPS（与中转同一端口）的 <c>/v1/siyu</c> 前缀下：
+/// <c>GET /accounts</c> 列可选官方账户（200，<c>{"accounts":[{"officialAccountId","displayName"}]}</c>）；
+/// <c>POST /sessions</c> 建会话（201）、<c>GET /sessions/{id}</c> 查询（200）、<c>PUT /sessions/{id}/lease</c> 续租（200）、<c>DELETE /sessions/{id}</c> 停止（Closed 回 204，Closing 回 202 带视图）。
+/// 只做 HTTP 与 JSON 的翻译，规则全在 <see cref="ISiyuSessionService"/>；个人令牌只认 <c>Authorization: Bearer</c>，不进 URL、日志或回应；带请求体的先鉴权再读体。所有回应 <c>Cache-Control: no-store</c>。
 /// </summary>
 public sealed class SiyuControl
 {
     /// <summary>挂载前缀。</summary>
-    public const string Prefix = "/v1/siyu/sessions";
+    public const string Prefix = "/v1/siyu";
 
     /// <summary>请求体上限：建会话的字段都很短，8 KiB 足够。</summary>
     internal const int MaxBodyBytes = 8 * 1024;
@@ -48,21 +49,27 @@ public sealed class SiyuControl
             var token = BearerToken(context.Request);
             var segments = (context.Request.Path.Value ?? "").Split('/', StringSplitOptions.RemoveEmptyEntries);
             var method = context.Request.Method;
-            switch (segments.Length)
+            switch (segments)
             {
-                case 0 when HttpMethods.IsPost(method):
+                case ["accounts"] when HttpMethods.IsGet(method):
+                    var accounts = await _sessions.ListAccounts(token);
+                    await Write(context, StatusCodes.Status200OK, writer => WriteAccounts(writer, accounts)); return;
+                case ["sessions"] when HttpMethods.IsPost(method):
+                    // 先鉴权再读请求体：没带或带错令牌的请求不读体，直接 401。
+                    await _sessions.Authorize(token);
                     var request = await ReadJson<SiyuCreateRequest>(context);
                     var created = await _sessions.Create(token, request, context.RequestAborted);
                     await Write(context, StatusCodes.Status201Created, writer => WriteCreated(writer, created)); return;
-                case 1 when HttpMethods.IsGet(method):
-                    var read = await _sessions.Read(token, segments[0]);
+                case ["sessions", var id] when HttpMethods.IsGet(method):
+                    var read = await _sessions.Read(token, id);
                     await Write(context, StatusCodes.Status200OK, writer => WriteView(writer, read)); return;
-                case 2 when HttpMethods.IsPut(method) && segments[1] == "lease":
+                case ["sessions", var id, "lease"] when HttpMethods.IsPut(method):
+                    await _sessions.Authorize(token);
                     var lease = await ReadJson<SiyuLeaseRequest>(context);
-                    var renewed = await _sessions.Renew(token, segments[0], lease.LeaseSequence);
+                    var renewed = await _sessions.Renew(token, id, lease.LeaseSequence);
                     await Write(context, StatusCodes.Status200OK, writer => WriteView(writer, renewed)); return;
-                case 1 when HttpMethods.IsDelete(method):
-                    var closed = await _sessions.Close(token, segments[0]);
+                case ["sessions", var id] when HttpMethods.IsDelete(method):
+                    var closed = await _sessions.Close(token, id);
                     if (closed.State == SiyuSessionState.Closed) { context.Response.StatusCode = StatusCodes.Status204NoContent; return; }
                     await Write(context, StatusCodes.Status202Accepted, writer => WriteView(writer, closed)); return;
                 default:
@@ -144,6 +151,22 @@ public sealed class SiyuControl
             writer.WriteEndObject();
             writer.WriteEndObject();
         });
+    }
+
+    /// <summary>账户列表：只有主键与显示名称；一个都没有是空数组。</summary>
+    private static void WriteAccounts(Utf8JsonWriter writer, IReadOnlyList<SiyuAccountOption> accounts)
+    {
+        writer.WriteStartObject();
+        writer.WriteStartArray("accounts");
+        foreach (var account in accounts)
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("officialAccountId", account.OfficialAccountId);
+            writer.WriteString("displayName", account.DisplayName);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteEndObject();
     }
 
     /// <summary>建会话的结果：会话视图、启动身份（oauthAccount 与凭据资料按原字节嵌入）、代理接入。</summary>
