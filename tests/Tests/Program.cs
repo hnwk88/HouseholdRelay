@@ -258,6 +258,11 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: inner handshake pins SNI and never negotiates h2", SiyuProxyTests.InnerHandshakeIsPinned),
     ("siyu: proxy authority is name constrained to the two hosts", SiyuProxyTests.ProxyAuthorityIsNameConstrained),
     ("siyu: closing the session drops the tunnel at once", SiyuProxyTests.SessionCloseDropsTunnel),
+    ("siyu: account profile table reads both real shapes and releases only listed items", SiyuContractTests.ProfileTableReadsRealShapes),
+    ("siyu: account profile outside the table is refused locally", SiyuContractTests.ProfileRefusals),
+    ("siyu: profile version changes only with relevant items", SiyuContractTests.ProfileVersionTracksRelevantChanges),
+    ("siyu: version 1 session values hang together", SiyuContractTests.ContractValuesHang),
+    ("siyu: mcp discovery set expires, replaces whole and never revives", SiyuContractTests.McpDiscoveryLifecycle),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();
