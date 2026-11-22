@@ -29,6 +29,17 @@ public static class SiyuUsageTests
             tap.Complete(true);
             Check(usage.IsStream && usage.ProtocolComplete && usage.Tokens == new UsageTokens(11, 7, 3, null), $"按 {step} 字节到达：计数 11/7/3、协议完整");
         }
+        var gzSse = new MemoryStream(); using (var zip = new GZipStream(gzSse, CompressionLevel.Fastest, true)) zip.Write(Encoding.UTF8.GetBytes(Sse));
+        var compressedStream = new UsageAccumulator(UsageKind.Inference);
+        var compressedTap = new SiyuUsageTap(compressedStream, Head("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n"));
+        var compressedWire = Chunked(gzSse.ToArray(), 13);
+        for (var offset = 0; offset < compressedWire.Length; offset += 7) compressedTap.Observe(compressedWire.AsSpan(offset, Math.Min(7, compressedWire.Length - offset)));
+        compressedTap.Complete(true);
+        Check(compressedStream.ProtocolComplete && compressedStream.Tokens == new UsageTokens(11, 7, 3, null), "gzip 压缩的事件流结束后解码，计数 11/7/3、协议完整");
+        var zstd = new UsageAccumulator(UsageKind.Inference);
+        var zstdTap = new SiyuUsageTap(zstd, Head("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Encoding: zstd\r\nContent-Length: 4\r\n\r\n"));
+        zstdTap.Observe("abcd"u8); zstdTap.Complete(true);
+        Check(zstd.ErrorType == "unreadable" && !zstd.ProtocolComplete, "zstd 解不开：记看不懂");
         var cut = new UsageAccumulator(UsageKind.Inference);
         var cutTap = new SiyuUsageTap(cut, Head("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 10\r\n\r\n"));
         var partial = Encoding.UTF8.GetBytes(Sse[..Sse.IndexOf("event: message_stop", StringComparison.Ordinal)]);

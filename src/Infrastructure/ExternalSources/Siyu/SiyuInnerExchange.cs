@@ -73,8 +73,8 @@ public sealed class SiyuInnerExchange
         {
             var body = await reader.ReadExactAsync(checked((int)head.ContentLength), permit.Cancellation);
             try { permit.Recheck(); await permit.Dispatching(body, permit.Cancellation); }
-            // 读完请求体后会话已不可用：同样一字节都不发给官方。请求体已读完，连接本可复用，但会话已失效，关闭。
-            catch (SiyuRefusal refusal) { await SiyuLocalReply.Write(_inner, refusal.Status, refusal.Code, refusal.Sentence, true, closed); return false; }
+            // 读完请求体后会话已不可用或身份核对不过：同样一字节都不发给官方；把回给客户端的状态码报给许可，用量记录与客户端看到的一致。连接关闭。
+            catch (SiyuRefusal refusal) { permit.Completed(refusal.Status, false); await SiyuLocalReply.Write(_inner, refusal.Status, refusal.Code, refusal.Sentence, true, closed); return false; }
             return await Send(head, route, body, permit);
         }
     }

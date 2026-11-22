@@ -86,7 +86,14 @@ public sealed class SiyuUsageTap
     {
         if (_events)
         {
-            if (_encoded) { _usage.Event("", "", false); _usage.Unreadable(); return; }
+            if (_encoded)
+            {
+                // 压缩的事件流：收全了才整份解码，再按事件切开（用量只要结果，不必边收边解）；解不开（如 zstd、超限）记看不懂。
+                var decoded = complete && !_overflow ? Http1Entity.Decode(_collected.ToArray(), Http1BodyFraming.Length, _head.Fields) : null;
+                _collected.SetLength(0);
+                if (decoded is null) { _usage.Event("", "", false); _usage.Unreadable(); return; }
+                Events(decoded);
+            }
             if (_collected.Length > 0) Flush(false);
             return;
         }
@@ -110,6 +117,12 @@ public sealed class SiyuUsageTap
             _collected.Write(bytes);
             return;
         }
+        Events(bytes);
+    }
+
+    /// <summary>按空行切事件交给累加器（未压缩的事件流边收边切；压缩的在结束时解码后整份切）。</summary>
+    private void Events(ReadOnlySpan<byte> bytes)
+    {
         foreach (var value in bytes)
         {
             if (_collected.Length >= MaxBytes) { _overflow = true; _collected.SetLength(0); return; }
