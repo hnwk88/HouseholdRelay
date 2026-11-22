@@ -23,4 +23,16 @@ public interface ISiyuPermit : IAsyncDisposable
     /// 并记下 <paramref name="requestTemplate"/>（客户端真实发出的请求头，个人令牌已抹掉）供以后单飞补发现原样重发。
     /// </summary>
     void ReportDiscovery(byte[] requestTemplate, IReadOnlyList<string> connectorIds);
+
+    /// <summary>这次请求的用量累加器：推理、估算、模型目录三种用途才有（与旧接法同一套用量记录），其余用途为 null。传输层把回应体旁路交给它。</summary>
+    Core.Usage.UsageAccumulator? Usage { get; }
+
+    /// <summary>
+    /// 真正写给官方之前调用一次：把用量记录标记为已发出（模型名取请求体顶层的 model）。记不下就抛 <see cref="Core.Siyu.SiyuRefusal"/> 503，这次请求不发
+    /// （与旧接法同一规则：不产生无法计量的官方调用）。没有用量记录的用途什么也不做。
+    /// </summary>
+    Task Dispatching(ReadOnlyMemory<byte> body, CancellationToken cancellation);
+
+    /// <summary>回应转发结束时报告一次：客户端实际收到的状态码，以及回应体是否完整转发。释放许可时据此写用量结束记录。</summary>
+    void Completed(int clientStatus, bool complete);
 }

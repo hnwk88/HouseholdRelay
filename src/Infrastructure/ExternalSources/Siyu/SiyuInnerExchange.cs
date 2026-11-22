@@ -72,7 +72,7 @@ public sealed class SiyuInnerExchange
         await using (permit)
         {
             var body = await reader.ReadExactAsync(checked((int)head.ContentLength), permit.Cancellation);
-            try { permit.Recheck(); }
+            try { permit.Recheck(); await permit.Dispatching(body, permit.Cancellation); }
             // 读完请求体后会话已不可用：同样一字节都不发给官方。请求体已读完，连接本可复用，但会话已失效，关闭。
             catch (SiyuRefusal refusal) { await SiyuLocalReply.Write(_inner, refusal.Status, refusal.Code, refusal.Sentence, true, closed); return false; }
             return await Send(head, route, body, permit);
@@ -102,6 +102,7 @@ public sealed class SiyuInnerExchange
                 {
                     // 不跟随、不转发跳转：本地 502，不带 Location；这条出站连接上的回应体不再读，直接丢掉连接。
                     permit.Observe(response.Status);
+                    permit.Completed(502, true);
                     DropUpstream();
                     await SiyuLocalReply.Write(_inner, 502, "redirect-refused", "官方要求跳转到别的地址，思域不在合同外跟随，这次请求没有完成。", head.Close, cancellation);
                     return !head.Close;
@@ -115,6 +116,7 @@ public sealed class SiyuInnerExchange
                     await _inner.WriteAsync(response.Raw, cancellation);
                     await _inner.WriteAsync(wire, cancellation);
                     await _inner.FlushAsync(cancellation);
+                    permit.Completed(response.Status, true);
                     permit.Observe(response.Status);
                     if (response.Close || response.Framing == Http1BodyFraming.UntilClose) DropUpstream();
                     return !(head.Close || response.Framing == Http1BodyFraming.UntilClose);
@@ -123,13 +125,18 @@ public sealed class SiyuInnerExchange
                 await _inner.FlushAsync(cancellation);
                 wroteToClient = true;
                 if (response.Interim) continue;
+                // 有用量记录的用途：回应体写给客户端的同一份字节同时交给用量旁路（只读不改）。
+                var tap = permit.Usage is { } usage ? new SiyuUsageTap(usage, response) : null;
+                Stream destination = tap is null ? _inner : new TeeStream(_inner, tap);
                 switch (response.Framing)
                 {
-                    case Http1BodyFraming.Length: await _upstreamReader.CopyExactAsync(response.ContentLength, _inner, cancellation); break;
-                    case Http1BodyFraming.Chunked: await _upstreamReader.CopyChunkedAsync(_inner, cancellation); break;
-                    case Http1BodyFraming.UntilClose: await _upstreamReader.CopyToEndAsync(_inner, cancellation); break;
+                    case Http1BodyFraming.Length: await _upstreamReader.CopyExactAsync(response.ContentLength, destination, cancellation); break;
+                    case Http1BodyFraming.Chunked: await _upstreamReader.CopyChunkedAsync(destination, cancellation); break;
+                    case Http1BodyFraming.UntilClose: await _upstreamReader.CopyToEndAsync(destination, cancellation); break;
                     case Http1BodyFraming.None: break;
                 }
+                tap?.Complete(true);
+                permit.Completed(response.Status, true);
                 permit.Observe(response.Status);
                 if (response.Close) DropUpstream();
                 return !(head.Close || response.Framing == Http1BodyFraming.UntilClose);

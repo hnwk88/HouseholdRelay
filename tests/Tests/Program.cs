@@ -285,6 +285,9 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: proxy learns discovery before forwarding the original bytes", SiyuMcpTests.ProxyLearnsDiscoveryAndForwardsBytes),
     ("siyu: rediscovery replays the real template with the official token", SiyuMcpTests.ProbeReplaysTemplate),
     ("siyu: discovery is learned from clients and rediscovered once per account", SiyuSessionTests.DiscoveryIsLearnedAndRediscovered),
+    ("siyu: usage tap counts tokens from streams and json without touching bytes", SiyuUsageTests.TapCountsTokens),
+    ("siyu: proxy feeds usage while forwarding the original bytes", SiyuUsageTests.ProxyFeedsUsageWithoutChangingBytes),
+    ("siyu: usage is started, dispatched and finished like the old path", SiyuSessionTests.UsageIsRecordedLikeTheOldPath),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();

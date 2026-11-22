@@ -4,11 +4,13 @@ using Application.Contracts.Siyu;
 using Application.Interfaces.Configuration;
 using Application.Interfaces.Siyu;
 using Application.Interfaces.Upstream;
+using Application.Interfaces.Usage;
 using Core.Configuration;
 using Core.Identity;
 using Core.Relay;
 using Core.Siyu;
 using Core.Upstream;
+using Core.Usage;
 
 namespace Application.Services.Siyu;
 
@@ -38,6 +40,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     /// <summary>每个官方账户被官方明确拒绝过的最高凭据代次；同代次及更旧的凭据不再发送，新代次照常。</summary>
     private readonly Dictionary<string, long> _rejectedGenerations = new(StringComparer.Ordinal);
     private readonly IMcpDiscoveryProbe _discoveryProbe;
+    private readonly IUsageService _usage;
     /// <summary>每个官方账户（上游主键）最近一次客户端真实发出的连接器发现请求头（个人令牌已抹掉），单飞补发现时原样重发。</summary>
     private readonly Dictionary<long, byte[]> _discoveryTemplates = [];
     /// <summary>每个官方账户进行中的补发现；同一账户只跑一份，等的人各自用自己的取消。</summary>
@@ -45,10 +48,10 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
 
     /// <summary>依赖全部必填，构造时当场判空；订阅令牌名单变化，挂上定时清扫。</summary>
     public SiyuSessionService(ClientRegistry clients, IUpstreamService upstreams, IOfficialAccountLogin officialAccounts, ISiteIdentityService siteIdentity,
-        ISiyuProxyCertificates certificates, SiyuProxyEndpoint endpoint, McpDiscoveryRegistry discovery, IMcpDiscoveryProbe discoveryProbe, TimeProvider clock, OfficialAccountRetirements retirements)
+        ISiyuProxyCertificates certificates, SiyuProxyEndpoint endpoint, McpDiscoveryRegistry discovery, IMcpDiscoveryProbe discoveryProbe, IUsageService usage, TimeProvider clock, OfficialAccountRetirements retirements)
     {
-        ArgumentNullException.ThrowIfNull(retirements); ArgumentNullException.ThrowIfNull(discoveryProbe);
-        _discoveryProbe = discoveryProbe;
+        ArgumentNullException.ThrowIfNull(retirements); ArgumentNullException.ThrowIfNull(discoveryProbe); ArgumentNullException.ThrowIfNull(usage);
+        _discoveryProbe = discoveryProbe; _usage = usage;
         ArgumentNullException.ThrowIfNull(clients); ArgumentNullException.ThrowIfNull(upstreams); ArgumentNullException.ThrowIfNull(officialAccounts);
         ArgumentNullException.ThrowIfNull(siteIdentity); ArgumentNullException.ThrowIfNull(certificates); ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(discovery); ArgumentNullException.ThrowIfNull(clock);
@@ -248,11 +251,81 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
                     throw Refuse(SiyuCloseReason.Reauthentication, 503);
                 session.Permits++;
             }
-            return new SiyuPermit(this, session, operation, credential, route, admittedAt, CancellationTokenSource.CreateLinkedTokenSource(session.Stop.Token));
         }
         // 没交出许可就归还站点许可，维护排空不会被一个被拒的请求拖住。
         catch { operation.Dispose(); throw; }
+        string? requestId = null;
+        if (UsageKindOf(route.Purpose) is { } kind)
+        {
+            requestId = Guid.NewGuid().ToString("N");
+            try { await _usage.Start(requestId, access, kind); }
+            // 记不下开始记录就不发（与旧接法同一规则）：归还站点许可与会话名额，本地拒绝。
+            catch (RelayFailure) { operation.Dispose(); ReleasePermit(session); throw UsageUnavailable(); }
+        }
+        return new SiyuPermit(this, session, operation, credential, route, admittedAt, CancellationTokenSource.CreateLinkedTokenSource(session.Stop.Token), requestId);
     }
+
+    /// <summary>思域用途对应的用量种类：推理、估算、模型目录三种记用量（与旧接法同一套），其余用途不记。</summary>
+    internal static UsageKind? UsageKindOf(SiyuPurpose purpose) => purpose switch
+    {
+        SiyuPurpose.Messages => UsageKind.Inference,
+        SiyuPurpose.CountTokens => UsageKind.Estimate,
+        SiyuPurpose.Models => UsageKind.Models,
+        _ => null,
+    };
+
+    /// <summary>写给官方之前把用量记录标记为已发出：版本取账户此刻的上游配置版本，模型取请求体顶层的 model。记不下或账户已不在就本地拒绝。</summary>
+    internal async Task DispatchUsage(SiyuSession session, string requestId, ReadOnlyMemory<byte> body)
+    {
+        UpstreamCandidateView account;
+        try { account = await _upstreams.ReadCandidate(session.Binding.OfficialAccountId); }
+        // 账户在会话期间被删：这次不发，会话随账户退役收口。
+        catch (InvalidOperationException) { throw AccountUnavailable(); }
+        try { await _usage.Dispatch(requestId, account.ExpectedVersion, session.Binding.OfficialAccountId, ModelOf(body.Span)); }
+        // 记不下已发出就不发（与旧接法同一规则）。
+        catch (RelayFailure) { throw UsageUnavailable(); }
+    }
+
+    /// <summary>
+    /// 许可释放时写用量结束：没发出是失败；会话取消且没转完是取消；没转完是中断；官方非 2xx 或错误事件是失败；事件流协议不完整是中断；其余成功。
+    /// 用量服务自己重试并计数失败，不抛。
+    /// </summary>
+    internal async Task FinishUsage(string requestId, UsageAccumulator usage, bool dispatched, int? upstreamStatus, int clientStatus, bool complete, bool cancelled, DateTimeOffset admittedAt)
+    {
+        var outcome = !dispatched ? UsageOutcome.Failed
+            : !complete ? (cancelled ? UsageOutcome.Cancelled : UsageOutcome.Interrupted)
+            : upstreamStatus is not (>= 200 and < 300) || usage.Error ? UsageOutcome.Failed
+            : usage.IsStream && !usage.ProtocolComplete ? UsageOutcome.Interrupted
+            : UsageOutcome.Succeeded;
+        var succeeded = outcome == UsageOutcome.Succeeded;
+        var money = usage.ReportedMoney is { } reported ? reported with { Completeness = usage.ProtocolComplete && succeeded ? MoneyCompleteness.Complete : MoneyCompleteness.Partial } : null;
+        await _usage.Finish(requestId, new UsageEnd(outcome, dispatched, clientStatus, upstreamStatus, (long)(_clock.GetUtcNow() - admittedAt).TotalMilliseconds,
+            usage.Completeness(dispatched, succeeded), usage.Tokens, money));
+    }
+
+    /// <summary>请求体顶层的 model 字符串；不是 JSON 对象或没有就为 null（只用于用量的单价快照，不影响转发）。</summary>
+    private static string? ModelOf(ReadOnlySpan<byte> body)
+    {
+        if (body.IsEmpty) return null;
+        try
+        {
+            var reader = new System.Text.Json.Utf8JsonReader(body);
+            if (!reader.Read() || reader.TokenType != System.Text.Json.JsonTokenType.StartObject) return null;
+            while (reader.Read() && reader.TokenType == System.Text.Json.JsonTokenType.PropertyName)
+            {
+                var isModel = reader.ValueTextEquals("model"u8);
+                if (!reader.Read()) return null;
+                if (isModel) return reader.TokenType == System.Text.Json.JsonTokenType.String ? reader.GetString() : null;
+                reader.Skip();
+            }
+            return null;
+        }
+        // 正文不是合法 JSON：没有模型名，转发照旧由官方判断。
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    /// <summary>用量记不下时的本地拒绝。</summary>
+    private static SiyuRefusal UsageUnavailable() => new(503, "usage-unavailable", "中转暂时记不下用量，这次请求没有发给官方。请稍等一会儿再试。");
 
     /// <summary>请求体读完、写给官方之前再核对一次：会话仍存活、租约未到、令牌仍有效、站点身份代次未变。</summary>
     internal void Recheck(SiyuSession session)

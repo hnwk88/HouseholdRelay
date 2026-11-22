@@ -7,6 +7,7 @@ using Application.Interfaces.Upstream;
 using Application.Services.Siyu;
 using Core.Configuration;
 using Core.Identity;
+using Core.Relay;
 using Core.Siyu;
 using Core.Upstream;
 using Microsoft.Extensions.DependencyInjection;
@@ -140,6 +141,67 @@ public static class SiyuSessionTests
         rig.Clock.Advance(TimeSpan.FromSeconds(1));
         await Refused(() => fresh.Admit(connector, Alice, default), 403, "mcp-not-discovered", "收口后的新会话没有集合");
         Check(rig.ProbeCalls.Count == 2, "账户收口清掉了模板，不再补发现");
+    }
+
+    /// <summary>
+    /// 用量：推理准入写开始（使用者与令牌、种类），已发出写账户版本、账户主键与请求体里的模型，释放写结束（结果按官方状态与完整度判定、时长按时钟）；
+    /// 非用量用途一条不记；开始或已发出写不进就本地拒绝 503 并归还站点许可。
+    /// </summary>
+    public static async Task UsageIsRecordedLikeTheOldPath()
+    {
+        using var rig = new Rig();
+        var created = await rig.Service.Create(Alice, Request("u"), default);
+        var tunnel = rig.Service.OpenTunnel(created.Session.Binding.SessionId, created.Proxy.Ticket, OfficialHost.Api)!;
+        var messages = new SiyuRoute(SiyuPurpose.Messages, null);
+        await using (var permit = await tunnel.Admit(messages, Alice, default))
+        {
+            await permit.Dispatching("{\"max_tokens\":1,\"model\":\"claude-haiku-5-5\",\"messages\":[]}"u8.ToArray(), default);
+            permit.Usage!.Json("{\"type\":\"message\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}"u8.ToArray());
+            rig.Clock.Advance(TimeSpan.FromMilliseconds(1500));
+            permit.Observe(200); permit.Completed(200, true);
+        }
+        var calls = rig.UsageCalls;
+        Check(calls.Select(call => call.Method).SequenceEqual(["Start", "Dispatch", "Finish"]), "开始、已发出、结束各一次");
+        var id = (string)calls[0].Args[0]!;
+        Check(((ClientAccess)calls[0].Args[1]!).TokenId == 11 && (Core.Usage.UsageKind)calls[0].Args[2]! == Core.Usage.UsageKind.Inference, "开始记的是这名使用者这一版令牌、推理");
+        Check((string)calls[1].Args[0]! == id && (long)calls[1].Args[1]! == rig.Account.ExpectedVersion && (long?)calls[1].Args[2] == AccountId && (string?)calls[1].Args[3] == "claude-haiku-5-5",
+            "已发出记账户版本、账户主键与模型");
+        var end = (Core.Usage.UsageEnd)calls[2].Args[1]!;
+        Check((string)calls[2].Args[0]! == id && end.Outcome == Core.Usage.UsageOutcome.Succeeded && end.Dispatched && end.Status == 200 && end.UpstreamStatus == 200
+            && end.DurationMs == 1500 && end.Tokens.Input == 4 && end.Completeness == Core.Usage.UsageCompleteness.Complete, "结束记成功、计数、时长与完整度");
+
+        calls.Clear();
+        await using (var permit = await tunnel.Admit(messages, Alice, default))
+        {
+            await permit.Dispatching("{}"u8.ToArray(), default);
+            permit.Observe(200); permit.Completed(200, false);
+        }
+        Check(((Core.Usage.UsageEnd)calls[^1].Args[1]!).Outcome == Core.Usage.UsageOutcome.Interrupted, "回应没转完记中断");
+        calls.Clear();
+        await using (var permit = await tunnel.Admit(messages, Alice, default)) { permit.Observe(529); permit.Completed(529, true); }
+        Check(calls.Count == 2 && ((Core.Usage.UsageEnd)calls[^1].Args[1]!).Outcome == Core.Usage.UsageOutcome.Failed && !((Core.Usage.UsageEnd)calls[^1].Args[1]!).Dispatched, "没发出记失败");
+
+        calls.Clear();
+        await using (var permit = await tunnel.Admit(new SiyuRoute(SiyuPurpose.Settings, null), Alice, default))
+        {
+            await permit.Dispatching("{}"u8.ToArray(), default);
+            Check(permit.Usage is null, "远程设置没有累加器");
+        }
+        Check(calls.Count == 0, "非用量用途一条不记");
+
+        rig.UsageFails = "Start";
+        await Refused(() => tunnel.Admit(messages, Alice, default), 503, "usage-unavailable", "开始写不进");
+        Check(rig.Site.Active == 0, "开始写不进时站点许可已归还");
+        rig.UsageFails = "Dispatch";
+        var held = await tunnel.Admit(messages, Alice, default);
+        try { await held.Dispatching("{}"u8.ToArray(), default); Check(false, "已发出写不进应拒绝"); }
+        // 预期的本地拒绝。
+        catch (SiyuRefusal refusal) { Check(refusal.Code == "usage-unavailable", "已发出写不进回 usage-unavailable"); }
+        await held.DisposeAsync();
+        Check(rig.Site.Active == 0, "释放后站点许可归还");
+        Check((await rig.Service.Close(Alice, created.Session.Binding.SessionId)).State == SiyuSessionState.Closing, "隧道还开着时停止是 Closing");
+        tunnel.Dispose();
+        Check((await rig.Service.Read(Alice, created.Session.Binding.SessionId)).State == SiyuSessionState.Closed, "许可都归还了，隧道一放就 Closed");
     }
 
     /// <summary>轮询等条件成立，最多 5 秒。</summary>
@@ -356,8 +418,27 @@ public static class SiyuSessionTests
                     // 记下每次补发现用的模板与官方令牌；返回值由用例设定。
                     lock (ProbeCalls) ProbeCalls.Add(((byte[])args![0]!, (string)args[1]!));
                     return ProbeResult();
+                }),
+                FakeProxy<Application.Interfaces.Usage.IUsageService>.Create((method, args) =>
+                {
+                    // 记下每次用量调用；开始、已发出可按用例设定为存储故障。
+                    lock (UsageCalls) UsageCalls.Add((method.Name, args!));
+                    return method.Name switch
+                    {
+                        "Start" when UsageFails == "Start" => Task.FromException(new RelayFailure(503, "Usage storage unavailable; request was not sent.")),
+                        "Dispatch" when UsageFails == "Dispatch" => Task.FromException(new RelayFailure(503, "Usage storage unavailable; request was not sent.")),
+                        "Start" or "Dispatch" => Task.CompletedTask,
+                        "Finish" => Task.FromResult(Core.Usage.UsageFinish.Saved),
+                        _ => throw new NotSupportedException(method.Name),
+                    };
                 }), Clock, Retirements);
         }
+
+        /// <summary>用量服务收到的调用（方法名与参数），按顺序。</summary>
+        public List<(string Method, object?[] Args)> UsageCalls { get; } = [];
+
+        /// <summary>设定哪一步用量写入失败（Start 或 Dispatch）；null 都成功。</summary>
+        public string? UsageFails { get; set; }
 
         /// <summary>补发现被调用时用的模板与官方令牌。</summary>
         public List<(byte[] Template, string AccessToken)> ProbeCalls { get; } = [];

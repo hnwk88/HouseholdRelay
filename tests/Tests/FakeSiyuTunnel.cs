@@ -42,8 +42,15 @@ public sealed class FakeSiyuTunnel(OfficialHost host) : ISiyuTunnel
         if (bearerToken != PersonalToken) throw new SiyuRefusal(401, "personal-token", "思域的个人令牌已失效。请更新此启动配置的令牌，再启动。");
         // 准入可能并发发生，记录表加锁。
         lock (Admitted) Admitted.Add(route);
-        return Task.FromResult<ISiyuPermit>(new FakeSiyuPermit(this));
+        var kind = route.Purpose switch { SiyuPurpose.Messages => Core.Usage.UsageKind.Inference, SiyuPurpose.CountTokens => Core.Usage.UsageKind.Estimate, SiyuPurpose.Models => Core.Usage.UsageKind.Models, _ => (Core.Usage.UsageKind?)null };
+        var permit = new FakeSiyuPermit(this, kind is { } value ? new Core.Usage.UsageAccumulator(value) : null);
+        // 许可可能并发发出，记录表加锁。
+        lock (Permits) Permits.Add(permit);
+        return Task.FromResult<ISiyuPermit>(permit);
     }
+
+    /// <summary>发出过的许可，按准入顺序。</summary>
+    public List<FakeSiyuPermit> Permits { get; } = [];
 
     /// <summary>再核对：标记了失效就抛 503 本地拒绝。</summary>
     public void ThrowIfRevoked()
