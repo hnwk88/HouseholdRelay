@@ -18,9 +18,15 @@ internal sealed class IdentityCommandPipeClient(IRelayInstance instance) : IIden
     public async Task<IdentityCommandResult> Send(IdentityCommand command, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(command);
-        await using var pipe = new NamedPipeClientStream(".", IdentityCommandPipe.Name(instance.State), PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-        try { await pipe.ConnectAsync(_connectWait, cancellation); }
-        // 服务在运行（占着服务锁）却连不上它的通道：多半是另一个 Windows 用户启动的服务。不保存，说清下一步。
+        // 不用 CurrentUserOnly：它拿进程令牌的「所有者」比对管道所有者，提权控制台（同一用户）的令牌所有者是 Administrators 组，会被误判成别人。
+        // 改为连上后自己核对管道所有者是不是本人（见 OwnedByCurrentUser）；服务端照旧以 CurrentUserOnly 建管道，访问控制只授予这个用户。
+        await using var pipe = new NamedPipeClientStream(".", IdentityCommandPipe.Name(instance.State), PipeDirection.InOut, PipeOptions.Asynchronous);
+        try
+        {
+            await pipe.ConnectAsync(_connectWait, cancellation);
+            if (!OwnedByCurrentUser(pipe)) throw new UnauthorizedAccessException();
+        }
+        // 服务在运行（占着服务锁）却连不上它的通道，或通道不是本人建的：多半是另一个 Windows 用户启动的服务。不保存，说清下一步。
         catch (Exception error) when (error is TimeoutException or IOException or UnauthorizedAccessException)
         {
             throw new InvalidOperationException("中转服务正在运行，但连不上它的本机管理通道，这次没有保存。请用启动服务的同一个 Windows 用户执行，或在管理页里操作。");
@@ -40,5 +46,16 @@ internal sealed class IdentityCommandPipeClient(IRelayInstance instance) : IIden
             throw new InvalidOperationException("已把请求交给运行中的中转服务，但没有等到确认，不确定是否已保存。请用 clients list 或管理页核对后再决定是否重试。");
         }
         return result ?? throw new InvalidOperationException("已把请求交给运行中的中转服务，但回应无法读懂，不确定是否已保存。请用 clients list 或管理页核对。");
+    }
+
+    /// <summary>
+    /// 管道的所有者是不是本人：等于当前用户的 SID（服务以普通权限启动时），或等于当前令牌的所有者（服务与命令行都在提权控制台里时）才算。
+    /// 防的是别的用户抢先建同名管道冒充服务。
+    /// </summary>
+    private static bool OwnedByCurrentUser(NamedPipeClientStream pipe)
+    {
+        using var current = System.Security.Principal.WindowsIdentity.GetCurrent();
+        var owner = pipe.GetAccessControl().GetOwner(typeof(System.Security.Principal.SecurityIdentifier));
+        return owner is not null && (owner.Equals(current.User) || owner.Equals(current.Owner));
     }
 }
