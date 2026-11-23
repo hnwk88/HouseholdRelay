@@ -19,10 +19,10 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
     }
 
     /// <summary>启动已构建的管理宿主与（有证书时）中转宿主，直到管理宿主关闭。</summary>
-    public async Task Run(WebApplication admin, int adminPort)
+    public async Task RunAsync(WebApplication admin, int adminPort)
     {
         ServerCertificates? loaded = null;
-        try { loaded = await certificates.LoadForServing(); }
+        try { loaded = await certificates.LoadForServingAsync(); }
         // 证书损坏或配置不符时只降级为不启用对外 HTTPS，管理网页照常启动，让操作者能在本机重新导入证书。
         // 控制台读句不变；具体是哪一类失败记进 logs\errors.log（只有类型链与阶段），管理员事后查得到。
         catch (Exception error) when (error is CryptographicException or InvalidOperationException)
@@ -30,17 +30,17 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
         using var certificate = loaded;
         await admin.StartAsync();
         if (certificate is null && config.SiyuEnabled) siyuState.Problem = "对外 HTTPS 证书没有启用，思域代理跟着没有起来。请在 HTTPS 入口页创建或导入证书后重启。";
-        await using var proxy = certificate is null || !config.SiyuEnabled ? null : await StartSiyu(certificate);
+        await using var proxy = certificate is null || !config.SiyuEnabled ? null : await StartSiyuAsync(certificate);
         siyuState.Active = proxy is not null;
-        RequestDelegate siyu = proxy is null ? Siyu.SiyuControl.Disabled : siyuControl.Value.Handle;
+        RequestDelegate siyu = proxy is null ? Siyu.SiyuControl.DisabledAsync : siyuControl.Value.HandleAsync;
         await using var api = certificate is null ? null : relay.Build(certificate.Certificate, certificateChain: certificate.Chain, siyuControl: siyu);
         if (api is not null) { await api.StartAsync(); relay.HttpsActive = true; }
         Console.WriteLine($"本机管理：http://127.0.0.1:{adminPort}；按 Ctrl+C 停止。");
         // 只在这次启动刚升级过时读；之前的升级记录留在管理首页。
         if (instance.UpgradedOnOpen && instance.LastUpgrade is { } upgrade) Console.WriteLine(upgrade.Sentence());
-        var bootstrap = await administrators.BootstrapCode();
+        var bootstrap = await administrators.BootstrapCodeAsync();
         if (bootstrap is not null) Console.WriteLine($"首次设置引导码（仅供本机输入）：{bootstrap}");
-        var mode = api is null ? null : (await certificates.ReadInfo())?.Mode;
+        var mode = api is null ? null : (await certificates.ReadInfoAsync())?.Mode;
         Console.WriteLine(api is null ? "对外 HTTPS 未启用，请在本机网页创建或导入证书并重启。" : mode == "trusted"
             ? $"HTTPS 监听端口：{config.ListenPort}；请从实际客户端验证连接。"
             : $"私有 CA HTTPS 监听端口：{config.ListenPort}；请从连接页下载公共信任包，每台客户端安装一次。");
@@ -52,7 +52,7 @@ public sealed class ServeCommand(RelayServer relay, RelayConfiguration config, I
     /// 开了思域时：先构造控制面（会话服务随之构造，订阅令牌名单与账户退役），再起代理宿主。没填对外地址、代理 CA 读写失败或端口被占用时不启用思域，
     /// 读出原因、记进 logs\errors.log，返回 null；管理页与中转照常启动，控制面回「还没有打开思域」。
     /// </summary>
-    private async Task<WebApplication?> StartSiyu(ServerCertificates certificate)
+    private async Task<WebApplication?> StartSiyuAsync(ServerCertificates certificate)
     {
         WebApplication? proxy = null;
         try

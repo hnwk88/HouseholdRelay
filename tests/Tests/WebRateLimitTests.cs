@@ -14,8 +14,8 @@ static partial class FoundationTests
     public static async Task WebRateLimitAliases(bool setup, bool alternating)
     {
         await using var fixture = await WebFixture.Create();
-        var code = (await fixture.Administrators.BootstrapCode())!;
-        if (!setup) await fixture.Administrators.Initialize(code, WebFixture.Password);
+        var code = (await fixture.Administrators.BootstrapCodeAsync())!;
+        if (!setup) await fixture.Administrators.InitializeAsync(code, WebFixture.Password);
         var page = setup ? "/Setup" : "/Login";
         string[] aliases = [page, page + "/", page.ToLowerInvariant(), page.ToUpperInvariant() + "/",
             page.ToLowerInvariant() + "/?attempt=6", page + "?attempt=7"];
@@ -57,8 +57,8 @@ static partial class FoundationTests
             // 即使预算耗尽仍能打开表单，且所有被测试的别名仍然有效。
             _ = await fixture.Csrf(alias, retryClient);
         }
-        Check(await fixture.Administrators.BootstrapCode() == (setup ? code : null), "Rate limiting must not consume the bootstrap credential");
-        Check((await fixture.Identities.List()).Count == 0);
+        Check(await fixture.Administrators.BootstrapCodeAsync() == (setup ? code : null), "Rate limiting must not consume the bootstrap credential");
+        Check((await fixture.Identities.ListAsync()).Count == 0);
         using var protectedPage = await retryClient.GetAsync(fixture.Url + "/Users");
         Check(protectedPage.StatusCode == HttpStatusCode.Redirect, "Rejected credentials must not grant management access");
     }
@@ -70,7 +70,7 @@ static partial class FoundationTests
     public static async Task WebRateLimitValidAttempts()
     {
         await using var fixture = await WebFixture.Create();
-        var code = (await fixture.Administrators.BootstrapCode())!;
+        var code = (await fixture.Administrators.BootstrapCodeAsync())!;
         foreach (var page in new[] { "/Setup", "/Login" })
         {
             var setup = page == "/Setup";

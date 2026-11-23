@@ -15,25 +15,25 @@ public sealed class UpstreamResponses : IUpstreamResponses
     private static readonly HashSet<string> _allowedHeaders = new(StringComparer.OrdinalIgnoreCase)
     { "request-id", "x-request-id", "retry-after", "x-should-retry", "anthropic-organization-id" };
 
-    /// <summary>转给客户端并计量，见 <see cref="Copy(HttpResponseMessage, IRelayReply, string, string, UsageAccumulator?, CancellationToken)"/>。</summary>
-    Task IUpstreamResponses.Copy(HttpResponseMessage upstream, IRelayReply reply, string secret, string requestId, UsageAccumulator usage, CancellationToken cancellation) =>
-        Copy(upstream, reply, secret, requestId, usage, cancellation);
+    /// <summary>转给客户端并计量，见 <see cref="CopyAsync(HttpResponseMessage, IRelayReply, string, string, UsageAccumulator?, CancellationToken)"/>。</summary>
+    Task IUpstreamResponses.CopyAsync(HttpResponseMessage upstream, IRelayReply reply, string secret, string requestId, UsageAccumulator usage, CancellationToken cancellation) =>
+        CopyAsync(upstream, reply, secret, requestId, usage, cancellation);
 
     /// <summary>转给客户端，不计量。</summary>
-    Task IUpstreamResponses.Copy(HttpResponseMessage upstream, IRelayReply reply, string secret, string requestId, CancellationToken cancellation) =>
-        Copy(upstream, reply, secret, requestId, null, cancellation);
+    Task IUpstreamResponses.CopyAsync(HttpResponseMessage upstream, IRelayReply reply, string secret, string requestId, CancellationToken cancellation) =>
+        CopyAsync(upstream, reply, secret, requestId, null, cancellation);
 
-    /// <summary>丢弃前读出错误说明，见 <see cref="Inspect"/>。</summary>
-    Task IUpstreamResponses.Inspect(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation) => Inspect(upstream, secret, usage, cancellation);
+    /// <summary>丢弃前读出错误说明，见 <see cref="InspectAsync"/>。</summary>
+    Task IUpstreamResponses.InspectAsync(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation) => InspectAsync(upstream, secret, usage, cancellation);
 
     /// <summary>脱敏文本，见 <see cref="Redact"/>。</summary>
     string IUpstreamResponses.Redact(string value, string secret) => Redact(value, secret);
 
-    /// <summary>限长读入，见 <see cref="ReadBounded"/>。</summary>
-    Task<byte[]> IUpstreamResponses.ReadBounded(Stream stream, int limit, CancellationToken cancellation) => ReadBounded(stream, limit, cancellation);
+    /// <summary>限长读入，见 <see cref="ReadBoundedAsync"/>。</summary>
+    Task<byte[]> IUpstreamResponses.ReadBoundedAsync(Stream stream, int limit, CancellationToken cancellation) => ReadBoundedAsync(stream, limit, cancellation);
 
     /// <summary>把上游响应安全地转给家庭客户端：先按 Content-Encoding 解开压缩（见 <see cref="Decompress"/>），再做脱敏与计量，回给客户端的是解开后的明文；响应头只放行请求编号、重试和限流类白名单且值中不含秘密；附加禁止缓存、禁止代理缓冲和本次中转请求编号；SSE 逐事件脱敏转发，普通 JSON 在大小上限内（成功 16 MB、错误 1 MB）整体脱敏后写出；<paramref name="usage"/> 不为空时把内容交给它统计。</summary>
-    internal static async Task Copy(HttpResponseMessage upstream, IRelayReply response, string secret, string requestId, UsageAccumulator? usage, CancellationToken cancellation)
+    internal static async Task CopyAsync(HttpResponseMessage upstream, IRelayReply response, string secret, string requestId, UsageAccumulator? usage, CancellationToken cancellation)
     {
         var excluded = upstream.Headers.Connection.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var header in upstream.Headers)
@@ -49,11 +49,11 @@ public sealed class UpstreamResponses : IUpstreamResponses
         if (upstream.Content.Headers.ContentType?.MediaType == "text/event-stream")
         {
             response.ContentType = "text/event-stream; charset=utf-8";
-            await CopyEvents(stream, response.Body, secret, cancellation, usage);
+            await CopyEventsAsync(stream, response.Body, secret, cancellation, usage);
         }
         else
         {
-            var bytes = await ReadBounded(stream, upstream.IsSuccessStatusCode ? 16 * 1024 * 1024 : 1024 * 1024, cancellation);
+            var bytes = await ReadBoundedAsync(stream, upstream.IsSuccessStatusCode ? 16 * 1024 * 1024 : 1024 * 1024, cancellation);
             byte[] safe; var unreadable = false;
             try { safe = Json(bytes, secret); }
             // 成功响应不是合法 JSON 说明协议异常，直接报 502；错误响应无法解析时换成固定错误正文，避免原文中的秘密被原样转出。
@@ -74,10 +74,10 @@ public sealed class UpstreamResponses : IUpstreamResponses
     /// 自动切换要丢弃这家的错误响应时，只为尝试记录读出错误类型与说明：正文限 1 MB 读入，脱敏后交给 <paramref name="usage"/>，不是 JSON 时标为无法解析；
     /// 一个字节也不写给客户端。读正文途中连接断了或超限时放弃，错误类型留给尝试记录按「格式不认识」读；总超时或客户端断开的取消照常抛出。
     /// </summary>
-    internal static async Task Inspect(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation)
+    internal static async Task InspectAsync(HttpResponseMessage upstream, string secret, UsageAccumulator usage, CancellationToken cancellation)
     {
         byte[] bytes;
-        try { bytes = await ReadDecoded(upstream, 1024 * 1024, cancellation); }
+        try { bytes = await ReadDecodedAsync(upstream, 1024 * 1024, cancellation); }
         // 要丢弃的响应读不全也不影响换下一家，只是说不出它为什么失败。
         catch (Exception error) when (error is IOException or HttpRequestException or RelayFailure) { return; }
         try { usage.Json(Json(bytes, secret)); }
@@ -88,7 +88,7 @@ public sealed class UpstreamResponses : IUpstreamResponses
     /// <summary>
     /// 按响应的 <c>Content-Encoding</c> 把上游响应流解开成明文，之后的脱敏与计量都在明文上做；回给家庭客户端的永远是解开后的内容（不透传压缩流）。
     /// 支持 identity（原样）、gzip、deflate（RFC 1950 zlib）、br、zstd（纯托管 ZstdSharp，无原生库）；这几种正是官方账户路径按客户端 Accept-Encoding 报给官方、官方可能回的编码。
-    /// 多层或不认识的编码一律抛 502：发给官方的 Accept-Encoding 只含这里能解的几种，所以不会出现「报了却解不开」。解压结果仍受 <see cref="ReadBounded"/> 与 SSE 单事件上限约束，压缩炸弹在解开后按超限处理。
+    /// 多层或不认识的编码一律抛 502：发给官方的 Accept-Encoding 只含这里能解的几种，所以不会出现「报了却解不开」。解压结果仍受 <see cref="ReadBoundedAsync"/> 与 SSE 单事件上限约束，压缩炸弹在解开后按超限处理。
     /// </summary>
     private static Stream Decompress(Stream source, IEnumerable<string> encodings)
     {
@@ -109,16 +109,16 @@ public sealed class UpstreamResponses : IUpstreamResponses
     /// 中转自己要解析上游回复（测试的最小调用、模型目录、账户资料、丢弃前的错误检查）时用它取正文：按 <c>Content-Encoding</c> 解开（见 <see cref="Decompress"/>）后在 <paramref name="limit"/> 内读入明文。
     /// 压缩数据损坏与不认识的编码一样抛 502 的 <see cref="RelayFailure"/>，调用方按「不支持的响应」读出，不把解压库的异常漏给页面。
     /// </summary>
-    internal static async Task<byte[]> ReadDecoded(HttpResponseMessage upstream, int limit, CancellationToken cancellation)
+    internal static async Task<byte[]> ReadDecodedAsync(HttpResponseMessage upstream, int limit, CancellationToken cancellation)
     {
         await using var raw = await upstream.Content.ReadAsStreamAsync(cancellation);
-        try { await using var stream = Decompress(raw, upstream.Content.Headers.ContentEncoding); return await ReadBounded(stream, limit, cancellation); }
+        try { await using var stream = Decompress(raw, upstream.Content.Headers.ContentEncoding); return await ReadBoundedAsync(stream, limit, cancellation); }
         // 声称压缩却解不开：按协议异常处理，和多层或不认识的编码同一口径。
         catch (Exception error) when (error is InvalidDataException or ZstdSharp.ZstdException) { throw new RelayFailure(502, "Upstream returned a corrupt compressed response."); }
     }
 
     /// <summary>把流读入内存，累计超过 <paramref name="limit"/> 字节立即抛 502，防止异常大的上游响应耗尽内存；读缓冲取自共享数组池。</summary>
-    internal static async Task<byte[]> ReadBounded(Stream stream, int limit, CancellationToken cancellation)
+    internal static async Task<byte[]> ReadBoundedAsync(Stream stream, int limit, CancellationToken cancellation)
     {
         using var memory = new MemoryStream(); var buffer = ArrayPool<byte>.Shared.Rent(32768);
         try
@@ -172,7 +172,7 @@ public sealed class UpstreamResponses : IUpstreamResponses
     private static byte[] SafeError(string message) => JsonSerializer.SerializeToUtf8Bytes(new { type = "error", error = new { type = "api_error", message } });
 
     /// <summary>按空行切分 SSE 事件，每凑齐一个完整事件就脱敏转发并立即刷新；单个事件超过 1 MB 抛 502；流结束时残留的未终止片段也会处理。</summary>
-    private static async Task CopyEvents(Stream input, Stream output, string secret, CancellationToken cancellation, UsageAccumulator? usage)
+    private static async Task CopyEventsAsync(Stream input, Stream output, string secret, CancellationToken cancellation, UsageAccumulator? usage)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(32768);
         using var frame = new MemoryStream(); var lineStart = 0;
@@ -188,19 +188,19 @@ public sealed class UpstreamResponses : IUpstreamResponses
                     var length = (int)frame.Length - lineStart - 1;
                     if (length == 0 || length == 1 && frame.GetBuffer()[lineStart] == 13)
                     {
-                        await FlushEvent(frame.ToArray(), output, secret, cancellation, usage, true);
+                        await FlushEventAsync(frame.ToArray(), output, secret, cancellation, usage, true);
                         frame.SetLength(0); lineStart = 0;
                     }
                     else lineStart = (int)frame.Length;
                 }
-            if (frame.Length != 0) await FlushEvent(frame.ToArray(), output, secret, cancellation, usage, false);
+            if (frame.Length != 0) await FlushEventAsync(frame.ToArray(), output, secret, cancellation, usage, false);
         }
         // 客户端断开、事件超限或取消时也要归还并清零池化缓冲，防止流内容残留或缓冲泄漏。
         finally { ArrayPool<byte>.Shared.Return(buffer, true); }
     }
 
     /// <summary>处理一个完整的 SSE 事件：先交给用量累加器，再把 data 部分按 JSON 脱敏重组、其余行按文本脱敏，写出后立即刷新以保持流式体验；<paramref name="terminated"/> 表示该事件是否以空行正常结束。</summary>
-    private static async Task FlushEvent(byte[] frame, Stream output, string secret, CancellationToken cancellation, UsageAccumulator? usage, bool terminated)
+    private static async Task FlushEventAsync(byte[] frame, Stream output, string secret, CancellationToken cancellation, UsageAccumulator? usage, bool terminated)
     {
         var text = Encoding.UTF8.GetString(frame); var lines = text.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
         var data = string.Join('\n', lines.Where(line => line.StartsWith("data:", StringComparison.Ordinal)).Select(line => line[5..].TrimStart(' ')));

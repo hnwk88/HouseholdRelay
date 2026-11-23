@@ -21,8 +21,8 @@ static class PageReadingTests
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
         var service = web.Upstreams;
         var active = await mock.Activate(service);
-        var spare = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mock.Options(), "fixture-spare-secret", "备用甲");
-        var last = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mock.Options(), "fixture-last-secret", "备用乙");
+        var spare = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, mock.Options(), "fixture-spare-secret", "备用甲");
+        var last = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, mock.Options(), "fixture-last-secret", "备用乙");
         var html = await Page(web, "/Upstream");
         var list = Section(html, "saved");
         Check(Regex.Matches(list, "<button[^>]*class=\"upstream-button\"").Count == 3, "Each upstream has exactly one menu button");
@@ -60,7 +60,7 @@ static class PageReadingTests
         Check(UsageLabels.Currency("USD") == "美元" && UsageLabels.Currency("CNY") == "人民币" && UsageLabels.Currency("XYZ") == "XYZ", "Currency names");
         Check(UsageLabels.Amount(0.53m, "USD") == "0.53 美元" && UsageLabelTable.Instance.Currencies["CNY"] == "人民币", "Amount reads the currency name; the script table is the same map");
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
-        var user = await web.Identities.Create("单位"); await upstream.Activate(web.Upstreams);
+        var user = await web.Identities.CreateAsync("单位"); await upstream.Activate(web.Upstreams);
         upstream.Handler = context => Json(context, new { input_tokens = 12345, output_tokens = 20, cost_usd = 0.03m });
         Check(await Call(web, user.Token, "reported") == HttpStatusCode.OK); await Settled(web, 1);
         var page = await Page(web, "/Usage");
@@ -81,15 +81,15 @@ static class PageReadingTests
     public static async Task UsageByUpstream()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
-        var user = await web.Identities.Create("筛选"); var first = await upstream.Activate(web.Upstreams);
+        var user = await web.Identities.CreateAsync("筛选"); var first = await upstream.Activate(web.Upstreams);
         Check(await Call(web, user.Token) == HttpStatusCode.OK);
         var second = await upstream.Activate(web.Upstreams, "fixture-second-upstream-secret");
         Check(await Call(web, user.Token) == HttpStatusCode.OK && await Call(web, user.Token) == HttpStatusCode.OK); await Settled(web, 3);
-        Check((await web.RelayUsage.Query(new(UpstreamCandidateId: first))).Total == 1 && (await web.RelayUsage.Query(new(UpstreamCandidateId: second))).Total == 2, "Filter keeps only that upstream's requests");
+        Check((await web.RelayUsage.QueryAsync(new(UpstreamCandidateId: first))).Total == 1 && (await web.RelayUsage.QueryAsync(new(UpstreamCandidateId: second))).Total == 2, "Filter keeps only that upstream's requests");
         try { new UsageFilter(UpstreamCandidateId: 0).Validate(); Check(false, "Upstream id 0 must be refused"); }
         // 预期的拒绝：上游主键必须是正数。
         catch (InvalidOperationException error) { Check(error.Message == "查询条件无效，请检查时间、接口、结果和页码。", error.Message); }
-        var name = (await web.Upstreams.ReadCandidate(second)).Name;
+        var name = (await web.Upstreams.ReadCandidateAsync(second)).Name;
         var page = await Page(web, "/Usage?UpstreamCandidateId=" + second);
         Check(page.Contains($"只看「{name}」这一家上游记账的请求。") && page.Contains("共请求 2 次。") && page.Contains($"<option value=\"{second}\" selected=\"selected\">"), "Usage page reads the upstream filter");
     }
@@ -103,7 +103,7 @@ static class PageReadingTests
         await using var web = await WebFixture.Create(); await web.Login();
         var none = await Page(web, "/Users");
         Check(none.Contains("还没有使用者。请在上面「添加使用者」里填显示名"), "Empty user list reads the next step");
-        var user = await web.Identities.Create("小王"); var id = user.UserId.ToString(CultureInfo.InvariantCulture);
+        var user = await web.Identities.CreateAsync("小王"); var id = user.UserId.ToString(CultureInfo.InvariantCulture);
         var listing = await Page(web, "/Users");
         Check(listing.Contains("「小王」的显示名") && listing.Contains("保存「小王」的显示名") && listing.Contains("停用「小王」（他的个人令牌立即不能用）") && listing.Contains("轮换「小王」的令牌（旧令牌立即失效）")
             && listing.Contains($"aria-labelledby=\"user-{id}-heading\""), "Buttons and sections carry the person's name");

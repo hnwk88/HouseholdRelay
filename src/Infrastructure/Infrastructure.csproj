@@ -1,5 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <!-- 外部技术实现：SQLite、DPAPI、证书、上游 HTTP、Claude Code 进程（台账 D-005）。 -->
+  <!-- 外部技术实现：SQLite、DPAPI、证书、上游 HTTP、Claude Code 进程；实现 Application 定义的接口，Application 不引用本项目。 -->
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.15" />

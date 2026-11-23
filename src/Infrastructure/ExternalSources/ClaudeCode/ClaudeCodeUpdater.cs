@@ -23,9 +23,9 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     /// <summary>升级命令原话进读句的最大字符数（含截断时补的省略号）。</summary>
     private const int QuoteLimit = 200;
     private readonly Lock _sync = new();
-    private Task<string>? running;
-    private Seen? seen;
-    private Outcome? last;
+    private Task<string>? _running;
+    private Seen? _seen;
+    private Outcome? _last;
 
     /// <summary>记下客户端与中转的版本；客户端更新、没有升级在跑、离上次失败已过 <see cref="RetryAfter"/> 时在后台起一次升级，立即返回。</summary>
     public void Observe(string? clientVersion, string relayVersion, long? clientId)
@@ -33,19 +33,19 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
         // 判断「要不要起」与「记下正在跑」在同一把锁里，并发的请求只会有一个起升级。
         lock (_sync)
         {
-            seen = new(clientVersion, clientId, relayVersion, clock.GetUtcNow());
-            if (ClaudeCodeClient.Compare(clientVersion, relayVersion) is not > 0 || running is not null) return;
-            if (last is { Succeeded: false } failed && clock.GetUtcNow() - failed.At < RetryAfter) return;
-            running = Begin();
+            _seen = new(clientVersion, clientId, relayVersion, clock.GetUtcNow());
+            if (ClaudeCodeClient.Compare(clientVersion, relayVersion) is not > 0 || _running is not null) return;
+            if (_last is { Succeeded: false } failed && clock.GetUtcNow() - failed.At < RetryAfter) return;
+            _running = BeginAsync();
         }
     }
 
     /// <summary>管理员按钮：已在升级时等那一次，否则立即起一次（不看失败间隔），返回结果句。</summary>
-    public Task<string> Update(CancellationToken cancellation)
+    public Task<string> UpdateAsync(CancellationToken cancellation)
     {
         Task<string> task;
         // 与自动升级共用同一个「正在跑」：按钮撞上后台升级时等那一次，不另起。
-        lock (_sync) task = running ??= Begin();
+        lock (_sync) task = _running ??= BeginAsync();
         return task.WaitAsync(cancellation);
     }
 
@@ -54,7 +54,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     {
         Seen? client; Outcome? outcome; bool busy;
         // 三样在同一把锁里一起读，读句里的版本、结果与「正在升级」对得上。
-        lock (_sync) { client = seen; outcome = last; busy = running is not null; }
+        lock (_sync) { client = _seen; outcome = _last; busy = _running is not null; }
         var text = new StringBuilder();
         if (client is null) text.Append("还没有发往官方账户的请求，中转与客户端的 Claude Code 版本要等第一次发往官方后才读得出。");
         else
@@ -79,14 +79,14 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     }
 
     /// <summary>在线程池上跑一次升级，结束时记下结果并放开「只跑一次」；结果句也作为任务的值交给等它的按钮。</summary>
-    private Task<string> Begin() => Task.Run(async () =>
+    private Task<string> BeginAsync() => Task.Run(async () =>
     {
         Outcome outcome;
-        try { outcome = await Upgrade(); }
+        try { outcome = await UpgradeAsync(); }
         // 升级器自己的意外：读成失败，不让后台任务的异常无人接住。
         catch (Exception error) when (error is IOException or Win32Exception or InvalidOperationException or OperationCanceledException)
         { outcome = new(clock.GetUtcNow(), false, "升级没能完成：" + Clip(error.Message)); }
-        lock (_sync) { last = outcome; running = null; }
+        lock (_sync) { _last = outcome; _running = null; }
         return outcome.Sentence;
     });
 
@@ -94,13 +94,13 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
     /// 升一次：先读当前版本，再以隔离环境跑 <c>claude update</c>（限时 10 分钟，输出最多留 64 KB），再读一次版本。版本变新算成功；
     /// 版本没变（已是能取到的最新、锁被占用、包管理器没动）或退出码非 0 算没升上去，读句带升级命令原话。
     /// </summary>
-    private async Task<Outcome> Upgrade()
+    private async Task<Outcome> UpgradeAsync()
     {
         string executable;
         try { executable = launcher.FindClaude(); }
         // 本机没装：没有可升级的。
         catch (InvalidOperationException) { return new(clock.GetUtcNow(), false, "中转所在电脑找不到 Claude Code，没有升级。请在中转所在电脑重新安装 Claude Code。"); }
-        var before = await Version();
+        var before = await VersionAsync();
         var directory = Path.Combine(Path.GetTempPath(), "HouseholdRelay-update-" + Guid.NewGuid().ToString("N"));
         var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
         IsolatedClaudeEnvironment.Apply(start, directory, proxy.Resolve(OfficialAccountLogin.OfficialTarget));
@@ -111,7 +111,7 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
             using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动 claude update。");
             process.PriorityClass = ProcessPriorityClass.BelowNormal; process.StandardInput.Close();
             using var timeout = new CancellationTokenSource(_updateLimit);
-            var output = Collect(process.StandardOutput, timeout.Token); var errors = Collect(process.StandardError, timeout.Token);
+            var output = CollectAsync(process.StandardOutput, timeout.Token); var errors = CollectAsync(process.StandardError, timeout.Token);
             try { await process.WaitForExitAsync(timeout.Token); }
             // 到了时限还没完：结束整棵进程树，按没升上去读出。
             catch (OperationCanceledException) { process.Kill(true); await process.WaitForExitAsync(); return new(clock.GetUtcNow(), false, $"升级超过 {_updateLimit.TotalMinutes} 分钟没有完成，已停下，版本仍是 {before ?? "未知"}。"); }
@@ -126,22 +126,22 @@ internal sealed partial class ClaudeCodeUpdater(IClientLauncher launcher, IUpstr
             // 没有删除权限：放弃清理。
             catch (UnauthorizedAccessException) { }
         }
-        var after = await Version();
+        var after = await VersionAsync();
         var quote = Clip(said) is { Length: > 0 } text ? $"升级命令原话：{text}" : "";
         if (ClaudeCodeClient.Compare(after, before) > 0) return new(clock.GetUtcNow(), true, $"已把中转的 Claude Code 从 {before} 升到 {after}，下一个发往官方账户的请求自动换用新身份。");
         return new(clock.GetUtcNow(), false, (exitCode == 0 ? $"没有升上去，版本仍是 {after ?? before ?? "未知"}。" : $"升级失败（退出码 {exitCode}），版本仍是 {after ?? before ?? "未知"}。") + quote);
     }
 
-    /// <summary>用现成的 <see cref="IClientLauncher.DetectUserAgent"/> 读本机 Claude Code 版本；读不出时为 null。</summary>
-    private async Task<string?> Version()
+    /// <summary>用现成的 <see cref="IClientLauncher.DetectUserAgentAsync"/> 读本机 Claude Code 版本；读不出时为 null。</summary>
+    private async Task<string?> VersionAsync()
     {
-        try { return VersionPattern().Match(await launcher.DetectUserAgent()) is { Success: true } found ? found.Value : null; }
+        try { return VersionPattern().Match(await launcher.DetectUserAgentAsync()) is { Success: true } found ? found.Value : null; }
         // 起不来、超时或认不出版本：读成未知。
         catch (Exception error) when (error is InvalidOperationException or Win32Exception or OperationCanceledException) { return null; }
     }
 
     /// <summary>读完一路输出，最多留前 64 KB；到时限时返回已读到的部分。</summary>
-    private static async Task<string> Collect(StreamReader reader, CancellationToken cancellation)
+    private static async Task<string> CollectAsync(StreamReader reader, CancellationToken cancellation)
     {
         var text = new StringBuilder(); var buffer = new char[4096];
         try

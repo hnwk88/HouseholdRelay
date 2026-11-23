@@ -12,7 +12,7 @@ internal sealed class SiyuTunnel(SiyuSessionService owner, SiyuSession session) 
     public CancellationToken Closed => session.Stop.Token;
 
     /// <summary>一次内层请求的准入。</summary>
-    public Task<ISiyuPermit> Admit(SiyuRoute route, string bearerToken, CancellationToken cancellation) => owner.Admit(session, route, bearerToken, cancellation);
+    public Task<ISiyuPermit> AdmitAsync(SiyuRoute route, string bearerToken, CancellationToken cancellation) => owner.AdmitAsync(session, route, bearerToken, cancellation);
 
     /// <summary>归还隧道名额；重复释放不重复归还。</summary>
     public void Dispose()

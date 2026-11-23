@@ -21,8 +21,8 @@ namespace Tests;
 /// </summary>
 static class DbTimeBenchmark
 {
-    private static long ticks;
-    private static long finishes;
+    private static long _ticks;
+    private static long _finishes;
 
     /// <summary>执行一次库操作并把耗时累加进总数。</summary>
     private static async Task<T> Timed<T>(Func<Task<T>> operation)
@@ -30,7 +30,7 @@ static class DbTimeBenchmark
         var started = Stopwatch.GetTimestamp();
         try { return await operation(); }
         // 成功或抛出都算这次库上耗时，失败的操作也占用了库。
-        finally { Interlocked.Add(ref ticks, Stopwatch.GetTimestamp() - started); }
+        finally { Interlocked.Add(ref _ticks, Stopwatch.GetTimestamp() - started); }
     }
 
     /// <summary>执行一次没有返回值的库操作并把耗时累加进总数。</summary>
@@ -49,20 +49,20 @@ static class DbTimeBenchmark
             services.AddSingleton(provider =>
             {
                 var scopes = provider.GetRequiredService<IServiceScopeFactory>();
-                return new ClientRegistry(IdentityService.ReadCommitted(scopes).GetAwaiter().GetResult(), () => Timed(() => IdentityService.ReadCommitted(scopes)));
+                return new ClientRegistry(IdentityService.ReadCommittedAsync(scopes).GetAwaiter().GetResult(), () => Timed(() => IdentityService.ReadCommittedAsync(scopes)));
             });
         });
-        var user = await web.Identities.Create("基准");
+        var user = await web.Identities.CreateAsync("基准");
         await upstream.Activate(web.Upstreams);
         upstream.Handler = context => Json(context, new { input_tokens = 10, output_tokens = 11 });
         var samples = new List<double>();
         for (var index = 0; index < count + 20; index++)
         {
-            var before = Interlocked.Read(ref ticks); var finished = Interlocked.Read(ref finishes);
+            var before = Interlocked.Read(ref _ticks); var finished = Interlocked.Read(ref _finishes);
             var status = await Call(web, user.Token); Check(status == HttpStatusCode.OK, $"Benchmark request {index} failed: {status}");
-            await Until(() => Interlocked.Read(ref finishes) > finished);
+            await Until(() => Interlocked.Read(ref _finishes) > finished);
             // 前 20 次是预热（连接、JIT、EF 模型），不计入。
-            if (index >= 20) samples.Add((Interlocked.Read(ref ticks) - before) * 1000.0 / Stopwatch.Frequency);
+            if (index >= 20) samples.Add((Interlocked.Read(ref _ticks) - before) * 1000.0 / Stopwatch.Frequency);
         }
         var sorted = samples.Order().ToArray();
         double Percentile(double p) => sorted[(int)Math.Ceiling(p * sorted.Length) - 1];
@@ -83,9 +83,9 @@ static class DbTimeBenchmark
     private sealed class TimedSource(IActiveUpstreamSource inner) : IActiveUpstreamSource
     {
         /// <summary>计时读活动上游。</summary>
-        public Task<UpstreamSnapshot> ReadActive() => Timed(inner.ReadActive);
+        public Task<UpstreamSnapshot> ReadActiveAsync() => Timed(inner.ReadActiveAsync);
         /// <summary>计时读备用上游。</summary>
-        public Task<IReadOnlyList<UpstreamSnapshot>> ReadStandby() => Timed(inner.ReadStandby);
+        public Task<IReadOnlyList<UpstreamSnapshot>> ReadStandbyAsync() => Timed(inner.ReadStandbyAsync);
     }
 
     /// <summary>给用量的开始、发送、结束三次写计时，结束完成时记一次。</summary>
@@ -100,22 +100,22 @@ static class DbTimeBenchmark
         /// <summary>原样转交。</summary>
         public DateTimeOffset Cutoff => inner.Cutoff;
         /// <summary>计时写开始记录。</summary>
-        public Task Start(string requestId, ClientAccess client, UsageKind kind) => Timed(() => inner.Start(requestId, client, kind));
+        public Task StartAsync(string requestId, ClientAccess client, UsageKind kind) => Timed(() => inner.StartAsync(requestId, client, kind));
         /// <summary>计时写发送标记。</summary>
-        public Task Dispatch(string requestId, long version, long? upstreamCandidateId, string? model) => Timed(() => inner.Dispatch(requestId, version, upstreamCandidateId, model));
+        public Task DispatchAsync(string requestId, long version, long? upstreamCandidateId, string? model) => Timed(() => inner.DispatchAsync(requestId, version, upstreamCandidateId, model));
         /// <summary>计时写结束结果，完成时记一次。</summary>
-        public async Task<UsageFinish> Finish(string requestId, UsageEnd result)
+        public async Task<UsageFinish> FinishAsync(string requestId, UsageEnd result)
         {
-            try { return await Timed(() => inner.Finish(requestId, result)); }
+            try { return await Timed(() => inner.FinishAsync(requestId, result)); }
             // 无论写成没写成都记一次完成，基准循环靠它判断这一请求的库操作已结束。
-            finally { Interlocked.Increment(ref finishes); }
+            finally { Interlocked.Increment(ref _finishes); }
         }
         /// <summary>原样转交。</summary>
-        public Task Recover() => inner.Recover();
+        public Task RecoverAsync() => inner.RecoverAsync();
         /// <summary>原样转交。</summary>
-        public Task<int> Cleanup(CancellationToken cancellation) => inner.Cleanup(cancellation);
+        public Task<int> CleanupAsync(CancellationToken cancellation) => inner.CleanupAsync(cancellation);
         /// <summary>原样转交。</summary>
-        public Task<UsageReport> Query(UsageFilter filter) => inner.Query(filter);
+        public Task<UsageReport> QueryAsync(UsageFilter filter) => inner.QueryAsync(filter);
         /// <summary>原样转交。</summary>
         public void MaintenanceFailure() => inner.MaintenanceFailure();
     }

@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <!--
-    服务接口、外部来源接口、跨边界数据类型与不依赖具体技术的用例服务；只引用 Core 和抽象包（台账 D-005）。
+    服务接口、外部来源接口、跨边界数据类型与不依赖具体技术的用例服务；只引用 Core 和抽象包，具体技术由 Infrastructure 实现、主程序组合，用例层不认识它们。
     数据一律经通用仓储 IRepository<T>（Core 引用的 Repositories.Abstractions）存取；引用 EF Core 只为接住 DbUpdateException 与 DbUpdateConcurrencyException，不使用 DbContext。
   -->
   <ItemGroup>

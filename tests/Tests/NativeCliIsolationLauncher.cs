@@ -39,7 +39,7 @@ sealed class NativeCliIsolationLauncher : IClientLauncher
     }
 
     /// <summary>版本查询也只在复制程序和一次性配置中进行，不继承宿主登录环境。</summary>
-    public async Task<string> DetectUserAgent()
+    public async Task<string> DetectUserAgentAsync()
     {
         using var temporary = new TestHome();
         var start = new ProcessStartInfo(FindClaude()) { WorkingDirectory = temporary.Path, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -67,7 +67,7 @@ sealed class NativeCliIsolationLauncher : IClientLauncher
     }
 
     /// <summary>测试通过上述受控参数启动，等待整个 CLI 退出后才归还。</summary>
-    public async Task<int> Run(string directory, string[] arguments)
+    public async Task<int> RunAsync(string directory, string[] arguments)
     {
         using var process = Process.Start(Prepare(directory, arguments)) ?? throw new InvalidOperationException("无法启动隔离客户端。");
         await process.WaitForExitAsync(); return process.ExitCode;

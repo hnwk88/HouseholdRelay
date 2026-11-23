@@ -61,12 +61,12 @@ static class LayeringTests
     public static async Task UnknownStoredValueIsRefused()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path);
-        var token = await process.Identities.Create("未知状态"); var user = (await process.Identities.Clients.Authenticate(token.Token))!;
-        await process.Usage.Start("mystery-1", user, UsageKind.Inference);
+        var token = await process.Identities.CreateAsync("未知状态"); var user = (await process.Identities.Clients.AuthenticateAsync(token.Token))!;
+        await process.Usage.StartAsync("mystery-1", user, UsageKind.Inference);
         using (var connection = process.Database.Open())
             RelayDatabase.Execute(connection, null, "UPDATE usage_requests SET outcome='mystery' WHERE request_id='mystery-1'");
         string? message = null;
-        try { await process.Usage.Query(new()); }
+        try { await process.Usage.QueryAsync(new()); }
         // 这里是用例期望的拒绝：接住后核对读句或类型，别的异常照常让用例失败。
         catch (Exception error) { message = ExceptionChain.Find<InvalidOperationException>(error) is { } found ? Messages(error) : error.Message; }
         Check(message is not null && message.Contains("不认识的UsageOutcome取值「mystery」", StringComparison.Ordinal) && message.Contains("可选：succeeded", StringComparison.Ordinal), message ?? "Unknown outcome was read");
@@ -102,14 +102,14 @@ static class LayeringTests
         var proxy = new SystemUpstreamProxy(() => new RelayConfiguration { DeviceId = new string('e', 64) });
         var probe = new UpstreamProbe(new ProxySettingsTests.AbsentClaudeCode(), proxy, new ProxySettingsTests.AbsentIdentity(), new FixedSiteIdentity(new string('e', 64)));
         var options = new UpstreamOptions { BaseUrl = app.Urls.Single(), AllowPrivateNetwork = true, Preset = UpstreamPreset.Compatible, AuthenticationManual = true };
-        var unavailable = await probe.Discover(new UpstreamSnapshot(1, options, "fixture-catalog-secret"), CancellationToken.None);
+        var unavailable = await probe.DiscoverAsync(new UpstreamSnapshot(1, options, "fixture-catalog-secret"), CancellationToken.None);
         Check(unavailable.Status == CatalogStatus.Failed && unavailable.UpstreamStatus == 503 && unavailable.Message.Contains("上游返回 HTTP 503", StringComparison.Ordinal)
             && unavailable.Message.Contains("上游暂时不可用", StringComparison.Ordinal), unavailable.Message);
         status = 418;
-        var teapot = await probe.Discover(new UpstreamSnapshot(1, options, "fixture-catalog-secret"), CancellationToken.None);
+        var teapot = await probe.DiscoverAsync(new UpstreamSnapshot(1, options, "fixture-catalog-secret"), CancellationToken.None);
         Check(teapot.Status == CatalogStatus.Failed && teapot.UpstreamStatus == 418 && teapot.Message.Contains("请检查地址是否填对", StringComparison.Ordinal), teapot.Message);
         status = 404;
-        var missing = await probe.Discover(new UpstreamSnapshot(1, options, "fixture-catalog-secret"), CancellationToken.None);
+        var missing = await probe.DiscoverAsync(new UpstreamSnapshot(1, options, "fixture-catalog-secret"), CancellationToken.None);
         Check(missing.Status == CatalogStatus.Unsupported && missing.UpstreamStatus is null, missing.Message);
     }
 
@@ -157,7 +157,7 @@ static class LayeringTests
                 && !text.Contains("UpstreamService.", StringComparison.Ordinal), file + " reaches past the application interfaces");
         }
         var server = File.ReadAllLines(Path.Combine(root, "src", "HouseholdRelay", "Relay", "RelayServer.cs"));
-        Check(server.Count(line => line.Contains("_forwarder.Handle(", StringComparison.Ordinal)) == 1 && server.Length < 80, "RelayServer must only bind HTTP");
+        Check(server.Count(line => line.Contains("_forwarder.HandleAsync(", StringComparison.Ordinal)) == 1 && server.Length < 80, "RelayServer must only bind HTTP");
         return Task.CompletedTask;
     }
 
@@ -183,8 +183,8 @@ static class LayeringTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create();
         var candidate = await mock.Activate(web.Upstreams);
-        await web.Pricing.Save(candidate, long180, "USD", 1, 1, null, null);
-        var user = await web.Identities.Create("长模型");
+        await web.Pricing.SaveAsync(candidate, long180, "USD", 1, 1, null, null);
+        var user = await web.Identities.CreateAsync("长模型");
         using (var request = UsageFixture.Request(web, user.Token, body: "{\"model\":\"" + at + "\",\"messages\":[]}"))
         using (var response = await web.Http.SendAsync(request)) Check(response.StatusCode == HttpStatusCode.OK);
         var report = await UsageFixture.Settled(web, 1);
@@ -286,14 +286,14 @@ static class LayeringTests
     {
         await using var mock = await UpstreamFixture.Create();
         using var home = new TestHome(); var process = new TestProcess(home.Path);
-        var version = (await process.Upstreams.ReadActive()).ActiveVersion;
-        var id = await process.Upstreams.SaveCandidate(version, mock.Options(), "fixture-overload-secret");
-        Check((await process.Upstreams.TestCandidate(id, true, CancellationToken.None)).CanActivate);
-        try { await process.Upstreams.Activate(id, version + 7); Check(false, "A stale explicit version was accepted"); }
+        var version = (await process.Upstreams.ReadActiveAsync()).ActiveVersion;
+        var id = await process.Upstreams.SaveCandidateAsync(version, mock.Options(), "fixture-overload-secret");
+        Check((await process.Upstreams.TestCandidateAsync(id, true, CancellationToken.None)).CanActivate);
+        try { await process.Upstreams.ActivateAsync(id, version + 7); Check(false, "A stale explicit version was accepted"); }
         // 这里是用例期望的拒绝：接住后核对读句或类型，别的异常照常让用例失败。
         catch (InvalidOperationException) { }
-        await process.Upstreams.Activate(id);
-        Check((await process.Upstreams.ReadActive()).UpstreamCandidateId == id);
+        await process.Upstreams.ActivateAsync(id);
+        Check((await process.Upstreams.ReadActiveAsync()).UpstreamCandidateId == id);
     }
 
     /// <summary>P-049：命令行退出码按类别固定：未知子命令是参数拒绝（1），数据目录不能用是本机环境（3）。</summary>

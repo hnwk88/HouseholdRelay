@@ -7,14 +7,14 @@ namespace Application.Interfaces.Upstream;
 public interface IUpstreamProbe
 {
     /// <summary>只读取模型目录，不发模型调用、不花额度；按认证顺序逐个尝试，返回被接受的认证方式与模型清单。</summary>
-    Task<ModelCatalog> Discover(UpstreamSnapshot snapshot, CancellationToken cancellation);
+    Task<ModelCatalog> DiscoverAsync(UpstreamSnapshot snapshot, CancellationToken cancellation);
 
     /// <summary>对快照执行一次诊断，返回不含秘密的检测报告与实际采用的配置；不改变活动上游的暂停和冷却状态。</summary>
-    Task<ProbeResult> Run(UpstreamSnapshot snapshot, CancellationToken cancellation);
+    Task<ProbeResult> RunAsync(UpstreamSnapshot snapshot, CancellationToken cancellation);
 
     /// <summary>
     /// 登录官方账户的上游：照原生登录的写法向官方取一次账户资料（GET /api/oauth/profile），返回其中的账户编号等三项；
     /// 被拒、限流、连接失败或资料形状不对时抛 <see cref="InvalidOperationException"/>，原因读给管理员、不含秘密。只在获取模型与测试时调用，正常转发不调用。
     /// </summary>
-    Task<OfficialAccountProfile> Profile(UpstreamSnapshot snapshot, CancellationToken cancellation);
+    Task<OfficialAccountProfile> ProfileAsync(UpstreamSnapshot snapshot, CancellationToken cancellation);
 }

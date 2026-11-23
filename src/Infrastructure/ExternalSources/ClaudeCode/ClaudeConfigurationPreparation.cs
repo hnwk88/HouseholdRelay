@@ -33,17 +33,17 @@ internal sealed class ClaudeConfigurationPreparation(IServiceScopeFactory scopes
         get
         {
             // 官方分支按同步属性取设备编号（本单只换存取、不改官方分支），只能在这里同步等待一次读设置；Microsoft.Data.Sqlite 的异步读在内部同步完成，没有同步上下文，不会死锁。
-            var value = ReadDeviceId().GetAwaiter().GetResult();
+            var value = ReadDeviceIdAsync().GetAwaiter().GetResult();
             if (!RelayConfiguration.IsHex(value, 64)) throw Invalid("站点设备编号缺失或损坏，请恢复完整配套备份。");
             return value;
         }
     }
 
     /// <summary>经通用仓储读出设置里的设备编号。</summary>
-    private async Task<string> ReadDeviceId()
+    private async Task<string> ReadDeviceIdAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
-        return (await scope.Repository<RelaySettings>().LoadSettings()).Snapshot().Value.DeviceId;
+        return (await scope.Repository<RelaySettings>().LoadSettingsAsync()).Snapshot().Value.DeviceId;
     }
 
     /// <summary>受控准备指定账户；现存账户配置缺失时要求恢复，不把缺损当作新账户。</summary>

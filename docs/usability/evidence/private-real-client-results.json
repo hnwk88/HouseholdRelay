@@ -444,7 +444,7 @@
     }
   ],
   "server_stopped": true,
-  "temporary_instance": "C:\\Users\\wang.kai\\AppData\\Local\\Temp\\HouseholdRelay-rework-browser-bt3rUS",
+  "temporary_instance": "%USERPROFILE%\\AppData\\Local\\Temp\\HouseholdRelay-rework-browser-bt3rUS",
   "browser": "156.0.4314.50",
   "stage": "completed",
   "private_tls": {

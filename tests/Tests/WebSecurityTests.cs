@@ -22,7 +22,7 @@ static partial class FoundationTests
             foreignHost.Headers.Host = "attacker.example";
             using var response = await fixture.Http.SendAsync(foreignHost); Check(response.StatusCode == HttpStatusCode.Forbidden);
         }
-        var code = (await fixture.Administrators.BootstrapCode())!;
+        var code = (await fixture.Administrators.BootstrapCodeAsync())!;
         using (var setup = await fixture.Http.GetAsync(fixture.Url + "/Setup"))
             Check(!(await setup.Content.ReadAsStringAsync()).Contains(code), "Setup must never serve the bootstrap code");
         var csrf = await fixture.Csrf("/Setup");
@@ -33,10 +33,10 @@ static partial class FoundationTests
         var races = await Task.WhenAll(fixture.Post("/Setup", fields), fixture.Post("/Setup", fields));
         Check(races.Count(response => response.StatusCode == HttpStatusCode.Redirect) == 1);
         foreach (var response in races) response.Dispose();
-        Check(await fixture.Administrators.IsInitialized() && await fixture.Administrators.BootstrapCode() is null);
+        Check(await fixture.Administrators.IsInitializedAsync() && await fixture.Administrators.BootstrapCodeAsync() is null);
         using (var locked = await fixture.Http.GetAsync(fixture.Url + "/Setup")) Check(locked.StatusCode == HttpStatusCode.NotFound);
 
-        var issued = await fixture.Identities.Create("个人令牌持有者");
+        var issued = await fixture.Identities.CreateAsync("个人令牌持有者");
         using var personalClient = WebFixture.NewClient(); personalClient.DefaultRequestHeaders.Authorization = new("Bearer", issued.Token);
         using (var forbidden = await personalClient.GetAsync(fixture.Url + "/Users")) Check(forbidden.StatusCode == HttpStatusCode.Redirect);
         using (var write = await fixture.Post("/Users?handler=Create", new() { ["displayName"] = "不应创建" }, personalClient))
@@ -61,10 +61,10 @@ static partial class FoundationTests
         using (var noOrigin = await fixture.Http.PostAsync(fixture.Url + "/Users?handler=Create", new FormUrlEncodedContent(new Dictionary<string, string>
             { ["displayName"] = "不应创建", ["__RequestVerificationToken"] = await fixture.Csrf("/Users") })))
             Check(noOrigin.StatusCode == HttpStatusCode.Forbidden);
-        Check((await fixture.Identities.List()).Count == 1);
+        Check((await fixture.Identities.ListAsync()).Count == 1);
         using (var create = await fixture.Post("/Users?handler=Create", new() { ["displayName"] = "网页用户", ["__RequestVerificationToken"] = await fixture.Csrf("/Users") }))
             Check(create.IsSuccessStatusCode && (await create.Content.ReadAsStringAsync()).Contains("id=\"issued-token\""));
-        Check((await fixture.Identities.List()).Count == 2);
+        Check((await fixture.Identities.ListAsync()).Count == 2);
         using (var notReady = new HttpRequestMessage(HttpMethod.Post, fixture.Url + "/v1/messages"))
         {
             notReady.Headers.Authorization = new("Bearer", issued.Token); notReady.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");

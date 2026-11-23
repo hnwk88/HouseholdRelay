@@ -6,10 +6,10 @@ namespace Application.Interfaces.Upstream;
 public interface IUpstreamPool : IDisposable
 {
     /// <summary>取得当前活动版本的连接租约，版本变化时换用新连接。</summary>
-    Task<IUpstreamLease> Acquire();
+    Task<IUpstreamLease> AcquireAsync();
 
     /// <summary>取得这次请求的尝试顺序；按候选主键各持一个连接，凭据、暂停、冷却、暂避各管各的。</summary>
-    Task<IUpstreamRoute> Route();
+    Task<IUpstreamRoute> RouteAsync();
 
     /// <summary>此刻的走法：最近一次接住请求的那家，以及暂避、冷却、暂停中的各家，供页面读出。</summary>
     UpstreamRouting Routing();

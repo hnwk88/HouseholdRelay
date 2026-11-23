@@ -6,8 +6,8 @@ namespace Application.Interfaces.Usage;
 public interface IUsagePricingService
 {
     /// <summary>列出某个已保存上游下的全部单价。</summary>
-    Task<IReadOnlyList<UsagePrice>> List(long upstreamCandidateId);
+    Task<IReadOnlyList<UsagePrice>> ListAsync(long upstreamCandidateId);
 
     /// <summary>校验模型名、币种和单价后保存到指定的已保存上游；未知单价留空。</summary>
-    Task Save(long upstreamCandidateId, string model, string currency, decimal? input, decimal? output, decimal? read, decimal? write);
+    Task SaveAsync(long upstreamCandidateId, string model, string currency, decimal? input, decimal? output, decimal? read, decimal? write);
 }

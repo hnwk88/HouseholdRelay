@@ -40,12 +40,12 @@ internal sealed class SiyuPermit(SiyuSessionService owner, SiyuSession session, 
     public void ReportDiscovery(byte[] requestTemplate, IReadOnlyList<string> connectorIds) => owner.Discovered(session, route, admittedAt, requestTemplate, connectorIds);
 
     /// <summary>写给官方之前：先核对 Messages 正文的身份两段，再把用量记录标记为已发出（只做一次）。</summary>
-    public async Task Dispatching(ReadOnlyMemory<byte> body, CancellationToken cancellation)
+    public async Task DispatchingAsync(ReadOnlyMemory<byte> body, CancellationToken cancellation)
     {
         // 先只读核对身份（Messages 的设备段与账户段），不一致就本地拒绝，用量也不记已发出。
         owner.VerifyBody(session, route, body.Span, userName);
         if (usageRequestId is null || _dispatched) return;
-        await owner.DispatchUsage(session, usageRequestId, body);
+        await owner.DispatchUsageAsync(session, usageRequestId, body);
         _dispatched = true;
     }
 
@@ -59,7 +59,7 @@ internal sealed class SiyuPermit(SiyuSessionService owner, SiyuSession session, 
         try
         {
             if (usageRequestId is not null)
-                await owner.FinishUsage(usageRequestId, Usage!, _dispatched, _upstreamStatus, _clientStatus, _complete, cancel.IsCancellationRequested, admittedAt);
+                await owner.FinishUsageAsync(usageRequestId, Usage!, _dispatched, _upstreamStatus, _clientStatus, _complete, cancel.IsCancellationRequested, admittedAt);
         }
         // 用量写完（或写失败）之后才归还，维护排空不会在用量落账前提交。
         finally

@@ -23,7 +23,7 @@ public sealed class RelayServer : IHttpsListener
     /// <summary>对外 HTTPS 中转宿主是否已在本进程启动；只由 serve 命令在启动成功后置为真，管理页据此提示新证书是否需要重启。</summary>
     public bool HttpsActive { get; internal set; }
 
-    /// <summary>构建对外中转宿主（只构建不启动，由调用方启动）：正式服务必须提供证书并监听所有网卡上的 <see cref="RelayConfiguration.ListenPort"/>；只有测试可传 <paramref name="testPort"/> 改为监听本机回环且允许不启用 HTTPS。限制请求体、请求头大小与超时；给了 <paramref name="siyuControl"/> 时 <c>/v1/siyu</c> 前缀交给它（思域控制面），其余请求交给 <see cref="Handle"/>。</summary>
+    /// <summary>构建对外中转宿主（只构建不启动，由调用方启动）：正式服务必须提供证书并监听所有网卡上的 <see cref="RelayConfiguration.ListenPort"/>；只有测试可传 <paramref name="testPort"/> 改为监听本机回环且允许不启用 HTTPS。限制请求体、请求头大小与超时；给了 <paramref name="siyuControl"/> 时 <c>/v1/siyu</c> 前缀交给它（思域控制面），其余请求交给 <see cref="HandleAsync"/>。</summary>
     public WebApplication Build(X509Certificate2? certificate, int? testPort = null, X509Certificate2Collection? certificateChain = null, RequestDelegate? siyuControl = null)
     {
         if (certificate is null && testPort is null) throw new InvalidOperationException("正式服务必须启用 HTTPS。");
@@ -50,9 +50,9 @@ public sealed class RelayServer : IHttpsListener
         var app = builder.Build();
         // 思域控制面与中转同一个站点 HTTPS 入口，按路径前缀分开；前缀之外的请求一律照旧交给转发。
         if (siyuControl is not null) app.Map(new PathString(Siyu.SiyuControl.Prefix), branch => branch.Run(siyuControl));
-        app.Run(Handle); return app;
+        app.Run(HandleAsync); return app;
     }
 
     /// <summary>中转请求入口：对外宿主直接用，管理宿主把未匹配页面的请求兜底转到这里。只把请求包成交换端口交给转发服务。</summary>
-    public Task Handle(HttpContext context) => _forwarder.Handle(new HttpRelayExchange(context));
+    public Task HandleAsync(HttpContext context) => _forwarder.HandleAsync(new HttpRelayExchange(context));
 }

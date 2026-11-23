@@ -520,15 +520,15 @@ static class TestSuite
         {
             var secret = Encoding.UTF8.GetBytes("fixture-not-a-real-account"); var encrypted = WindowsSecrets.Protect(secret);
             Check(!encrypted.AsSpan().SequenceEqual(secret)); Check(WindowsSecrets.Unprotect(encrypted).AsSpan().SequenceEqual(secret));
-            var process = new TestProcess(root); var manager = process.Get<ManagementCommands>(); await manager.Initialize("localhost", 5433, 8787);
+            var process = new TestProcess(root); var manager = process.Get<ManagementCommands>(); await manager.InitializeAsync("localhost", 5433, 8787);
             var identities = process.Identities;
-            await identities.Create("书房", "study"); var issued = await identities.Create("卧室", "bedroom"); await identities.Create("公司", "office");
-            var config = await manager.Read(); Check(config.Clients.Count == 3);
+            await identities.CreateAsync("书房", "study"); var issued = await identities.CreateAsync("卧室", "bedroom"); await identities.CreateAsync("公司", "office");
+            var config = await manager.ReadAsync(); Check(config.Clients.Count == 3);
             Check(!Directory.Exists(Path.Combine(root, "clients")), "New installations must not export all plaintext tokens");
-            await manager.ManageClient("disable", "office"); Check(!(await manager.Read()).Clients.Single(c => c.Name == "office").Enabled);
-            var changed = await identities.Rotate(issued.UserId); Check(issued.Token != changed.Token);
-            Check(await identities.Clients.Authenticate(issued.Token) is null && await identities.Clients.Authenticate(changed.Token) is not null);
-            var pfx = (await process.Settings.LoadCertificate())!;
+            await manager.ManageClientAsync("disable", "office"); Check(!(await manager.ReadAsync()).Clients.Single(c => c.Name == "office").Enabled);
+            var changed = await identities.RotateAsync(issued.UserId); Check(issued.Token != changed.Token);
+            Check(await identities.Clients.AuthenticateAsync(issued.Token) is null && await identities.Clients.AuthenticateAsync(changed.Token) is not null);
+            var pfx = (await process.Settings.LoadCertificateAsync())!;
             using var certificate = X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.EphemeralKeySet);
             Check(certificate.HasPrivateKey); CryptographicOperations.ZeroMemory(pfx);
         }
@@ -704,9 +704,9 @@ sealed class Tunnel : IAsyncDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly ConcurrentBag<Task> _connections = [];
     private readonly Task _loop;
-    private int accepted;
+    private int _accepted;
     /// <summary>隧道已接受的 TCP 连接数，超时诊断时用来判断客户端是否连上了隧道。</summary>
-    public int Accepted => Volatile.Read(ref accepted);
+    public int Accepted => Volatile.Read(ref _accepted);
     /// <summary>隧道在本机回环地址上实际监听的端口。</summary>
     public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
     /// <summary>开始在随机端口监听，并启动后台接受循环，把连接转发到本机的目标端口。</summary>
@@ -714,7 +714,7 @@ sealed class Tunnel : IAsyncDisposable
     /// <summary>循环接受客户端连接，计数后交给 <see cref="Forward"/> 转发，直到隧道停止。</summary>
     private async Task Accept(int destination)
     {
-        try { while (!_stop.IsCancellationRequested) { var client = await _listener.AcceptTcpClientAsync(_stop.Token); Interlocked.Increment(ref accepted); _connections.Add(Forward(client, destination)); } }
+        try { while (!_stop.IsCancellationRequested) { var client = await _listener.AcceptTcpClientAsync(_stop.Token); Interlocked.Increment(ref _accepted); _connections.Add(Forward(client, destination)); } }
         // 释放隧道时取消接受循环属于正常退出，不视为错误。
         catch (OperationCanceledException) { }
     }

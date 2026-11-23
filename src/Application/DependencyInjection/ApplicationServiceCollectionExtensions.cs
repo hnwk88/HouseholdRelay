@@ -22,7 +22,9 @@ public static class ApplicationServiceCollectionExtensions
     /// <summary>登记配置、使用者、管理员、上游、用量与费率服务，鉴权名单，默认时钟和默认（丢弃型）事件日志。</summary>
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
+        // 提供当前时刻；选 Singleton 的原因：系统时钟无状态。用 TryAdd，测试与独立中转先登记的受控时钟不被覆盖。
         services.TryAddSingleton(TimeProvider.System);
+        // 默认丢弃中转事件；选 Singleton 的原因：无状态。用 TryAdd，正式服务先登记的事件日志（写 events.log）不被覆盖。
         services.TryAddSingleton<IRelayEventLog, NullRelayEventLog>();
         // 负责限时限量记录协议诊断；选 Singleton 的原因：诊断开关与已记条数全进程共享一份。
         services.AddSingleton<IProtocolDiagnostics, ProtocolDiagnostics>();
@@ -31,7 +33,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton(provider =>
         {
             var scopes = provider.GetRequiredService<IServiceScopeFactory>();
-            return new ClientRegistry(IdentityService.ReadCommitted(scopes).GetAwaiter().GetResult(), () => IdentityService.ReadCommitted(scopes));
+            return new ClientRegistry(IdentityService.ReadCommittedAsync(scopes).GetAwaiter().GetResult(), () => IdentityService.ReadCommittedAsync(scopes));
         });
         // 维护实例设置的读取与按版本保存；选 Singleton 的原因：数据每次经独立作用域的仓储读写，服务本身无状态，全进程共用。
         services.AddSingleton<IConfigurationService, ConfigurationService>();
@@ -47,20 +49,24 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<Core.Upstream.OfficialAccountRetirements>();
         // 维护已保存上游、测试与激活；选 Singleton 的原因：测试与激活的状态都存在库里，服务本身无状态，每次经独立作用域的仓储读写。
         services.AddSingleton<IUpstreamService, UpstreamService>();
+        // 转发要的「当前活动上游」由上游服务提供：同一个实例换个接口取，不另造一份。
         services.AddSingleton<IActiveUpstreamSource>(provider => provider.GetRequiredService<IUpstreamService>());
         // 负责获取模型与测试的后台调度；选 Singleton 的原因：进行中的检测与最近的记录只在内存里，全进程共享一份，页面按编号查。
         services.AddSingleton<UpstreamChecks>();
+        // 页面按接口取、后台服务按类型取，都是上面同一个实例。
         services.AddSingleton<IUpstreamChecks>(provider => provider.GetRequiredService<UpstreamChecks>());
         // 负责用量记录的写入、清理与查询；选 Singleton 的原因：写入队列与失败计数必须全进程共享。
         services.AddSingleton<IUsageService, UsageService>();
         // 维护按上游、按模型的单价；选 Singleton 的原因：数据每次经独立作用域的仓储读写，服务本身无状态。
         services.AddSingleton<IUsagePricingService, UsagePricingService>();
+        // 负责启动恢复与每小时一次的 40 天用量清理；选 Singleton 的原因：清理计时与进行中标记全进程一份，后台服务登记取的就是它。
         services.AddSingleton<UsageMaintenance>();
         // 负责按官方账户与资料代次记 MCP 发现集合；选 Singleton 的原因：集合只存内存，会话层与代理准入共用一份。
         services.AddSingleton(provider => new Core.Siyu.McpDiscoveryRegistry(provider.GetRequiredService<TimeProvider>()));
         // 维护思域会话的唯一登记处并负责准入；选 Singleton 的原因：会话、票据哈希与订阅只存内存，控制面与代理入口必须是同一份。
         // 它在构造时订阅令牌名单与账户退役，所以正式服务开了思域就在启动时先解析它（见 serve 命令），不能等第一个请求。
         services.AddSingleton<Services.Siyu.SiyuSessionService>();
+        // 控制面按会话接口取、代理入口按准入接口取，都是上面同一个实例。
         services.AddSingleton<Interfaces.Siyu.ISiyuSessionService>(provider => provider.GetRequiredService<Services.Siyu.SiyuSessionService>());
         services.AddSingleton<Interfaces.Siyu.ISiyuGate>(provider => provider.GetRequiredService<Services.Siyu.SiyuSessionService>());
         return services;

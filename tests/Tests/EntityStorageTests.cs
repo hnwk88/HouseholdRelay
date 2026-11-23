@@ -96,8 +96,8 @@ static class EntityStorageTests
     public static async Task ConcurrentUpstreamEdits()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path);
-        var version = (await process.Upstreams.ReadOverview()).Version;
-        var id = await process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://race.example.com" }, "sk-race-0001", "甲家");
+        var version = (await process.Upstreams.ReadOverviewAsync()).Version;
+        var id = await process.Upstreams.SaveCandidateAsync(version, new UpstreamOptions { BaseUrl = "https://race.example.com" }, "sk-race-0001", "甲家");
         var scopes = process.Get<IServiceScopeFactory>();
         await using (var first = scopes.CreateAsyncScope())
         await using (var second = scopes.CreateAsyncScope())
@@ -111,11 +111,11 @@ static class EntityStorageTests
             catch (DbUpdateConcurrencyException) { conflicted = true; }
             Check(conflicted, "The later commit must get DbUpdateConcurrencyException");
         }
-        Check((await process.Upstreams.ReadCandidate(id)).Name == "先提交", "The first commit must survive");
+        Check((await process.Upstreams.ReadCandidateAsync(id)).Name == "先提交", "The first commit must survive");
         using (var connection = process.Database.Open())
             RelayDatabase.Execute(connection, null, "CREATE TRIGGER ignore_candidate_update BEFORE UPDATE ON upstream_candidates BEGIN SELECT RAISE(IGNORE); END");
         string? message = null;
-        try { await process.Upstreams.Rename(id, "改不成"); }
+        try { await process.Upstreams.RenameAsync(id, "改不成"); }
         // 影响行数为 0 时 EF 抛并发冲突，应用层要把它读成中文下一步；接住的读句就是要验证的结果。
         catch (InvalidOperationException error) { message = error.Message; }
         Check(message == "这个上游刚被另一页面或命令改过，请重新加载页面再试。", message ?? "Rename must be refused");
@@ -125,16 +125,16 @@ static class EntityStorageTests
     public static async Task CleanupDeletesPhysically()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path);
-        var token = await process.Identities.Create("清理"); var user = (await process.Identities.Clients.Authenticate(token.Token))!;
-        var version = (await process.Upstreams.ReadOverview()).Version;
+        var token = await process.Identities.CreateAsync("清理"); var user = (await process.Identities.Clients.AuthenticateAsync(token.Token))!;
+        var version = (await process.Upstreams.ReadOverviewAsync()).Version;
         foreach (var id in new[] { "old-1", "old-2", "fresh" })
         {
-            await process.Usage.Start(id, user, UsageKind.Inference); await process.Usage.Dispatch(id, version, null, "m");
-            Check(await process.Usage.Finish(id, new UsageEnd(UsageOutcome.Succeeded, true, 200, 200, 1, UsageCompleteness.Complete, new(1, 2)) { Attempts = [new UpstreamAttempt(1, null, version, DateTimeOffset.UtcNow)] }) == Core.Usage.UsageFinish.Saved);
+            await process.Usage.StartAsync(id, user, UsageKind.Inference); await process.Usage.DispatchAsync(id, version, null, "m");
+            Check(await process.Usage.FinishAsync(id, new UsageEnd(UsageOutcome.Succeeded, true, 200, 200, 1, UsageCompleteness.Complete, new(1, 2)) { Attempts = [new UpstreamAttempt(1, null, version, DateTimeOffset.UtcNow)] }) == Core.Usage.UsageFinish.Saved);
         }
         using (var connection = process.Database.Open())
             RelayDatabase.Execute(connection, null, "UPDATE usage_requests SET request_started_at=$old WHERE request_id LIKE 'old-%'", ("$old", DateTimeOffset.UtcNow.AddDays(-41).UtcTicks));
-        Check(await process.Usage.Cleanup() == 2, "Two expired rows are cleaned");
+        Check(await process.Usage.CleanupAsync() == 2, "Two expired rows are cleaned");
         using (var connection = process.Database.Open())
         {
             Check(Convert.ToInt64(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM usage_requests")) == 1
@@ -148,9 +148,9 @@ static class EntityStorageTests
     public static async Task DeletedUpstreamIsSoft()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path);
-        var version = (await process.Upstreams.ReadOverview()).Version;
-        var id = await process.Upstreams.SaveCandidate(version, new UpstreamOptions { BaseUrl = "https://soft.example.com" }, "sk-soft-0001", "软删");
-        await process.Upstreams.Delete(id);
+        var version = (await process.Upstreams.ReadOverviewAsync()).Version;
+        var id = await process.Upstreams.SaveCandidateAsync(version, new UpstreamOptions { BaseUrl = "https://soft.example.com" }, "sk-soft-0001", "软删");
+        await process.Upstreams.DeleteAsync(id);
         await using (var scope = process.Get<IServiceScopeFactory>().CreateAsyncScope())
         {
             var candidates = scope.ServiceProvider.GetRequiredService<IRepository<UpstreamCandidate>>();

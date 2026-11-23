@@ -33,7 +33,7 @@ public sealed class FakeSiyuPermit(FakeSiyuTunnel tunnel, UsageAccumulator? usag
     public void ReportDiscovery(byte[] requestTemplate, IReadOnlyList<string> connectorIds) { lock (tunnel.Discoveries) tunnel.Discoveries.Add((requestTemplate, connectorIds)); }
 
     /// <summary>记下已发出的请求体。</summary>
-    public Task Dispatching(ReadOnlyMemory<byte> body, CancellationToken cancellation) { DispatchedBody = body.ToArray(); return Task.CompletedTask; }
+    public Task DispatchingAsync(ReadOnlyMemory<byte> body, CancellationToken cancellation) { DispatchedBody = body.ToArray(); return Task.CompletedTask; }
 
     /// <summary>记下结束报告。</summary>
     public void Completed(int clientStatus, bool complete) => Completion = (clientStatus, complete);

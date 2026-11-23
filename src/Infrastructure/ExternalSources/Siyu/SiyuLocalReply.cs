@@ -32,7 +32,7 @@ public static class SiyuLocalReply
     }
 
     /// <summary>写出本地回应并冲刷。</summary>
-    public static async Task Write(Stream destination, int status, string code, string? sentence, bool close, CancellationToken cancellation, bool proxyChallenge = false)
+    public static async Task WriteAsync(Stream destination, int status, string code, string? sentence, bool close, CancellationToken cancellation, bool proxyChallenge = false)
     {
         ArgumentNullException.ThrowIfNull(destination);
         await destination.WriteAsync(Build(status, code, sentence, close, proxyChallenge), cancellation);

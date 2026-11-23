@@ -40,7 +40,7 @@ public sealed class SiyuModel(RelayConfiguration config, Siyu.SiyuHostState host
     public string? Notice { get; private set; }
 
     /// <summary>打开一览（需已登录），只读。</summary>
-    public Task OnGetAsync() => Load();
+    public Task OnGetAsync() => LoadAsync();
 
     /// <summary>结束一个会话（需已登录且通过防 CSRF 校验）。</summary>
     public async Task<IActionResult> OnPostCloseAsync(string sessionId)
@@ -50,16 +50,16 @@ public sealed class SiyuModel(RelayConfiguration config, Siyu.SiyuHostState host
             service.CloseByAdministrator(sessionId);
             Notice = "已结束这个思域会话。正在进行的请求已取消，未确认完成的操作不会自动重发。";
         }
-        await Load();
+        await LoadAsync();
         return Page();
     }
 
     /// <summary>读一览并配上使用者显示名、账户名称。</summary>
-    private async Task Load()
+    private async Task LoadAsync()
     {
         if (!Active || Service() is not { } service) return;
-        var users = (await identities.List()).ToDictionary(user => user.Id, user => user.DisplayName);
-        var accounts = (await upstreams.ListCandidates()).ToDictionary(account => account.Id, account => account.Name);
+        var users = (await identities.ListAsync()).ToDictionary(user => user.Id, user => user.DisplayName);
+        var accounts = (await upstreams.ListCandidatesAsync()).ToDictionary(account => account.Id, account => account.Name);
         Rows = [.. service.List().Select(session => new Row(session,
             users.GetValueOrDefault(session.Binding.UserId, $"使用者 {session.Binding.UserId}"),
             accounts.GetValueOrDefault(session.Binding.OfficialAccountId, $"官方账户 {session.Binding.OfficialAccountId}")))];

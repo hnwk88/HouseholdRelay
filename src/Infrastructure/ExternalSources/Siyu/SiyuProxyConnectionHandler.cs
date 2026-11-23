@@ -36,7 +36,7 @@ public sealed class SiyuProxyConnectionHandler : ConnectionHandler
     {
         ArgumentNullException.ThrowIfNull(connection);
         await using var outer = new DuplexStream(connection.Transport.Input.AsStream(), connection.Transport.Output.AsStream());
-        try { await Serve(outer, connection.ConnectionClosed); }
+        try { await ServeAsync(outer, connection.ConnectionClosed); }
         // 客户端断开、会话关闭、超时、TLS 握手失败、对端中途断开都是这条连接的正常结局：连接随 using 关闭，不记错误。
         catch (Exception error) when (error is OperationCanceledException or IOException or AuthenticationException or EndOfStreamException) { }
         // 其他没预料到的异常只记类型链和阶段（不带消息，可能含凭据），连接随 using 关闭。
@@ -44,7 +44,7 @@ public sealed class SiyuProxyConnectionHandler : ConnectionHandler
     }
 
     /// <summary>外层：读 CONNECT、认证、回 200、内层 TLS、进内层循环。</summary>
-    private async Task Serve(Stream outer, CancellationToken aborted)
+    private async Task ServeAsync(Stream outer, CancellationToken aborted)
     {
         var reader = new Http1Reader(outer);
         byte[]? raw;
@@ -59,14 +59,14 @@ public sealed class SiyuProxyConnectionHandler : ConnectionHandler
         Http1RequestHead head;
         try { head = Http1RequestHead.Parse(raw, 0); }
         // 头段不合合同：回固定状态码和原因码后关闭，不再读后续字节。
-        catch (Http1Rejection rejection) { await SiyuLocalReply.Write(outer, rejection.Status, rejection.Code, null, true, aborted); return; }
-        if (head.Method != "CONNECT") { await SiyuLocalReply.Write(outer, 405, "method", null, true, aborted); return; }
-        if (!OfficialTargets.TryParseConnectTarget(head.Target, out var host)) { await SiyuLocalReply.Write(outer, 403, "target", "思域只连接官方的两个地址，这个目标不在合同内。", true, aborted); return; }
-        if (head.Values("Host") is not [var hostValue] || hostValue != head.Target) { await SiyuLocalReply.Write(outer, 400, "host", null, true, aborted); return; }
+        catch (Http1Rejection rejection) { await SiyuLocalReply.WriteAsync(outer, rejection.Status, rejection.Code, null, true, aborted); return; }
+        if (head.Method != "CONNECT") { await SiyuLocalReply.WriteAsync(outer, 405, "method", null, true, aborted); return; }
+        if (!OfficialTargets.TryParseConnectTarget(head.Target, out var host)) { await SiyuLocalReply.WriteAsync(outer, 403, "target", "思域只连接官方的两个地址，这个目标不在合同内。", true, aborted); return; }
+        if (head.Values("Host") is not [var hostValue] || hostValue != head.Target) { await SiyuLocalReply.WriteAsync(outer, 400, "host", null, true, aborted); return; }
         using var tunnel = Credentials(head) is var (sessionId, ticket) ? _gate.OpenTunnel(sessionId, ticket, host) : null;
-        if (tunnel is null) { await SiyuLocalReply.Write(outer, 407, "proxy-authentication", "思域会话无效或已结束，请重新启动思域。", true, aborted, proxyChallenge: true); return; }
+        if (tunnel is null) { await SiyuLocalReply.WriteAsync(outer, 407, "proxy-authentication", "思域会话无效或已结束，请重新启动思域。", true, aborted, proxyChallenge: true); return; }
         // 客户端必须等 200 之后才开始内层握手；提前到的字节说明对端不按 CONNECT 语义走，关闭。
-        if (reader.HasBufferedBytes) { await SiyuLocalReply.Write(outer, 400, "early-data", null, true, aborted); return; }
+        if (reader.HasBufferedBytes) { await SiyuLocalReply.WriteAsync(outer, 400, "early-data", null, true, aborted); return; }
         await outer.WriteAsync("HTTP/1.1 200 Connection Established\r\n\r\n"u8.ToArray(), aborted);
         await outer.FlushAsync(aborted);
 
@@ -89,7 +89,7 @@ public sealed class SiyuProxyConnectionHandler : ConnectionHandler
         // 内层 SNI 必须就是这条隧道的官方主机；协商出的应用协议只能是 http/1.1 或客户端没报 ALPN。
         if (!OfficialTargets.MatchesInnerName(host, inner.TargetHostName, false)) return;
         if (inner.NegotiatedApplicationProtocol != default && inner.NegotiatedApplicationProtocol != SslApplicationProtocol.Http11) return;
-        await new SiyuInnerExchange(inner, host, tunnel, _connector, _limits).Run(closed.Token);
+        await new SiyuInnerExchange(inner, host, tunnel, _connector, _limits).RunAsync(closed.Token);
     }
 
     /// <summary>从唯一的 <c>Proxy-Authorization: Basic</c> 取出「会话编号:票据」；缺失、重复、格式不对返回 null。</summary>

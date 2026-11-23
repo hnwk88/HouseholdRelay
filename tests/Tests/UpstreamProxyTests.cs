@@ -19,20 +19,20 @@ static class UpstreamProxyTests
         await using var mock = await UpstreamFixture.Create(); await using var proxy = new ProxyFixture(new Uri(mock.Url).Port);
         using var home = new TestHome(); var process = new TestProcess(home.Path); var service = process.Upstreams;
         await UseProxy(process, "manual", proxy.Url);
-        var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mock.Options("/prefix"), "fixture-proxy-secret");
-        var report = await service.TestCandidate(id, true, CancellationToken.None);
+        var id = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, mock.Options("/prefix"), "fixture-proxy-secret");
+        var report = await service.TestCandidateAsync(id, true, CancellationToken.None);
         Check(report.CanActivate && proxy.Requests.Count > 0 && mock.Calls.Count == 2);
         Check(proxy.Requests.All(value => value.StartsWith("CONNECT 127.0.0.1:", StringComparison.Ordinal) && !value.Contains("fixture-proxy-secret")));
         Check(mock.Calls.All(call => call.Path.StartsWith("/prefix/v1/", StringComparison.Ordinal) && call.Headers["x-api-key"] == "fixture-proxy-secret"));
         await UseProxy(process, "manual", "http://169.254.169.254:8080");
-        Check(!(await service.TestCandidate(id, true, CancellationToken.None)).CanActivate);
+        Check(!(await service.TestCandidateAsync(id, true, CancellationToken.None)).CanActivate);
     }
 
     /// <summary>经配置服务按版本保存全局代理方式与地址，与项目设置页走同一条写入路径。</summary>
     public static async Task UseProxy(TestProcess process, string mode, string? url)
     {
-        var snapshot = await process.Settings.Read(); snapshot.Value.ProxyMode = Core.Values.Wire<Core.Configuration.ProxyMode>.Parse(mode); snapshot.Value.ProxyUrl = url;
-        await process.Settings.Save(snapshot.Version, snapshot.Value);
+        var snapshot = await process.Settings.ReadAsync(); snapshot.Value.ProxyMode = Core.Values.Wire<Core.Configuration.ProxyMode>.Parse(mode); snapshot.Value.ProxyUrl = url;
+        await process.Settings.SaveAsync(snapshot.Version, snapshot.Value);
     }
 }
 

@@ -1,6 +1,6 @@
 ﻿<Project>
   <!--
-    所有项目统一继承这一份框架、编译开关与署名，避免主程序、各层和测试程序集各写一份后漂移（台账 D-005）。
+    所有项目统一继承这一份框架、编译开关与署名，避免主程序、各层和测试程序集各写一份后漂移。
     警告一律当错误：门禁与验收都要求构建 0 警告 0 错误。
   -->
   <PropertyGroup>
@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
-    <!-- 根目录 .editorconfig 的四条 C# 命名规则在构建时执行，违反即构建失败（GZ-W-128）。 -->
+    <!-- 根目录 .editorconfig 的 C# 命名规则（含 src 里异步方法的 Async 后缀）在构建时执行，违反即构建失败。 -->
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Product>HouseholdRelay</Product>
     <Authors>热心人AI工作室</Authors>

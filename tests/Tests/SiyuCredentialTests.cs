@@ -22,25 +22,25 @@ public static class SiyuCredentialTests
         var (accounts, directory) = Prepare(web);
 
         FakeClaude.Write(directory, "fixture-siyu-valid", 60);
-        var first = await accounts.AcquireCredential(AccountId, default);
-        var again = await accounts.AcquireCredential(AccountId, default);
+        var first = await accounts.AcquireCredentialAsync(AccountId, default);
+        var again = await accounts.AcquireCredentialAsync(AccountId, default);
         Check(first.AccessToken == "fixture-siyu-valid" && first.Generation == 1 && again.Generation == 1, "有效令牌直接用，同一令牌同一代次");
         Check(!first.ToString().Contains("fixture-siyu-valid", StringComparison.Ordinal), "ToString 不带令牌");
         Check(!File.Exists(Path.Combine(directory, "fake-calls.log")) || !File.ReadAllText(Path.Combine(directory, "fake-calls.log")).Contains("/usage", StringComparison.Ordinal), "离到期远不起续期");
 
         FakeClaude.Write(directory, "fixture-siyu-expired", -1);
-        var renewed = await accounts.AcquireCredential(AccountId, default);
+        var renewed = await accounts.AcquireCredentialAsync(AccountId, default);
         Check(renewed.AccessToken == FakeClaude.RefreshedToken && renewed.Generation == 2 && renewed.ExpiresAt > DateTimeOffset.UtcNow, "过期后等续期，拿到新令牌、代次加一");
 
         File.WriteAllText(Path.Combine(directory, OfficialCredential.FileName), """{"claudeAiOauth":{"accessToken":"fixture-no-expiry","refreshToken":"r"}}""");
-        await Refused(() => accounts.AcquireCredential(AccountId, default), "official-expiry-unknown", "没写到期时刻");
+        await Refused(() => accounts.AcquireCredentialAsync(AccountId, default), "official-expiry-unknown", "没写到期时刻");
 
         // 只删本用例临时数据目录里的假凭据，模拟凭据被移走。
         File.Delete(Path.Combine(directory, OfficialCredential.FileName));
-        await Refused(() => accounts.AcquireCredential(AccountId, default), "official-reauthentication-required", "凭据不在");
+        await Refused(() => accounts.AcquireCredentialAsync(AccountId, default), "official-reauthentication-required", "凭据不在");
 
         accounts.Remove(AccountId);
-        await Refused(() => accounts.AcquireCredential(AccountId, default), "official-account-gone", "账户已删除");
+        await Refused(() => accounts.AcquireCredentialAsync(AccountId, default), "official-account-gone", "账户已删除");
     }
 
     /// <summary>过期且续期失败：重读仍是旧的过期令牌，必须拒发，不能把旧令牌交出去。</summary>
@@ -50,7 +50,7 @@ public static class SiyuCredentialTests
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var (accounts, directory) = Prepare(web);
         FakeClaude.Write(directory, "fixture-siyu-stale", -1);
-        await Refused(() => accounts.AcquireCredential(AccountId, default), "official-reauthentication-required", "过期且续期失败");
+        await Refused(() => accounts.AcquireCredentialAsync(AccountId, default), "official-reauthentication-required", "过期且续期失败");
         Check(File.ReadAllText(Path.Combine(directory, "fake-calls.log")).Contains("-p /usage", StringComparison.Ordinal), "确实起过一次续期");
         Check(accounts.ReadAccessToken(AccountId) == "fixture-siyu-stale", "旧接法的读法不变（本单不动旧路径）");
     }
@@ -64,7 +64,7 @@ public static class SiyuCredentialTests
         FakeClaude.Write(directory, "fixture-siyu-slow", -1);
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
         var watch = Stopwatch.StartNew(); var cancelled = false;
-        try { await accounts.AcquireCredential(AccountId, cancel.Token); }
+        try { await accounts.AcquireCredentialAsync(AccountId, cancel.Token); }
         // 调用方自己的取消是预期结果。
         catch (OperationCanceledException) { cancelled = true; }
         Check(cancelled && watch.Elapsed < TimeSpan.FromSeconds(10), $"取消应很快返回，实际 {watch.Elapsed}");

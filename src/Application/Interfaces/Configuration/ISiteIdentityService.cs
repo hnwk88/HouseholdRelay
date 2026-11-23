@@ -19,9 +19,9 @@ public interface ISiteIdentityService
     /// </summary>
     CancellationToken TransportStopping { get; }
     /// <summary>持有服务排他锁后准备私有配置，恢复同一个待完成目标，不生成新号。</summary>
-    Task Prepare(CancellationToken cancellation);
+    Task PrepareAsync(CancellationToken cancellation);
     /// <summary>关闭准入、排空、事务提交并对齐；重复操作号不会重复生成。</summary>
-    Task<SiteIdentityOperationResult> Refresh(string operationId, long expectedVersion, CancellationToken cancellation);
+    Task<SiteIdentityOperationResult> RefreshAsync(string operationId, long expectedVersion, CancellationToken cancellation);
     /// <summary>继续已持久提交的维护，不生成新目标。</summary>
-    Task<SiteIdentityOperationResult> Resume(string operationId, CancellationToken cancellation);
+    Task<SiteIdentityOperationResult> ResumeAsync(string operationId, CancellationToken cancellation);
 }

@@ -47,3 +47,28 @@ dotnet_naming_style.underscore_camel_case.required_prefix = _
 dotnet_naming_style.underscore_camel_case.capitalization = camel_case
 
 dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+# 异步方法以 Async 结尾（.NET 基于任务的异步模式的命名约定）；本工程加，和上面几条一样经 IDE1006 在构建时报错。
+# 只管 src：tests 里的用例方法按行为起名、由运行器按名字列出，不加后缀。
+# 拆成两条，访问级别与 public_members_use_pascal_case 写得一样、多一个 async 修饰符，这样不论规则怎么排序都比它更具体、先生效；
+# 私有方法与局部函数另一条。覆写与接口实现跟着被覆写、被实现的成员走，规则不单独报它们。
+# 规则只认 async 修饰符：不带 async、直接返回 Task 的方法和接口里的声明它看不见，那部分靠人工核对（本工程现为 0 处）。
+[src/**.cs]
+dotnet_naming_rule.async_methods_end_with_async.symbols = async_methods
+dotnet_naming_rule.async_methods_end_with_async.style = async_suffix
+dotnet_naming_rule.async_methods_end_with_async.severity = error
+
+dotnet_naming_symbols.async_methods.applicable_kinds = method
+dotnet_naming_symbols.async_methods.applicable_accessibilities = public, internal, protected, protected_internal, private_protected
+dotnet_naming_symbols.async_methods.required_modifiers = async
+
+dotnet_naming_rule.private_async_methods_end_with_async.symbols = private_async_methods
+dotnet_naming_rule.private_async_methods_end_with_async.style = async_suffix
+dotnet_naming_rule.private_async_methods_end_with_async.severity = error
+
+dotnet_naming_symbols.private_async_methods.applicable_kinds = method, local_function
+dotnet_naming_symbols.private_async_methods.applicable_accessibilities = private, local
+dotnet_naming_symbols.private_async_methods.required_modifiers = async
+
+dotnet_naming_style.async_suffix.required_suffix = Async
+dotnet_naming_style.async_suffix.capitalization = pascal_case

@@ -33,28 +33,28 @@ static class UpstreamTransferTests
         var login = FakeClaude.Credential(OfficialToken, 60);
         var ids = new[]
         {
-            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).ActiveVersion, mockA.Options(), KeyA, "甲"),
-            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).ActiveVersion, mockB.Options(), KeyB, "乙"),
-            await source.Upstreams.ImportOfficial((await source.Upstreams.ReadActive()).ActiveVersion, Official(mockA), login, "官方", CancellationToken.None)
+            await source.Upstreams.SaveCandidateAsync((await source.Upstreams.ReadActiveAsync()).ActiveVersion, mockA.Options(), KeyA, "甲"),
+            await source.Upstreams.SaveCandidateAsync((await source.Upstreams.ReadActiveAsync()).ActiveVersion, mockB.Options(), KeyB, "乙"),
+            await source.Upstreams.ImportOfficialAsync((await source.Upstreams.ReadActiveAsync()).ActiveVersion, Official(mockA), login, "官方", CancellationToken.None)
         };
         await source.Login();
         var exported = await Export(source, ids, Password);
         Check(exported.Html.Contains("已导出 3 家上游：「甲」「乙」「官方」。浏览器正在下载") && exported.Html.Contains("官方账户「官方」已经搬走：本机不再用它转发、不再续期。")
             && exported.Html.Contains("下一步：把文件拷到新电脑"), exported.Html);
-        Check((await source.Upstreams.ListCandidates()).Single(item => item.Name == "官方").ExportedAt is not null, "Exporting moves the official account");
+        Check((await source.Upstreams.ListCandidatesAsync()).Single(item => item.Name == "官方").ExportedAt is not null, "Exporting moves the official account");
 
-        await target.Upstreams.SaveCandidate((await target.Upstreams.ReadActive()).ActiveVersion, mockA.Options(), "fixture-transfer-existing-key", "原有");
+        await target.Upstreams.SaveCandidateAsync((await target.Upstreams.ReadActiveAsync()).ActiveVersion, mockA.Options(), "fixture-transfer-existing-key", "原有");
         await target.Login();
         var html = await Import(target, exported.File, Password);
         Check(html.Contains("已导入 3 家上游：「甲」「乙」「官方」，都排在已有上游后面，尚未测试。下一步：逐家按「选择模型并测试」"), html);
-        var saved = await target.Upstreams.ListCandidates();
+        var saved = await target.Upstreams.ListCandidatesAsync();
         Check(saved.Select(item => item.Name).SequenceEqual(["原有", "甲", "乙", "官方"]), string.Join(",", saved.Select(item => item.Name)));
         Check(saved.Skip(1).All(item => item.State == CandidateState.Untested && item.Report is null && item.ExportedAt is null), "Imported upstreams start untested");
         var official = saved.Single(item => item.Name == "官方");
         Check(official.Options is { OfficialLogin: true, Mode: UpstreamMode.OAuth } && File.ReadAllBytes(Path.Combine(target.Home.Path, ".state", "official-accounts", official.Uid, OfficialCredential.FileName)).SequenceEqual(login),
             "The login file must arrive byte for byte");
         var imported = saved.Single(item => item.Name == "甲"); mockA.Calls.Clear();
-        Check((await target.Upstreams.TestCandidate(imported.Id, true, CancellationToken.None)).CanActivate && mockA.Calls.Last().Headers["x-api-key"] == KeyA, "The imported key is the original key");
+        Check((await target.Upstreams.TestCandidateAsync(imported.Id, true, CancellationToken.None)).CanActivate && mockA.Calls.Last().Headers["x-api-key"] == KeyA, "The imported key is the original key");
 
         foreach (var secret in new[] { KeyA, KeyB, OfficialToken, "fixture-refresh-token" })
         {
@@ -73,10 +73,10 @@ static class UpstreamTransferTests
         await using var source = await Web(claude); await using var target = await Web(claude);
         var ids = new[]
         {
-            await source.Upstreams.SaveCandidate((await source.Upstreams.ReadActive()).ActiveVersion, mock.Options(), KeyA, "甲"),
-            await source.Upstreams.ImportOfficial((await source.Upstreams.ReadActive()).ActiveVersion, Official(mock), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None)
+            await source.Upstreams.SaveCandidateAsync((await source.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), KeyA, "甲"),
+            await source.Upstreams.ImportOfficialAsync((await source.Upstreams.ReadActiveAsync()).ActiveVersion, Official(mock), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None)
         };
-        var file = (await source.Upstreams.Export(ids, Password)).File;
+        var file = (await source.Upstreams.ExportAsync(ids, Password)).File;
         await target.Login();
         var tampered = (byte[])file.Clone(); tampered[^1] ^= 1;
         var future = (byte[])file.Clone(); future[10] = 9;
@@ -90,7 +90,7 @@ static class UpstreamTransferTests
         {
             var html = await Import(target, content, password);
             Check(html.Contains(expected) && !html.Contains(KeyA), expected + " / " + html);
-            Check((await target.Upstreams.ListCandidates()).Count == 0 && NoAccountDirectories(target), "Refused imports must write nothing: " + expected);
+            Check((await target.Upstreams.ListCandidatesAsync()).Count == 0 && NoAccountDirectories(target), "Refused imports must write nothing: " + expected);
         }
     }
 
@@ -102,7 +102,7 @@ static class UpstreamTransferTests
         using var claude = new FakeClaudeLauncher("success");
         await using var mock = await UpstreamFixture.Create();
         await using var web = await Web(claude);
-        var id = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, Official(mock), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None);
+        var id = await web.Upstreams.ImportOfficialAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, Official(mock), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None);
         await web.Login();
         foreach (var (ids, password, again, expected) in new[]
         {
@@ -116,7 +116,7 @@ static class UpstreamTransferTests
         }
         using (var request = ExportRequest(web, [id], Password, Password, null))
         using (var response = await web.Http.SendAsync(request)) Check(response.StatusCode == HttpStatusCode.BadRequest, "Export requires the antiforgery token");
-        Check((await web.Upstreams.ReadCandidate(id)).ExportedAt is null, "Refused exports must not move the account");
+        Check((await web.Upstreams.ReadCandidateAsync(id)).ExportedAt is null, "Refused exports must not move the account");
     }
 
     /// <summary>
@@ -130,15 +130,15 @@ static class UpstreamTransferTests
         await using var mockOfficial = await UpstreamFixture.Create(); await using var mockB = await UpstreamFixture.Create();
         await using var web = await Web(claude);
         var service = web.Upstreams;
-        var official = await service.ImportOfficial((await service.ReadActive()).ActiveVersion, Official(mockOfficial), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None);
-        await service.ChooseModel(official, "fixture-model");
-        Check((await service.TestCandidate(official, true, CancellationToken.None)).CanActivate, "Official upstream passes");
-        var standby = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, mockB.Options(), KeyB, "乙");
-        Check((await service.TestCandidate(standby, true, CancellationToken.None)).CanActivate, "Standby passes");
-        await service.Activate(official); await service.SetFailover(false);
-        var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", (await service.ReadCandidate(official)).Uid);
+        var official = await service.ImportOfficialAsync((await service.ReadActiveAsync()).ActiveVersion, Official(mockOfficial), FakeClaude.Credential(OfficialToken, 60), "官方", CancellationToken.None);
+        await service.ChooseModelAsync(official, "fixture-model");
+        Check((await service.TestCandidateAsync(official, true, CancellationToken.None)).CanActivate, "Official upstream passes");
+        var standby = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, mockB.Options(), KeyB, "乙");
+        Check((await service.TestCandidateAsync(standby, true, CancellationToken.None)).CanActivate, "Standby passes");
+        await service.ActivateAsync(official); await service.SetFailoverAsync(false);
+        var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", (await service.ReadCandidateAsync(official)).Uid);
         FakeClaude.Write(directory, OfficialToken, 2);
-        var token = (await web.Identities.Create("搬走")).Token;
+        var token = (await web.Identities.CreateAsync("搬走")).Token;
         await web.Login();
         var before = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + "/Upstream"));
         Check(before.Contains("在用的「官方」是登录得到的官方账户，勾选它导出后它就搬走了：自动切换关着，导出后中转会没有可用上游。"), "The page warns before exporting the active account");
@@ -147,13 +147,13 @@ static class UpstreamTransferTests
         await Export(web, [official], Password);
         mockOfficial.Calls.Clear(); mockB.Calls.Clear();
         using (var refused = await UpstreamFixture.RelayRequest(web, token)) Check(refused.StatusCode == HttpStatusCode.ServiceUnavailable, $"Switch off: {refused.StatusCode}");
-        await service.SetFailover(true);
+        await service.SetFailoverAsync(true);
         using (var served = await UpstreamFixture.RelayRequest(web, token)) Check(served.StatusCode == HttpStatusCode.OK, $"Switch on: {served.StatusCode}");
         Check(mockOfficial.Calls.IsEmpty && mockB.Calls.Count == 1, $"official={mockOfficial.Calls.Count}, B={mockB.Calls.Count}");
         foreach (var attempt in new Func<Task>[]
         {
-            () => service.DiscoverModels(official, CancellationToken.None), () => service.TestCandidate(official, true, CancellationToken.None),
-            () => service.Activate(official)
+            () => service.DiscoverModelsAsync(official, CancellationToken.None), () => service.TestCandidateAsync(official, true, CancellationToken.None),
+            () => service.ActivateAsync(official)
         })
         {
             try { await attempt(); Check(false, "A moved account must be refused"); }
@@ -183,7 +183,7 @@ static class UpstreamTransferTests
         Check(Count("PRAGMA user_version") == 6 && Count(Column) == 0, "Rollback keeps version 6 without the column");
         var upgraded = new TestProcess(home.Path); _ = upgraded.Database;
         Check(Count("PRAGMA user_version") == RelayDatabase.CurrentVersion && Count(Column) == 1);
-        Check(await upgraded.Upstreams.ListCandidates() is { Count: 3 } saved && saved.All(item => item.ExportedAt is null), "Existing upstreams read as never exported");
+        Check(await upgraded.Upstreams.ListCandidatesAsync() is { Count: 3 } saved && saved.All(item => item.ExportedAt is null), "Existing upstreams read as never exported");
     }
 
     /// <summary>带假 Claude Code 的管理网页主机；给了 <paramref name="logs"/> 时事件日志收进它。</summary>
@@ -229,7 +229,7 @@ static class UpstreamTransferTests
     {
         using var page = await web.Post("/Upstream?handler=ImportUpstreams", new()
         {
-            ["importPassword"] = password, ["Version"] = (await web.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+            ["importPassword"] = password, ["Version"] = (await web.Upstreams.ReadActiveAsync()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
         }, "UpstreamFile", "upstreams.hrupstreams", file);
         Check(page.StatusCode == HttpStatusCode.OK, "Import page: " + page.StatusCode);
         return WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());

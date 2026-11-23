@@ -10,11 +10,11 @@ public interface IClaudeCodeProbe
     bool IsAvailable { get; }
 
     /// <summary>通过给定连接转发那一次请求并返回上游回复；真实凭据只留在中转进程。发往官方账户时 <paramref name="identity"/> 是统一身份，其余上游为 null。</summary>
-    Task<ProbeReply> Run(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation);
+    Task<ProbeReply> RunAsync(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation);
 
     /// <summary>
     /// 让本机 Claude Code 以入口 <paramref name="entrypoint"/> 那种模式向本机临时端点发一次请求，只记下它带的请求头（不含认证头）就结束；不转发、不碰任何上游。
     /// cli 在伪控制台里跑交互模式（不开窗口），其余用 <c>--print</c>。
     /// </summary>
-    Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(string entrypoint, CancellationToken cancellation);
+    Task<IReadOnlyList<KeyValuePair<string, string>>> CaptureAsync(string entrypoint, CancellationToken cancellation);
 }

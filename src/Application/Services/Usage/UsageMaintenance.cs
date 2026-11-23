@@ -9,7 +9,7 @@ namespace Application.Services.Usage;
 /// <summary>只在服务启动时恢复遗留请求；查询和 CLI 打开数据库不会打断仍在运行的请求。</summary>
 public sealed class UsageMaintenance(IUsageService store, IServingLock servingLock, ISiteIdentityService identity, ILogger<UsageMaintenance> logger) : BackgroundService
 {
-    private IDisposable? serving;
+    private IDisposable? _serving;
 
     /// <summary>
     /// 服务启动时先取得数据目录的独占服务锁，再把上次遗留的未结束记录标记为中断、清理超出 40 天的记录，最后启动定时任务。
@@ -19,21 +19,21 @@ public sealed class UsageMaintenance(IUsageService store, IServingLock servingLo
     {
         try
         {
-            serving = servingLock.Acquire();
-            await identity.Prepare(cancellationToken);
-            await store.Recover(); await store.Cleanup(cancellationToken);
+            _serving = servingLock.Acquire();
+            await identity.PrepareAsync(cancellationToken);
+            await store.RecoverAsync(); await store.CleanupAsync(cancellationToken);
             await base.StartAsync(cancellationToken);
         }
         // 启动任何一步失败都要先释放已取得的服务锁再原样抛出，否则锁会被失败的进程一直占着，后续服务无法启动。
-        catch { serving?.Dispose(); serving = null; throw; }
+        catch { _serving?.Dispose(); _serving = null; throw; }
     }
 
     /// <summary>停止定时清理任务并释放服务锁；即使停止过程抛出异常也会释放锁。</summary>
     public override async Task StopAsync(CancellationToken cancellationToken)
-    { try { await base.StopAsync(cancellationToken); } finally { /* 无论后台任务停止是否成功、是否被取消都释放服务锁，避免下一次启动拿不到锁。 */ serving?.Dispose(); serving = null; } }
+    { try { await base.StopAsync(cancellationToken); } finally { /* 无论后台任务停止是否成功、是否被取消都释放服务锁，避免下一次启动拿不到锁。 */ _serving?.Dispose(); _serving = null; } }
 
     /// <summary>释放后台服务资源并释放仍持有的服务锁；可重复调用。</summary>
-    public override void Dispose() { base.Dispose(); serving?.Dispose(); serving = null; }
+    public override void Dispose() { base.Dispose(); _serving?.Dispose(); _serving = null; }
 
     /// <summary>
     /// 每小时（按用量服务的时钟）清理一次超出保留窗口的记录，直到服务停止；单次清理失败（存储故障或任何没有预料到的异常）只计入失败次数、记一行日志，不终止循环，
@@ -46,7 +46,7 @@ public sealed class UsageMaintenance(IUsageService store, IServingLock servingLo
         {
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                try { await store.Cleanup(stoppingToken); }
+                try { await store.CleanupAsync(stoppingToken); }
                 // 可恢复的存储故障：记入健康状态，下一个小时继续重试。
                 catch (Exception error) when (UsageService.StorageError(error)) { store.MaintenanceFailure(); }
                 // 其余异常（服务停止引起的取消除外）：同样计入失败并记一行只有类型与阶段的日志，循环继续；按 .NET 默认让它冒出去会停掉整个宿主。

@@ -36,7 +36,7 @@ public sealed class DeviceIdentityModel(ISiteIdentityService identity, IProtocol
         {
             try
             {
-                var result = await identity.Refresh(OperationId, Version, cancellation);
+                var result = await identity.RefreshAsync(OperationId, Version, cancellation);
                 Notice = result.Current.Pending || !identity.Available ? identity.Status : "这次设备维护已完成。重复提交不会再次更换，客户端个人令牌可以照常使用。";
             }
             // 服务的异常是固定的管理员读句，不能把底层文件或网络异常显示出来。
@@ -50,8 +50,8 @@ public sealed class DeviceIdentityModel(ISiteIdentityService identity, IProtocol
     {
         try
         {
-            if (!identity.Current.Pending) await identity.Prepare(cancellation);
-            else await identity.Resume(OperationId, cancellation);
+            if (!identity.Current.Pending) await identity.PrepareAsync(cancellation);
+            else await identity.ResumeAsync(OperationId, cancellation);
             Notice = identity.Status;
         }
         // 持久目标保持原样，页面读出继续步骤。

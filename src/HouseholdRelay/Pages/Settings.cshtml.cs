@@ -19,7 +19,7 @@ public sealed class SettingsModel(IConfigurationService settings, IUpstreamProxy
     /// <summary>打开设置页（需已登录）：读取当前设置快照与版本号填入表单，只读。</summary>
     public async Task OnGetAsync()
     {
-        var snapshot = await settings.Read(); Version = snapshot.Version;
+        var snapshot = await settings.ReadAsync(); Version = snapshot.Version;
         Input = SettingsInput.From(snapshot.Value); ProxyStatus = proxy.Describe();
     }
     /// <summary>保存设置（需已登录且通过防 CSRF 校验）：在最新设置上覆盖表单字段后按版本号保存，不触碰表单之外的配置项；监听端口和转发限制须重启服务才生效，保存地址也不会自动建立公网映射。</summary>
@@ -29,7 +29,7 @@ public sealed class SettingsModel(IConfigurationService settings, IUpstreamProxy
         {
             try
             {
-                var config = (await settings.Read()).Value; Input.Apply(config); await settings.Save(Version, config);
+                var config = (await settings.ReadAsync()).Value; Input.Apply(config); await settings.SaveAsync(Version, config);
                 Notice = "设置已保存。代理立即用于新的上游连接；监听端口和转发限制在重启服务后生效；保存地址不会自动建立公网连接。";
                 Version++; ModelState.Remove(nameof(Version));
             }

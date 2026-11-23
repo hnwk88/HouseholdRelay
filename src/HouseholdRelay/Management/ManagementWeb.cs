@@ -25,7 +25,10 @@ namespace HouseholdRelay.Management;
 /// <summary>仅在本机回环地址提供管理页面，不接受代理头扩展管理边界。</summary>
 public static class ManagementWeb
 {
+    /// <summary>管理页 Cookie 认证方案名：登录、登出与每次请求核对会话都按这个名字找同一套认证。</summary>
     public const string Scheme = "RelayAdministrator";
+
+    /// <summary>管理 Cookie 里存管理会话主键的声明名；每次请求按它取出会话、到库里核对仍有效，失效就当未登录。</summary>
     public const string SessionClaim = "relay_session";
 
     /// <summary>构建管理宿主：经组合根登记全部服务（数据目录为 <paramref name="home"/>），<paramref name="configureServices"/> 可追加或覆盖登记。</summary>
@@ -74,7 +77,7 @@ public static class ManagementWeb
             options.Events.OnValidatePrincipal = async context =>
             {
                 var administrators = context.HttpContext.RequestServices.GetRequiredService<IAdministratorService>();
-                if (!await administrators.IsSessionValid(context.Principal?.FindFirstValue(SessionClaim))) context.RejectPrincipal();
+                if (!await administrators.IsSessionValidAsync(context.Principal?.FindFirstValue(SessionClaim))) context.RejectPrincipal();
             };
         });
         builder.Services.AddOptions<CookieAuthenticationOptions>(Scheme).Configure<IRelayInstance>((options, instance) => options.Cookie.Name = "hr_admin_" + instance.InstanceId);
@@ -126,8 +129,8 @@ public static class ManagementWeb
         });
         app.UseStaticFiles(); app.UseRouting(); app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
         app.MapRazorPages();
-        app.MapHealthChecks(ReadinessPath, new HealthCheckOptions { ResponseWriter = WriteReadiness, AllowCachingResponses = false }).AllowAnonymous();
-        app.MapFallback(relay.Handle);
+        app.MapHealthChecks(ReadinessPath, new HealthCheckOptions { ResponseWriter = WriteReadinessAsync, AllowCachingResponses = false }).AllowAnonymous();
+        app.MapFallback(relay.HandleAsync);
         return app;
     }
 
@@ -135,7 +138,7 @@ public static class ManagementWeb
     public const string ReadinessPath = "/readyz";
 
     /// <summary>就绪检查的读法：一行 JSON，总结论加每一项的结论与中文读句，中文不转义；不带异常细节。未就绪时状态码 503（框架按结论给）。</summary>
-    private static Task WriteReadiness(HttpContext context, HealthReport report)
+    private static Task WriteReadinessAsync(HttpContext context, HealthReport report)
     {
         context.Response.ContentType = "application/json; charset=utf-8";
         var body = new

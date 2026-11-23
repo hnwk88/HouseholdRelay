@@ -30,7 +30,7 @@ public sealed class SiyuInnerExchange
     }
 
     /// <summary>处理到客户端关闭、空闲超时、会话关闭或任一请求要求关闭为止；退出时关闭出站连接。</summary>
-    public async Task Run(CancellationToken closed)
+    public async Task RunAsync(CancellationToken closed)
     {
         var reader = new Http1Reader(_inner);
         try
@@ -44,7 +44,7 @@ public sealed class SiyuInnerExchange
                     idle.CancelAfter(_limits.IdleTimeout);
                     raw = await reader.ReadHeadAsync(idle.Token);
                 }
-                if (raw is null || !await One(reader, raw, closed)) return;
+                if (raw is null || !await OneAsync(reader, raw, closed)) return;
             }
         }
         // 不论正常结束、取消还是异常，都关闭出站连接，不留半截的官方连接。
@@ -52,7 +52,7 @@ public sealed class SiyuInnerExchange
     }
 
     /// <summary>处理一个请求；返回这条内层连接还能不能接着用。</summary>
-    private async Task<bool> One(Http1Reader reader, byte[] raw, CancellationToken closed)
+    private async Task<bool> OneAsync(Http1Reader reader, byte[] raw, CancellationToken closed)
     {
         Http1RequestHead head; string bearer; SiyuRoute route;
         try
@@ -63,29 +63,29 @@ public sealed class SiyuInnerExchange
             bearer = head.BearerToken();
         }
         // 不合合同的请求体没法安全跳过：回固定错误后关闭这条内层连接，客户端重连即可。
-        catch (Http1Rejection rejection) { await SiyuLocalReply.Write(_inner, rejection.Status, rejection.Code, null, true, closed); return false; }
+        catch (Http1Rejection rejection) { await SiyuLocalReply.WriteAsync(_inner, rejection.Status, rejection.Code, null, true, closed); return false; }
 
         ISiyuPermit permit;
-        try { permit = await _tunnel.Admit(route, bearer, closed); }
+        try { permit = await _tunnel.AdmitAsync(route, bearer, closed); }
         // 会话层不准入：官方收不到这次请求；请求体还没读，连接不能复用，关闭。
-        catch (SiyuRefusal refusal) { await SiyuLocalReply.Write(_inner, refusal.Status, refusal.Code, refusal.Sentence, true, closed); return false; }
+        catch (SiyuRefusal refusal) { await SiyuLocalReply.WriteAsync(_inner, refusal.Status, refusal.Code, refusal.Sentence, true, closed); return false; }
         await using (permit)
         {
             var body = await reader.ReadExactAsync(checked((int)head.ContentLength), permit.Cancellation);
-            try { permit.Recheck(); await permit.Dispatching(body, permit.Cancellation); }
+            try { permit.Recheck(); await permit.DispatchingAsync(body, permit.Cancellation); }
             // 读完请求体后会话已不可用或身份核对不过：同样一字节都不发给官方；把回给客户端的状态码报给许可，用量记录与客户端看到的一致。连接关闭。
-            catch (SiyuRefusal refusal) { permit.Completed(refusal.Status, false); await SiyuLocalReply.Write(_inner, refusal.Status, refusal.Code, refusal.Sentence, true, closed); return false; }
-            return await Send(head, route, body, permit);
+            catch (SiyuRefusal refusal) { permit.Completed(refusal.Status, false); await SiyuLocalReply.WriteAsync(_inner, refusal.Status, refusal.Code, refusal.Sentence, true, closed); return false; }
+            return await SendAsync(head, route, body, permit);
         }
     }
 
     /// <summary>写给官方并转发回应；返回内层连接还能不能接着用。</summary>
-    private async Task<bool> Send(Http1RequestHead head, SiyuRoute route, byte[] body, ISiyuPermit permit)
+    private async Task<bool> SendAsync(Http1RequestHead head, SiyuRoute route, byte[] body, ISiyuPermit permit)
     {
         var cancellation = permit.Cancellation;
         if (_upstream is null)
         {
-            _upstream = await _connector.Open(_host, cancellation);
+            _upstream = await _connector.OpenAsync(_host, cancellation);
             _upstreamReader = new Http1Reader(_upstream);
         }
         await _upstream.WriteAsync(head.WithAuthorization(permit.AccessToken), cancellation);
@@ -104,13 +104,13 @@ public sealed class SiyuInnerExchange
                     permit.Observe(response.Status);
                     permit.Completed(502, true);
                     DropUpstream();
-                    await SiyuLocalReply.Write(_inner, 502, "redirect-refused", "官方要求跳转到别的地址，思域不在合同外跟随，这次请求没有完成。", head.Close, cancellation);
+                    await SiyuLocalReply.WriteAsync(_inner, 502, "redirect-refused", "官方要求跳转到别的地址，思域不在合同外跟随，这次请求没有完成。", head.Close, cancellation);
                     return !head.Close;
                 }
                 if (!response.Interim && route.Purpose == SiyuPurpose.McpServers && response.Status == 200)
                 {
                     // 连接器发现：先读全、旁路取出编号并登记，再把头和原字节一起转给客户端，客户端拿到清单时集合已经生效。
-                    var wire = await Http1BodyBuffer.Read(_upstreamReader, response, cancellation);
+                    var wire = await Http1BodyBuffer.ReadAsync(_upstreamReader, response, cancellation);
                     if (Http1Entity.Decode(wire, response.Framing, response.Fields) is { } entity && McpServerList.TryReadIds(entity, out var ids))
                         permit.ReportDiscovery(head.WithAuthorization(TemplatePlaceholder), ids);
                     await _inner.WriteAsync(response.Raw, cancellation);
@@ -146,7 +146,7 @@ public sealed class SiyuInnerExchange
         catch (Http1Rejection rejection)
         {
             DropUpstream();
-            if (!wroteToClient) await SiyuLocalReply.Write(_inner, 502, "upstream-" + rejection.Code, "官方的回应无法核对，这次请求的结果未知，没有自动重发。", true, cancellation);
+            if (!wroteToClient) await SiyuLocalReply.WriteAsync(_inner, 502, "upstream-" + rejection.Code, "官方的回应无法核对，这次请求的结果未知，没有自动重发。", true, cancellation);
             return false;
         }
     }

@@ -10,7 +10,7 @@ namespace Application.Services.Identity;
 public sealed class IdentityCommandHandler(IIdentityService identities)
 {
     /// <summary>执行一个动作。</summary>
-    public async Task<IdentityCommandResult> Execute(IdentityCommand command)
+    public async Task<IdentityCommandResult> ExecuteAsync(IdentityCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
         try
@@ -18,12 +18,12 @@ public sealed class IdentityCommandHandler(IIdentityService identities)
             switch (command.Action)
             {
                 case IdentityCommandAction.Add:
-                    return new(await identities.Create(command.DisplayName ?? command.Name ?? throw new InvalidOperationException("请提供 --display-name 或 --name。"), command.Name), null);
-                case IdentityCommandAction.Rotate: return new(await identities.Rotate(User(command)), null);
-                case IdentityCommandAction.Enable: await identities.SetEnabled(User(command), true); return new(null, null);
-                case IdentityCommandAction.Disable: await identities.SetEnabled(User(command), false); return new(null, null);
+                    return new(await identities.CreateAsync(command.DisplayName ?? command.Name ?? throw new InvalidOperationException("请提供 --display-name 或 --name。"), command.Name), null);
+                case IdentityCommandAction.Rotate: return new(await identities.RotateAsync(User(command)), null);
+                case IdentityCommandAction.Enable: await identities.SetEnabledAsync(User(command), true); return new(null, null);
+                case IdentityCommandAction.Disable: await identities.SetEnabledAsync(User(command), false); return new(null, null);
                 case IdentityCommandAction.Rename:
-                    await identities.Rename(User(command), command.DisplayName ?? throw new InvalidOperationException("请提供 --display-name。"));
+                    await identities.RenameAsync(User(command), command.DisplayName ?? throw new InvalidOperationException("请提供 --display-name。"));
                     return new(null, null);
                 default: throw new InvalidOperationException("clients 支持 list / add / rotate / enable / disable / rename。");
             }

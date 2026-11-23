@@ -132,7 +132,7 @@ static class UpstreamFailoverTests
         await using var scene = await Scene.Create();
         scene.Web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction,
             "UPDATE upstream_candidates SET report_json=json_set(report_json,'$.models',json('[\"other-model\"]')) WHERE id=$id", ("$id", scene.IdB)));
-        Check((await scene.Web.Upstreams.ReadCandidate(scene.IdB)).Report!.Models.SequenceEqual(["other-model"]), "Fixture must change B's model list");
+        Check((await scene.Web.Upstreams.ReadCandidateAsync(scene.IdB)).Report!.Models.SequenceEqual(["other-model"]), "Fixture must change B's model list");
         var body = Body(503, "fixture failure");
         scene.A.Handler = context => Raw(context, 503, body);
         using (var request = Request(scene.Web, scene.Token))
@@ -156,7 +156,7 @@ static class UpstreamFailoverTests
             using var saved = await scene.Web.Post("/Upstream?handler=Failover", values);
             Check(saved.IsSuccessStatusCode); return WebUtility.HtmlDecode(await saved.Content.ReadAsStringAsync());
         }
-        Check((await Save(false)).Contains("自动切换已关闭：只用在用的「甲」") && !(await scene.Web.Upstreams.ReadOverview()).Failover);
+        Check((await Save(false)).Contains("自动切换已关闭：只用在用的「甲」") && !(await scene.Web.Upstreams.ReadOverviewAsync()).Failover);
         var body = Body(503, "fixture failure");
         scene.A.Handler = context => Raw(context, 503, body);
         using (var request = Request(scene.Web, scene.Token))
@@ -165,7 +165,7 @@ static class UpstreamFailoverTests
         Check(scene.B.Calls.IsEmpty, "Switch off: B must receive nothing");
         var report = await Settled(scene.Web, 1); var row = report.Rows.Single();
         Check(report.AttemptsOf(row.RequestId) is [{ Disposition: Core.Usage.AttemptDisposition.Client } only] && only.UpstreamCandidateId == scene.IdA && scene.Served(row.RequestId) == scene.IdA);
-        Check((await Save(true)).Contains("自动切换已打开") && (await scene.Web.Upstreams.ReadOverview()).Failover);
+        Check((await Save(true)).Contains("自动切换已打开") && (await scene.Web.Upstreams.ReadOverviewAsync()).Failover);
         Check(await Call(scene.Web, scene.Token) == HttpStatusCode.OK && scene.B.Calls.Count == 1, "Switch on takes effect for the next request");
     }
 
@@ -213,8 +213,8 @@ static class UpstreamFailoverTests
     public static async Task PricesTheServingUpstream()
     {
         await using var scene = await Scene.Create();
-        await scene.Web.Pricing.Save(scene.IdA, "fixture-model", "USD", 100, 200, 0, 0);
-        await scene.Web.Pricing.Save(scene.IdB, "fixture-model", "USD", 1, 2, 0, 0);
+        await scene.Web.Pricing.SaveAsync(scene.IdA, "fixture-model", "USD", 100, 200, 0, 0);
+        await scene.Web.Pricing.SaveAsync(scene.IdB, "fixture-model", "USD", 1, 2, 0, 0);
         scene.A.Handler = context => Fail(context, 503);
         scene.B.Handler = context => Json(context, new { input_tokens = 10, output_tokens = 20 });
         Check(await Call(scene.Web, scene.Token) == HttpStatusCode.OK);
@@ -252,9 +252,9 @@ static class UpstreamFailoverTests
         Check(Count("SELECT COUNT(*) FROM usage_prices WHERE upstream_version IS NOT NULL") == 2, "Old prices stay untouched after rollback");
         var upgraded = new TestProcess(home.Path); _ = upgraded.Database;
         Check(Count("PRAGMA user_version") == RelayDatabase.CurrentVersion && Count("SELECT failover FROM upstream WHERE id=1") == 1);
-        var saved = await upgraded.Upstreams.ListCandidates();
+        var saved = await upgraded.Upstreams.ListCandidatesAsync();
         var activeId = saved.Single(item => item.Uid == active).Id; var servedId = saved.Single(item => item.Uid == served).Id;
-        var prices = await upgraded.Pricing.List(activeId);
+        var prices = await upgraded.Pricing.ListAsync(activeId);
         Check(prices is [{ Model: "claude-fixture", InputPerMillion: 3 }] && Count("SELECT COUNT(*) FROM usage_prices") == 1, "Current-version prices move to the active upstream");
         Check(Count("SELECT COUNT(*) FROM migration_archive WHERE reason='price-not-migrated' AND json_extract(row_json,'$.model')='claude-other'") == 1, "The older-version price is archived, not dropped");
         // 不经用量查询的 40 天窗口直接数：夹具的用量时间是生成那天，过了窗口查询就读不到了。
@@ -315,22 +315,22 @@ static class UpstreamFailoverTests
             var a = await UpstreamFixture.Create(); var b = await UpstreamFixture.Create();
             var clock = new UsageClock(DateTimeOffset.UtcNow); var logs = new ConcurrentQueue<string>();
             var web = await WebFixture.Create(overrides: services => { services.AddSingleton<TimeProvider>(clock); services.AddSingleton<IRelayEventLog>(new FixtureLog(logs)); });
-            var token = (await web.Identities.Create("切换")).Token;
+            var token = (await web.Identities.CreateAsync("切换")).Token;
             var idA = await Passed(web, a, SecretA, "甲"); var idB = await Passed(web, b, SecretB, "乙");
-            await web.Upstreams.Activate(idA); a.Calls.Clear(); b.Calls.Clear();
+            await web.Upstreams.ActivateAsync(idA); a.Calls.Clear(); b.Calls.Clear();
             // 新实例的自动切换默认关（订单 148）；这组用例测的是打开以后的行为，场景里由管理员打开一次。
-            await web.Upstreams.SetFailover(true);
+            await web.Upstreams.SetFailoverAsync(true);
             return new() { A = a, B = b, Web = web, Clock = clock, Logs = logs, Token = token, IdA = idA, IdB = idB };
         }
 
         /// <summary>模拟「测过之后变坏」：保存一个指向 <paramref name="options"/> 的候选，抄甲的通过报告后切换过去，返回它的主键；甲、乙都成了备用。</summary>
         public async Task<long> ForceActive(UpstreamOptions options, string name)
         {
-            var id = await Web.Upstreams.SaveCandidate((await Web.Upstreams.ReadActive()).ActiveVersion, options, SecretA, name);
+            var id = await Web.Upstreams.SaveCandidateAsync((await Web.Upstreams.ReadActiveAsync()).ActiveVersion, options, SecretA, name);
             Web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
                 UPDATE upstream_candidates SET state='passed',report_json=(SELECT report_json FROM upstream WHERE id=1) WHERE id=$id
                 """, ("$id", id)));
-            await Web.Upstreams.Activate(id); return id;
+            await Web.Upstreams.ActivateAsync(id); return id;
         }
 
         /// <summary>用量记录里实际服务那一家的主键。</summary>
@@ -350,8 +350,8 @@ static class UpstreamFailoverTests
         /// <summary>以给定名称和凭据保存指向模拟上游的候选并测试通过，返回主键。</summary>
         private static async Task<long> Passed(WebFixture web, UpstreamFixture upstream, string credential, string name)
         {
-            var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, upstream.Options(), credential, name);
-            var report = await web.Upstreams.TestCandidate(id, true, CancellationToken.None); Check(report.CanActivate, report.Message); return id;
+            var id = await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, upstream.Options(), credential, name);
+            var report = await web.Upstreams.TestCandidateAsync(id, true, CancellationToken.None); Check(report.CanActivate, report.Message); return id;
         }
     }
 }

@@ -15,7 +15,7 @@ internal sealed class IdentityCommandPipeClient(IRelayInstance instance) : IIden
     private static readonly TimeSpan _replyWait = TimeSpan.FromSeconds(60);
 
     /// <summary>发动作并等结果；连不上、超时或回应读不懂都抛出读给操作者的原因。</summary>
-    public async Task<IdentityCommandResult> Send(IdentityCommand command, CancellationToken cancellation)
+    public async Task<IdentityCommandResult> SendAsync(IdentityCommand command, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(command);
         // 不用 CurrentUserOnly：它拿进程令牌的「所有者」比对管道所有者，提权控制台（同一用户）的令牌所有者是 Administrators 组，会被误判成别人。
@@ -37,8 +37,8 @@ internal sealed class IdentityCommandPipeClient(IRelayInstance instance) : IIden
         IdentityCommandResult? result;
         try
         {
-            await IdentityCommandPipe.WriteLine(pipe, command, wait.Token);
-            result = await IdentityCommandPipe.ReadLine<IdentityCommandResult>(pipe, wait.Token);
+            await IdentityCommandPipe.WriteLineAsync(pipe, command, wait.Token);
+            result = await IdentityCommandPipe.ReadLineAsync<IdentityCommandResult>(pipe, wait.Token);
         }
         // 发出后没等到回应：服务可能已执行也可能没有，照实说不确定，叫操作者去核对。
         catch (Exception error) when (error is IOException or OperationCanceledException && !cancellation.IsCancellationRequested)

@@ -31,7 +31,7 @@ internal sealed partial class ClientLauncher : IClientLauncher
     }
 
     /// <summary>读取本机客户端版本并组成请求特征。</summary>
-    public async Task<string> DetectUserAgent()
+    public async Task<string> DetectUserAgentAsync()
     {
         var start = new ProcessStartInfo(FindClaude()) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
         start.ArgumentList.Add("--version");
@@ -80,7 +80,7 @@ internal sealed partial class ClientLauncher : IClientLauncher
     }
 
     /// <summary>启动客户端并返回退出码。</summary>
-    public async Task<int> Run(string directory, string[] arguments)
+    public async Task<int> RunAsync(string directory, string[] arguments)
     {
         using var process = Process.Start(Prepare(directory, arguments)) ?? throw new InvalidOperationException("客户端启动失败。");
         await process.WaitForExitAsync(); return process.ExitCode;

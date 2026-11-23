@@ -12,14 +12,14 @@ static class SiteIdentityMaintenanceTests
     /// <summary>在途许可未归还不提交；八次同操作只换一次，关闭期间八次新官方准入均失败。</summary>
     public static async Task DrainAndConcurrency()
     {
-        using var fixture = new MaintenanceFixture(); await fixture.Service.Prepare(default);
+        using var fixture = new MaintenanceFixture(); await fixture.Service.PrepareAsync(default);
         var before = fixture.Service.Current; var permit = fixture.Service.Enter();
         var operation = Guid.NewGuid().ToString("N");
-        var changing = fixture.Service.Refresh(operation, before.Version, default);
-        Check(!changing.IsCompleted && !fixture.Service.Available && await fixture.Repository.Read() == before);
+        var changing = fixture.Service.RefreshAsync(operation, before.Version, default);
+        Check(!changing.IsCompleted && !fixture.Service.Available && await fixture.Repository.ReadAsync() == before);
         for (var index = 0; index < 8; index++) Denied(fixture.Service);
         // 其余并发维护等同一互斥；模拟完整 SSE 释放许可之前任何一项都不能提交。
-        var duplicates = Enumerable.Range(0, 7).Select(_ => fixture.Service.Refresh(operation, before.Version, default)).ToArray();
+        var duplicates = Enumerable.Range(0, 7).Select(_ => fixture.Service.RefreshAsync(operation, before.Version, default)).ToArray();
         Check(duplicates.All(item => !item.IsCompleted) && fixture.Generator.Count == 1);
         permit.Dispose(); permit.Dispose();
         // 排空后收集全部并发结果，不能只断言第一个成功而漏掉重复提交失败。
@@ -27,25 +27,25 @@ static class SiteIdentityMaintenanceTests
         Check(fixture.Generator.Count == 2 && results.All(item => item.Version == 2 && !item.Pending));
         Check(fixture.Service.Available && fixture.Service.Current.DeviceId != before.DeviceId);
         using var continued = fixture.Service.Enter();
-        var repeated = fixture.Service.Refresh(operation, before.Version, default);
+        var repeated = fixture.Service.RefreshAsync(operation, before.Version, default);
         Check(repeated.IsCompletedSuccessfully && !(await repeated).Pending && fixture.Service.Available,
             "A completed operation retry must return immediately while a newer official operation is active");
-        var resumed = await fixture.Service.Resume(operation, default);
+        var resumed = await fixture.Service.ResumeAsync(operation, default);
         Check(!resumed.Pending && fixture.Service.Available, "Completed resume must not wait on or modify live operations");
     }
 
     /// <summary>60 秒包括等待维护锁；超时不提交、不杀在途操作，旧身份恢复准入。</summary>
     public static async Task DrainTimeout()
     {
-        using var fixture = new MaintenanceFixture(); await fixture.Service.Prepare(default);
+        using var fixture = new MaintenanceFixture(); await fixture.Service.PrepareAsync(default);
         var before = fixture.Service.Current; using var permit = fixture.Service.Enter();
-        var first = fixture.Service.Refresh(Guid.NewGuid().ToString("N"), before.Version, default);
-        var second = fixture.Service.Refresh(Guid.NewGuid().ToString("N"), before.Version, default);
+        var first = fixture.Service.RefreshAsync(Guid.NewGuid().ToString("N"), before.Version, default);
+        var second = fixture.Service.RefreshAsync(Guid.NewGuid().ToString("N"), before.Version, default);
         fixture.Clock.Advance(TimeSpan.FromSeconds(59));
-        Check(!first.IsCompleted && !second.IsCompleted && await fixture.Repository.Read() == before);
+        Check(!first.IsCompleted && !second.IsCompleted && await fixture.Repository.ReadAsync() == before);
         fixture.Clock.Advance(TimeSpan.FromSeconds(1));
         await Refused(first); await Refused(second);
-        Check(await fixture.Repository.Read() == before && fixture.Generator.Count == 1 && fixture.Service.Available);
+        Check(await fixture.Repository.ReadAsync() == before && fixture.Generator.Count == 1 && fixture.Service.Available);
         using var restored = fixture.Service.Enter();
         Check(fixture.Service.Status.Contains("未更换", StringComparison.Ordinal), "Precommit timeout reports that the identity was not changed");
     }
@@ -53,47 +53,47 @@ static class SiteIdentityMaintenanceTests
     /// <summary>提交后准备失败保持 pending；修复后同一次 Refresh 可继续，不再生成，历史重试保持原结果。</summary>
     public static async Task FailureAndResume()
     {
-        using var fixture = new MaintenanceFixture(); await fixture.Service.Prepare(default);
+        using var fixture = new MaintenanceFixture(); await fixture.Service.PrepareAsync(default);
         fixture.Preparation.Action = _ => throw new IOException("fixture-secret-path-must-not-escape");
         var operation = Guid.NewGuid().ToString("N");
-        var error = await Refused(fixture.Service.Refresh(operation, 1, default));
-        var pending = await fixture.Repository.Read();
+        var error = await Refused(fixture.Service.RefreshAsync(operation, 1, default));
+        var pending = await fixture.Repository.ReadAsync();
         Check(pending.Pending && pending.Version == 2 && fixture.Generator.Count == 2 && !fixture.Service.Available);
         Check(!error.Message.Contains("fixture-secret", StringComparison.Ordinal) && !fixture.Service.Status.Contains(pending.DeviceId, StringComparison.Ordinal));
         Denied(fixture.Service); fixture.Preparation.Action = null;
-        var done = await fixture.Service.Refresh(operation, 1, default);
+        var done = await fixture.Service.RefreshAsync(operation, 1, default);
         Check(!done.Pending && fixture.Generator.Count == 2 && fixture.Service.Current == pending with { Pending = false });
-        var second = await fixture.Service.Refresh(Guid.NewGuid().ToString("N"), 2, default);
-        var repeated = await fixture.Service.Refresh(operation, 1, default);
+        var second = await fixture.Service.RefreshAsync(Guid.NewGuid().ToString("N"), 2, default);
+        var repeated = await fixture.Service.RefreshAsync(operation, 1, default);
         Check(repeated.Version == 2 && !repeated.Pending && repeated.Current == second.Current && fixture.Generator.Count == 3);
         var preparationCalls = fixture.Preparation.Calls;
         using var live = fixture.Service.Enter();
-        await Refused(fixture.Service.Resume(Guid.NewGuid().ToString("N"), default));
+        await Refused(fixture.Service.ResumeAsync(Guid.NewGuid().ToString("N"), default));
         Check(fixture.Service.Available && fixture.Preparation.Calls == preparationCalls, "Unknown resume must not rewrite configuration or stop existing availability");
         live.Dispose();
         fixture.Preparation.Action = _ => throw new IOException("fixture later alignment failure");
-        var laterOperation = Guid.NewGuid().ToString("N"); await Refused(fixture.Service.Refresh(laterOperation, 3, default));
-        var laterPending = await fixture.Repository.Read();
-        var oldResult = await fixture.Service.Refresh(operation, 1, default);
+        var laterOperation = Guid.NewGuid().ToString("N"); await Refused(fixture.Service.RefreshAsync(laterOperation, 3, default));
+        var laterPending = await fixture.Repository.ReadAsync();
+        var oldResult = await fixture.Service.RefreshAsync(operation, 1, default);
         Check(oldResult.Version == 2 && !oldResult.Pending && oldResult.Current == laterPending && laterPending.Pending
-            && await fixture.Repository.Read() == laterPending && !fixture.Service.Available, "Historical retry cannot complete or disturb a newer pending operation");
-        fixture.Preparation.Action = null; await fixture.Service.Resume(laterOperation, default);
+            && await fixture.Repository.ReadAsync() == laterPending && !fixture.Service.Available, "Historical retry cannot complete or disturb a newer pending operation");
+        fixture.Preparation.Action = null; await fixture.Service.ResumeAsync(laterOperation, default);
     }
 
     /// <summary>30 秒准备超时保持目标；不配合取消的旧准备真退出后，恢复才可启动下一次文件准备。</summary>
     public static async Task AlignmentTimeout()
     {
-        using var fixture = new MaintenanceFixture(); await fixture.Service.Prepare(default);
+        using var fixture = new MaintenanceFixture(); await fixture.Service.PrepareAsync(default);
         using var release = new ManualResetEventSlim();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.Preparation.Action = _ => { started.TrySetResult(); release.Wait(); };
         var operation = Guid.NewGuid().ToString("N");
-        var refresh = fixture.Service.Refresh(operation, 1, default); await started.Task;
+        var refresh = fixture.Service.RefreshAsync(operation, 1, default); await started.Task;
         fixture.Clock.Advance(TimeSpan.FromSeconds(30)); await Refused(refresh);
-        var pending = await fixture.Repository.Read();
+        var pending = await fixture.Repository.ReadAsync();
         Check(pending.Pending && !fixture.Service.Available && fixture.Generator.Count == 2);
         var oldCalls = fixture.Preparation.Calls; fixture.Preparation.Action = null;
-        var resume = fixture.Service.Resume(operation, default);
+        var resume = fixture.Service.ResumeAsync(operation, default);
         Check(!resume.IsCompleted && fixture.Preparation.Calls == oldCalls, "Resume must wait for the old file writer to exit");
         release.Set(); var done = await resume;
         Check(!done.Pending && fixture.Service.Available && fixture.Generator.Count == 2 && fixture.Preparation.MaximumConcurrent == 1);
@@ -104,14 +104,14 @@ static class SiteIdentityMaintenanceTests
     public static async Task PreparationAndVersionRace()
     {
         using var fixture = new MaintenanceFixture(); fixture.Preparation.Action = _ => throw new IOException("fixture preparation failure");
-        await fixture.Service.Prepare(default);
-        Check(!fixture.Service.Available && fixture.Generator.Count == 1 && !(await fixture.Repository.Read()).Pending);
-        fixture.Preparation.Action = null; await fixture.Service.Prepare(default);
+        await fixture.Service.PrepareAsync(default);
+        Check(!fixture.Service.Available && fixture.Generator.Count == 1 && !(await fixture.Repository.ReadAsync()).Pending);
+        fixture.Preparation.Action = null; await fixture.Service.PrepareAsync(default);
         Check(fixture.Service.Available && fixture.Generator.Count == 1);
         using var release = new ManualResetEventSlim(); var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.Preparation.Action = cancellation => { started.TrySetResult(); release.Wait(cancellation); };
-        var first = fixture.Service.Refresh(Guid.NewGuid().ToString("N"), 1, default); await started.Task;
-        var second = fixture.Service.Refresh(Guid.NewGuid().ToString("N"), 1, default);
+        var first = fixture.Service.RefreshAsync(Guid.NewGuid().ToString("N"), 1, default); await started.Task;
+        var second = fixture.Service.RefreshAsync(Guid.NewGuid().ToString("N"), 1, default);
         release.Set(); await first; await Refused(second);
         Check(fixture.Generator.Count == 2 && fixture.Service.Current.Version == 2 && fixture.Service.Available);
         await ReadyCommitBusy();
@@ -120,7 +120,7 @@ static class SiteIdentityMaintenanceTests
     /// <summary>派生文件已经完成但ready提交遇到真实SQLite写锁时仍保持pending，解锁后继续同目标。</summary>
     private static async Task ReadyCommitBusy()
     {
-        using var fixture = new MaintenanceFixture(); await fixture.Service.Prepare(default);
+        using var fixture = new MaintenanceFixture(); await fixture.Service.PrepareAsync(default);
         Microsoft.Data.Sqlite.SqliteConnection? blocker = null;
         Microsoft.Data.Sqlite.SqliteTransaction? transaction = null;
         fixture.Preparation.Action = _ => { blocker = fixture.Database.Open(); transaction = blocker.BeginTransaction(); };
@@ -128,15 +128,15 @@ static class SiteIdentityMaintenanceTests
         SiteIdentitySnapshot pending;
         try
         {
-            await Refused(fixture.Service.Refresh(operation, 1, default)); elapsed.Stop();
-            pending = await fixture.Repository.Read();
+            await Refused(fixture.Service.RefreshAsync(operation, 1, default)); elapsed.Stop();
+            pending = await fixture.Repository.ReadAsync();
             Check(transaction is not null && elapsed.Elapsed < TimeSpan.FromSeconds(3) && pending.Pending && !fixture.Service.Available && fixture.Generator.Count == 2,
                 "Ready commit must fail promptly and retain pending when another connection owns the writer lock");
         }
         // 模拟外部管理写入收尾；失败路径也必须释放本测试的SQLite写锁。
         finally { transaction?.Dispose(); blocker?.Dispose(); }
         fixture.Preparation.Action = null;
-        var completed = await fixture.Service.Resume(operation, default);
+        var completed = await fixture.Service.ResumeAsync(operation, default);
         Check(!completed.Pending && completed.Current == pending with { Pending = false } && fixture.Generator.Count == 2 && fixture.Service.Available);
     }
 
@@ -192,25 +192,25 @@ static class SiteIdentityMaintenanceTests
     /// <summary>测试专用编号生成器，便于检查重试是否额外换号。</summary>
     private sealed class MaintenanceGenerator : IDeviceIdGenerator
     {
-        private int count;
+        private int _count;
         /// <summary>累计生成次数。</summary>
-        public int Count => Volatile.Read(ref count);
+        public int Count => Volatile.Read(ref _count);
         /// <summary>线程安全地产生逐次不同、格式合法的假编号。</summary>
-        public string Generate() => Interlocked.Increment(ref count).ToString("x64");
+        public string Generate() => Interlocked.Increment(ref _count).ToString("x64");
     }
 
     /// <summary>无需真实CLI的文件准备替身；统计并发来发现超时后重入写文件。</summary>
     private sealed class ControlledPreparation : IClaudeConfigurationPreparation
     {
-        private int calls;
-        private int active;
-        private int maximum;
+        private int _calls;
+        private int _active;
+        private int _maximum;
         /// <summary>下一次准备执行的受控动作，空表示成功。</summary>
         public Action<CancellationToken>? Action { get; set; }
         /// <summary>总准备次数。</summary>
-        public int Calls => Volatile.Read(ref calls);
+        public int Calls => Volatile.Read(ref _calls);
         /// <summary>曾同时进行的准备数量。</summary>
-        public int MaximumConcurrent => Volatile.Read(ref maximum);
+        public int MaximumConcurrent => Volatile.Read(ref _maximum);
         /// <summary>未被本组协调器测试读取的假编号。</summary>
         public string DeviceId => new('a', 64);
         /// <summary>本组测试不准备单个账户。</summary>
@@ -228,11 +228,11 @@ static class SiteIdentityMaintenanceTests
         /// <summary>执行同步准备并完整登记生命周期，取消与异常都归还活跃计数。</summary>
         public void PrepareExistingAccounts(CancellationToken cancellation = default)
         {
-            Interlocked.Increment(ref calls); var concurrent = Interlocked.Increment(ref active);
-            Interlocked.Exchange(ref maximum, Math.Max(MaximumConcurrent, concurrent));
+            Interlocked.Increment(ref _calls); var concurrent = Interlocked.Increment(ref _active);
+            Interlocked.Exchange(ref _maximum, Math.Max(MaximumConcurrent, concurrent));
             try { Action?.Invoke(cancellation); }
             // 即使故障或取消也表示文件边界已经退出，后续恢复才可安全重试。
-            finally { Interlocked.Decrement(ref active); }
+            finally { Interlocked.Decrement(ref _active); }
         }
     }
 }

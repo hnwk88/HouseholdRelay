@@ -87,18 +87,18 @@ public static class SiyuMcpTests
         var probe = new McpDiscoveryProbe(connector);
         var body = Encoding.UTF8.GetBytes(List);
         connector.Replies = _ => [.. Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Length: {body.Length}\r\n\r\n"), .. body];
-        var ids = await probe.Discover(template, "official-token", default);
+        var ids = await probe.DiscoverAsync(template, "official-token", default);
         Check(ids is not null && ids.SequenceEqual(["mcpsrv_A1", "mcpsrv_b-2"]), "200 读出编号");
         Check(Encoding.ASCII.GetString(connector.Opened.Single().Stream.Written.ToArray()) == Encoding.ASCII.GetString(template).Replace(SiyuInnerExchange.TemplatePlaceholder, "official-token", StringComparison.Ordinal),
             "发出的就是模板，只换了 Authorization");
         connector.Replies = _ => "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n"u8.ToArray();
-        Check(await probe.Discover(template, "official-token", default) is null, "非 200 补不到");
+        Check(await probe.DiscoverAsync(template, "official-token", default) is null, "非 200 补不到");
         connector.Replies = _ => "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nnope"u8.ToArray();
-        Check(await probe.Discover(template, "official-token", default) is null, "读不懂补不到");
+        Check(await probe.DiscoverAsync(template, "official-token", default) is null, "读不懂补不到");
         connector.Replies = _ => [];
-        Check(await probe.Discover(template, "official-token", default) is null, "官方没回应补不到");
+        Check(await probe.DiscoverAsync(template, "official-token", default) is null, "官方没回应补不到");
         var opened = connector.Opened.Count;
-        Check(await probe.Discover("GET /v1/models HTTP/1.1\r\nAuthorization: Bearer x\r\nHost: api.anthropic.com\r\n\r\n"u8.ToArray(), "official-token", default) is null
+        Check(await probe.DiscoverAsync("GET /v1/models HTTP/1.1\r\nAuthorization: Bearer x\r\nHost: api.anthropic.com\r\n\r\n"u8.ToArray(), "official-token", default) is null
             && connector.Opened.Count == opened, "模板不是发现请求就不发");
     }
 

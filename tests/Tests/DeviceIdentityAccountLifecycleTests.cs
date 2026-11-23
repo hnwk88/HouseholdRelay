@@ -14,25 +14,25 @@ public static class DeviceIdentityAccountLifecycleTests
         await using var mock = await UpstreamFixture.Create();
         await using var source = await WebFixture.Create(overrides: claude.Register);
         var original = await Current(source);
-        var first = await source.Upstreams.LoginOfficial((await source.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "首个账户", default); var firstUid = await Uid(source, first);
+        var first = await source.Upstreams.LoginOfficialAsync((await source.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), "首个账户", default); var firstUid = await Uid(source, first);
         await AssertUnchanged(source, original, firstUid);
         var accountDirectory = AccountDirectory(source, firstUid);
         var calls = Path.Combine(accountDirectory, "fake-calls.log");
         var loginCount = File.ReadAllLines(calls).Count(line => line == "auth login");
-        await source.App.Services.GetRequiredService<IOfficialAccountLogin>().Login(firstUid, default);
+        await source.App.Services.GetRequiredService<IOfficialAccountLogin>().LoginAsync(firstUid, default);
         await AssertUnchanged(source, original, firstUid);
         Check(File.ReadAllLines(calls).Count(line => line == "auth login") == loginCount + 1, "Relogin must actually execute auth login in the same isolated account directory.");
         Evidence(6, "relogin-same-private-account");
 
-        var added = await source.Upstreams.LoginOfficial((await source.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "新增账户", default); var addedUid = await Uid(source, added);
-        Check((await source.Upstreams.ListCandidates()).Count == 2 && added != first);
+        var added = await source.Upstreams.LoginOfficialAsync((await source.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), "新增账户", default); var addedUid = await Uid(source, added);
+        Check((await source.Upstreams.ListCandidatesAsync()).Count == 2 && added != first);
         await AssertUnchanged(source, original, firstUid, addedUid); Evidence(7, "add-official-account");
-        await source.Upstreams.Delete(added);
-        Check((await source.Upstreams.ListCandidates()).Count == 1 && !Directory.Exists(AccountDirectory(source, addedUid)));
+        await source.Upstreams.DeleteAsync(added);
+        Check((await source.Upstreams.ListCandidatesAsync()).Count == 1 && !Directory.Exists(AccountDirectory(source, addedUid)));
         await AssertUnchanged(source, original, firstUid); Evidence(8, "delete-official-account");
 
-        Check((await source.Upstreams.TestCandidate(first, true, default)).CanActivate); await source.Upstreams.Activate(first);
-        var person = await source.Identities.Create("升级对照");
+        Check((await source.Upstreams.TestCandidateAsync(first, true, default)).CanActivate); await source.Upstreams.ActivateAsync(first);
+        var person = await source.Identities.CreateAsync("升级对照");
         var message = DeviceMetadataPathTests.Sample(false, new string('a', 64), "fixture-model", claude.Version, "sdk-cli");
         using (var request = UsageFixture.Request(source, person.Token, "before-upgrade", body: message))
         using (var response = await source.Http.SendAsync(request)) Check(response.IsSuccessStatusCode);
@@ -48,9 +48,9 @@ public static class DeviceIdentityAccountLifecycleTests
         var credentialPath = Path.Combine(accountDirectory, OfficialCredential.FileName);
         var originalCredential = File.ReadAllBytes(credentialPath);
         const string password = "fixture-account-identity-export-password";
-        var archive = (await source.Upstreams.Export([first], password)).File;
+        var archive = (await source.Upstreams.ExportAsync([first], password)).File;
         await AssertUnchanged(source, original, firstUid);
-        Check((await source.Upstreams.ReadCandidate(first)).ExportedAt is not null && !(await source.Upstreams.ReadActive()).Configured);
+        Check((await source.Upstreams.ReadCandidateAsync(first)).ExportedAt is not null && !(await source.Upstreams.ReadActiveAsync()).Configured);
         var callsAfterExport = File.ReadAllLines(calls).Length;
         Check(source.App.Services.GetRequiredService<IOfficialAccountLogin>().ReadAccessToken(firstUid) is null && File.ReadAllLines(calls).Length == callsAfterExport,
             "The exported source account does not read or refresh its credential again.");
@@ -59,9 +59,9 @@ public static class DeviceIdentityAccountLifecycleTests
 
         await using var existing = await WebFixture.Create(overrides: claude.Register);
         var existingIdentity = await Current(existing);
-        await existing.Upstreams.SaveCandidate((await existing.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-existing-api-key", "原有 API");
-        Check((await existing.Upstreams.ListCandidates()).Count == 1 && existingIdentity.DeviceId != original.DeviceId);
-        var imported = await existing.Upstreams.Import((await existing.Upstreams.ReadActive()).ActiveVersion, archive, password, default);
+        await existing.Upstreams.SaveCandidateAsync((await existing.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), "fixture-existing-api-key", "原有 API");
+        Check((await existing.Upstreams.ListCandidatesAsync()).Count == 1 && existingIdentity.DeviceId != original.DeviceId);
+        var imported = await existing.Upstreams.ImportAsync((await existing.Upstreams.ReadActiveAsync()).ActiveVersion, archive, password, default);
         Check(imported.Count == 1 && imported[0].UpstreamCandidateId is not null && imported[0].Error is null);
         await AssertUnchanged(existing, existingIdentity, await Uid(existing, imported[0].UpstreamCandidateId!.Value));
         Check(File.ReadAllBytes(Path.Combine(AccountDirectory(existing, await Uid(existing, imported[0].UpstreamCandidateId!.Value)), OfficialCredential.FileName)).SequenceEqual(originalCredential));
@@ -69,8 +69,8 @@ public static class DeviceIdentityAccountLifecycleTests
 
         await using var fresh = await WebFixture.Create(overrides: claude.Register);
         var freshIdentity = await Current(fresh);
-        Check((await fresh.Upstreams.ListCandidates()).Count == 0 && freshIdentity.Version == 1 && freshIdentity.DeviceId != original.DeviceId && freshIdentity.DeviceId != existingIdentity.DeviceId);
-        var freshImport = await fresh.Upstreams.Import((await fresh.Upstreams.ReadActive()).ActiveVersion, archive, password, default);
+        Check((await fresh.Upstreams.ListCandidatesAsync()).Count == 0 && freshIdentity.Version == 1 && freshIdentity.DeviceId != original.DeviceId && freshIdentity.DeviceId != existingIdentity.DeviceId);
+        var freshImport = await fresh.Upstreams.ImportAsync((await fresh.Upstreams.ReadActiveAsync()).ActiveVersion, archive, password, default);
         Check(freshImport.Count == 1 && freshImport[0].UpstreamCandidateId is not null && freshImport[0].Error is null);
         await AssertUnchanged(fresh, freshIdentity, await Uid(fresh, freshImport[0].UpstreamCandidateId!.Value));
         Check(File.ReadAllBytes(Path.Combine(AccountDirectory(fresh, await Uid(fresh, freshImport[0].UpstreamCandidateId!.Value)), OfficialCredential.FileName)).SequenceEqual(originalCredential));
@@ -79,12 +79,12 @@ public static class DeviceIdentityAccountLifecycleTests
     }
 
     /// <summary>直接读取同一实例的持久身份，不借上游状态读取触发任何账户操作。</summary>
-    private static Task<SiteIdentitySnapshot> Current(WebFixture web) => web.App.Services.SiteIdentityStore().Read();
+    private static Task<SiteIdentitySnapshot> Current(WebFixture web) => web.App.Services.SiteIdentityStore().ReadAsync();
 
     /// <summary>逐项比较数据库、普通设置、运行快照以及现有账户派生值，不能只检查请求成功。</summary>
     private static async Task AssertUnchanged(WebFixture web, SiteIdentitySnapshot expected, params string[] accounts)
     {
-        Check(await Current(web) == expected && (await web.Settings.Read()).Value.DeviceId == expected.DeviceId && web.App.Services.GetRequiredService<ISiteIdentityService>().Current == expected,
+        Check(await Current(web) == expected && (await web.Settings.ReadAsync()).Value.DeviceId == expected.DeviceId && web.App.Services.GetRequiredService<ISiteIdentityService>().Current == expected,
             "Canonical database identity, settings and runtime generation must all remain unchanged.");
         foreach (var account in accounts)
         {
@@ -94,7 +94,7 @@ public static class DeviceIdentityAccountLifecycleTests
     }
 
     /// <summary>已保存上游的对外编号，官方账户目录按它命名。</summary>
-    private static async Task<string> Uid(WebFixture web, long id) => (await web.Upstreams.ReadCandidate(id)).Uid;
+    private static async Task<string> Uid(WebFixture web, long id) => (await web.Upstreams.ReadCandidateAsync(id)).Uid;
 
     /// <summary>测试账户目录只位于当前夹具的私有状态根下。</summary>
     private static string AccountDirectory(WebFixture web, string account) => Path.Combine(web.Home.Path, ".state", "official-accounts", account);

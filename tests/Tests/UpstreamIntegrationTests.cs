@@ -139,29 +139,29 @@ static class UpstreamIntegrationTests
         try
         {
             using var home = new TestHome(); var service = new TestProcess(home.Path).Upstreams;
-            var active = await service.ReadActive();
+            var active = await service.ReadActiveAsync();
             var options = new UpstreamOptions { Mode = Core.Upstream.UpstreamMode.ApiKey, Authentication = Core.Upstream.AuthenticationScheme.XApiKey, Preset = Core.Upstream.UpstreamPreset.Compatible, BaseUrl = mock.Urls.Single(), AllowPrivateNetwork = true, Model = "fixture-model" };
-            var id = await service.SaveCandidate(active.ActiveVersion, options, "fixture-api-secret");
-            Check((await service.ReadActive()).Credential is null && (await service.ReadCandidate(id)).State == Core.Upstream.CandidateState.Untested);
+            var id = await service.SaveCandidateAsync(active.ActiveVersion, options, "fixture-api-secret");
+            Check((await service.ReadActiveAsync()).Credential is null && (await service.ReadCandidateAsync(id)).State == Core.Upstream.CandidateState.Untested);
             var refused = false;
-            try { await service.TestCandidate(id, false, CancellationToken.None); }
+            try { await service.TestCandidateAsync(id, false, CancellationToken.None); }
             // 诊断会向上游发起真实的最小模型调用，未经明确同意必须拒绝；捕获到即记为拒绝成功。
             catch (InvalidOperationException) { refused = true; }
             Check(refused, "A diagnostic call requires explicit consent");
-            var report = await service.TestCandidate(id, true, CancellationToken.None);
+            var report = await service.TestCandidateAsync(id, true, CancellationToken.None);
             Check(report.CanActivate && report.Connection == Core.Upstream.CheckStatus.Passed && report.Authentication == Core.Upstream.CheckStatus.Passed && report.VerifiedModel == "fixture-model");
             // 通过后改选模型就回到未测试，旧报告还在；切换必须按「状态不是通过」读出还没通过测试（领域规则 UpstreamCandidate.EnsureActivatable），而不是只看报告。
-            await service.ChooseModel(id, "other-model");
+            await service.ChooseModelAsync(id, "other-model");
             var untested = "";
-            try { await service.Activate(id); } catch (InvalidOperationException error) { /* 未测试的上游必须拒绝切换；记下读句，下面核对是哪一句。 */ untested = error.Message; }
+            try { await service.ActivateAsync(id); } catch (InvalidOperationException error) { /* 未测试的上游必须拒绝切换；记下读句，下面核对是哪一句。 */ untested = error.Message; }
             Check(untested == "这个上游还没有通过最小模型调用测试，不能切换。请先测试。", "Switching to an untested upstream must read the not-tested sentence: " + untested);
-            await service.ChooseModel(id, "fixture-model");
-            report = await service.TestCandidate(id, true, CancellationToken.None);
+            await service.ChooseModelAsync(id, "fixture-model");
+            report = await service.TestCandidateAsync(id, true, CancellationToken.None);
             Check(report.CanActivate, "Testing again after choosing the model back must pass");
-            await service.Activate(id); var activated = await service.ReadActive();
+            await service.ActivateAsync(id); var activated = await service.ReadActiveAsync();
             Check(activated.Configured && activated.Options.Mode == Core.Upstream.UpstreamMode.ApiKey && activated.Options.BaseUrl == options.Validated().BaseUrl);
             Check(activated.Report?.CanActivate == true);
-            await CheckThrows(() => service.SaveCandidate(active.ActiveVersion, options, "fixture-api-secret-2"));
+            await CheckThrows(() => service.SaveCandidateAsync(active.ActiveVersion, options, "fixture-api-secret-2"));
         }
         // 无论断言成败都停止模拟上游，释放端口，避免影响后续测试。
         finally { await mock.StopAsync(); await mock.DisposeAsync(); }
@@ -188,28 +188,28 @@ static class UpstreamIntegrationTests
             async Task<Dictionary<string, string>> Form(string name) => new()
             {
                 ["Api.Name"] = name, ["Api.BaseUrl"] = mock.Urls.Single(), ["Api.Credential"] = "fixture-page-secret", ["Api.AllowPrivateNetwork"] = "true",
-                ["Version"] = (await fixture.Upstreams.ReadActive()).ActiveVersion.ToString()
+                ["Version"] = (await fixture.Upstreams.ReadActiveAsync()).ActiveVersion.ToString()
             };
             var unnamed = await Form(""); unnamed["__RequestVerificationToken"] = await fixture.Csrf("/Upstream");
             using (var refused = await fixture.Post("/Upstream?handler=DiscoverApi", unnamed))
             {
                 var page = WebUtility.HtmlDecode(await refused.Content.ReadAsStringAsync());
-                Check(refused.IsSuccessStatusCode && page.Contains("请填写供应商名称") && !page.Contains("fixture-page-secret") && await fixture.Upstreams.LatestCandidate() is null);
+                Check(refused.IsSuccessStatusCode && page.Contains("请填写供应商名称") && !page.Contains("fixture-page-secret") && await fixture.Upstreams.LatestCandidateAsync() is null);
             }
             var values = await Form("页面测试"); values["__RequestVerificationToken"] = await fixture.Csrf("/Upstream");
             using var saved = await fixture.Post("/Upstream?handler=DiscoverApi", values);
             var html = WebUtility.HtmlDecode(await saved.Content.ReadAsStringAsync());
             Check(saved.IsSuccessStatusCode && html.Contains("已保存「页面测试」。已获取 1 个模型，认证用 x-api-key") && html.Contains("<option value=\"fixture-model\"") && !html.Contains("fixture-page-secret"), html);
-            var candidate = (await fixture.Upstreams.LatestCandidate())!;
+            var candidate = (await fixture.Upstreams.LatestCandidateAsync())!;
             Check(candidate.Name == "页面测试" && candidate.Options.Authentication == Core.Upstream.AuthenticationScheme.XApiKey && !candidate.Options.AuthenticationManual && candidate.State == Core.Upstream.CandidateState.Untested);
             values = new() { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["model"] = "fixture-model", ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
             using var tested = await fixture.Post("/Upstream?handler=Test", values); html = WebUtility.HtmlDecode(await tested.Content.ReadAsStringAsync());
             Check(tested.IsSuccessStatusCode && html.Contains("认证用 x-api-key，按标准 Messages 方式通过，模型 fixture-model。") && !html.Contains("fixture-page-secret"));
             Check(html.Contains("测试（会消耗少量上游额度）") && !html.Contains("type=\"checkbox\" name=\"confirmed\""));
-            values = new() { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["Version"] = (await fixture.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
+            values = new() { ["candidateId"] = candidate.Id.ToString(CultureInfo.InvariantCulture), ["Version"] = (await fixture.Upstreams.ReadActiveAsync()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await fixture.Csrf("/Upstream") };
             using var activated = await fixture.Post("/Upstream?handler=Activate", values); html = WebUtility.HtmlDecode(await activated.Content.ReadAsStringAsync());
             Check(activated.IsSuccessStatusCode && html.Contains("已切换到「页面测试」"));
-            var active = await fixture.Upstreams.ReadActive();
+            var active = await fixture.Upstreams.ReadActiveAsync();
             Check(active.Configured && active.UpstreamCandidateId == candidate.Id && active.Name == "页面测试" && active.Options.Model == "fixture-model");
         }
         // 无论断言成败都停止模拟上游，释放端口，避免影响后续测试。

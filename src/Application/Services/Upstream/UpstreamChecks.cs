@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace Application.Services.Upstream;
 
 /// <summary>
-/// 后台检测：获取模型与测试在后台跑，页面只拿检测编号、查状态、可取消。检测本身仍由 <see cref="IUpstreamService.DiscoverModels"/>、<see cref="IUpstreamService.TestCandidate"/> 做，
+/// 后台检测：获取模型与测试在后台跑，页面只拿检测编号、查状态、可取消。检测本身仍由 <see cref="IUpstreamService.DiscoverModelsAsync"/>、<see cref="IUpstreamService.TestCandidateAsync"/> 做，
 /// 「检测中→结论／检测未完成」的收尾在那两处；这里只负责调度、记下读句、接住所有异常（意外的记一行日志）。
 /// 作为后台服务启动时把库里残留的「检测中」写成「检测未完成」，停止时取消进行中的检测并等它们收尾。记录只在内存里，最多留最近 <see cref="Kept"/> 次。
 /// </summary>
@@ -54,7 +54,7 @@ public sealed class UpstreamChecks : IUpstreamChecks, IHostedService, IDisposabl
     public UpstreamCheck? Running(long upstreamCandidateId)
     {
         // 同上：持锁遍历，后台任务结束、新检测登记都不会在遍历途中改动字典。
-        lock (_gate) return _jobs.Values.FirstOrDefault(job => job.CandidateId == upstreamCandidateId && job.Status == UpstreamCheckStatus.Running)?.Snapshot();
+        lock (_gate) return _jobs.Values.FirstOrDefault(job => job.UpstreamCandidateId == upstreamCandidateId && job.Status == UpstreamCheckStatus.Running)?.Snapshot();
     }
 
     /// <summary>取消一次正在进行的检测；已结束或编号不认识时返回 false，什么都不做。</summary>
@@ -73,7 +73,7 @@ public sealed class UpstreamChecks : IUpstreamChecks, IHostedService, IDisposabl
     /// <summary>服务启动：把库里残留的「检测中」写成「检测未完成」；库这时读不出来只记一行日志，不挡住启动。</summary>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        try { await _upstreams.RecoverInterruptedChecks(); }
+        try { await _upstreams.RecoverInterruptedChecksAsync(); }
         // 恢复失败不让服务起不来：残留的那几家过了检测窗口照样读作「检测未完成」。
         catch (Exception error) when (error is not OperationCanceledException) { RelayLog.Unexpected(_logger, error, "upstream-check:recover"); }
     }
@@ -106,7 +106,7 @@ public sealed class UpstreamChecks : IUpstreamChecks, IHostedService, IDisposabl
         // 判「这家有没有在检测」与登记新检测在同一把锁里：同一家连按两下只会有一次检测。
         lock (_gate)
         {
-            if (_jobs.Values.Any(item => item.CandidateId == upstreamCandidateId && item.Status == UpstreamCheckStatus.Running))
+            if (_jobs.Values.Any(item => item.UpstreamCandidateId == upstreamCandidateId && item.Status == UpstreamCheckStatus.Running))
                 throw new InvalidOperationException("这个上游正在检测，请等这次检测结束，或先按「取消检测」。");
             // 每次检测一个自己的令牌源，连着服务停止令牌：取消只停这一次，服务停止时一起停。
             job = new Job(++_next, upstreamCandidateId, kind, CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token),
@@ -116,20 +116,20 @@ public sealed class UpstreamChecks : IUpstreamChecks, IHostedService, IDisposabl
             { _jobs.Remove(old.Id); old.Cancellation.Dispose(); }
         }
         // 网络等待不占页面请求：放到线程池上跑，页面马上拿回编号。
-        job.Work = Task.Run(() => Run(job, lead));
+        job.Work = Task.Run(() => RunAsync(job, lead));
         return job.Id;
     }
 
     /// <summary>跑一次检测并记下结论或原因；所有异常都在这里接住，后台任务不会以异常结束。</summary>
-    private async Task Run(Job job, string lead)
+    private async Task RunAsync(Job job, string lead)
     {
         // 这次检测自己的令牌：管理员按取消或服务停止时取消，传给检测服务，网络请求与子进程随之停下。
         var token = job.Cancellation.Token;
         try
         {
             var message = job.Kind == UpstreamCheckKind.Discovery
-                ? lead + (await _upstreams.DiscoverModels(job.CandidateId, token)).Message
-                : (await _upstreams.TestCandidate(job.CandidateId, true, token)).Message;
+                ? lead + (await _upstreams.DiscoverModelsAsync(job.UpstreamCandidateId, token)).Message
+                : (await _upstreams.TestCandidateAsync(job.UpstreamCandidateId, true, token)).Message;
             // 测试被取消时检测服务照旧返回一份「已取消」报告、不抛出；按令牌判：取消了就读「检测未完成」，与获取模型被取消读同一句。
             if (token.IsCancellationRequested) End(job, UpstreamCheckStatus.Cancelled, UpstreamReport.UnfinishedLead + UpstreamReport.CancelledReason + UpstreamReport.UnfinishedNext);
             else End(job, UpstreamCheckStatus.Finished, message);
@@ -142,7 +142,7 @@ public sealed class UpstreamChecks : IUpstreamChecks, IHostedService, IDisposabl
         // 没有预料到的故障：记一行日志（只有类型链、阶段、上游主键），读出「检测未完成」与下一步。
         catch (Exception error)
         {
-            RelayLog.Unexpected(_logger, error, job.Kind == UpstreamCheckKind.Discovery ? "upstream-check:discovery" : "upstream-check:test", upstreamCandidateId: job.CandidateId);
+            RelayLog.Unexpected(_logger, error, job.Kind == UpstreamCheckKind.Discovery ? "upstream-check:discovery" : "upstream-check:test", upstreamCandidateId: job.UpstreamCandidateId);
             End(job, UpstreamCheckStatus.Failed, UpstreamReport.UnfinishedLead + UpstreamReport.FaultReason + UpstreamReport.UnfinishedNext);
         }
     }
@@ -155,13 +155,13 @@ public sealed class UpstreamChecks : IUpstreamChecks, IHostedService, IDisposabl
     }
 
     /// <summary>一次检测的内存记录；可变字段只在 <see cref="_gate"/> 锁里读写。</summary>
-    private sealed class Job(long id, long candidateId, UpstreamCheckKind kind, CancellationTokenSource cancellation, string message)
+    private sealed class Job(long id, long upstreamCandidateId, UpstreamCheckKind kind, CancellationTokenSource cancellation, string message)
     {
         /// <summary>检测编号。</summary>
         public long Id { get; } = id;
 
         /// <summary>已保存上游主键。</summary>
-        public long CandidateId { get; } = candidateId;
+        public long UpstreamCandidateId { get; } = upstreamCandidateId;
 
         /// <summary>做哪件事。</summary>
         public UpstreamCheckKind Kind { get; } = kind;
@@ -179,6 +179,6 @@ public sealed class UpstreamChecks : IUpstreamChecks, IHostedService, IDisposabl
         public Task? Work { get; set; }
 
         /// <summary>给调用方的快照。</summary>
-        public UpstreamCheck Snapshot() => new(Id, CandidateId, Kind, Status, Message);
+        public UpstreamCheck Snapshot() => new(Id, UpstreamCandidateId, Kind, Status, Message);
     }
 }

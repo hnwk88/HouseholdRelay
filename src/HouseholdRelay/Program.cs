@@ -40,33 +40,33 @@ public static class Program
                     var host = Option("--host") ?? throw new InvalidOperationException("请用 --host 指定花生壳域名。");
                     var publicPort = Port("--public-port", 5433); var listenPort = Port("--listen-port", 8787);
                     using var services = CompositionRoot.BuildCommandServices(home);
-                    await services.GetRequiredService<ManagementCommands>().Initialize(host, publicPort, listenPort); break;
+                    await services.GetRequiredService<ManagementCommands>().InitializeAsync(host, publicPort, listenPort); break;
                 }
                 case "account":
                 {
                     using var services = CompositionRoot.BuildCommandServices(home);
                     using var serving = services.GetRequiredService<IServingLock>().Acquire();
-                    await services.GetRequiredService<ISiteIdentityService>().Prepare(CancellationToken.None);
-                    await services.GetRequiredService<ManagementCommands>().SetAccount(); break;
+                    await services.GetRequiredService<ISiteIdentityService>().PrepareAsync(CancellationToken.None);
+                    await services.GetRequiredService<ManagementCommands>().SetAccountAsync(); break;
                 }
                 case "serve":
                 {
                     var adminPort = Port("--admin-port", 8788);
                     ServeCommand.CheckPort(adminPort);
                     await using var admin = ManagementWeb.Build(home, adminPort, services => services.AddServiceEventLog());
-                    await admin.Services.GetRequiredService<ServeCommand>().Run(admin, adminPort); break;
+                    await admin.Services.GetRequiredService<ServeCommand>().RunAsync(admin, adminPort); break;
                 }
                 case "clients":
                 {
                     using var services = CompositionRoot.BuildCommandServices(home);
-                    await services.GetRequiredService<ManagementCommands>().ManageClient(args.ElementAtOrDefault(1) ?? "list", Option("--name"), Option("--id"), Option("--display-name")); break;
+                    await services.GetRequiredService<ManagementCommands>().ManageClientAsync(args.ElementAtOrDefault(1) ?? "list", Option("--name"), Option("--id"), Option("--display-name")); break;
                 }
                 case "client":
                 {
                     var split = Array.IndexOf(args, "--");
                     var bundle = Path.GetFullPath(Option("--bundle") ?? AppContext.BaseDirectory);
                     using var services = CompositionRoot.BuildCommandServices(home);
-                    return await services.GetRequiredService<IClientLauncher>().Run(bundle, split >= 0 ? args[(split + 1)..] : []);
+                    return await services.GetRequiredService<IClientLauncher>().RunAsync(bundle, split >= 0 ? args[(split + 1)..] : []);
                 }
                 default: Help(); return ExitCodes.Rejected;
             }

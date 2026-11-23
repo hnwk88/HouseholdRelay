@@ -44,13 +44,13 @@ static class StabilityTests
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
         foreach (var test in new[] { false, true })
         {
-            var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-fault-secret");
+            var id = await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), "fixture-fault-secret");
             web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "UPDATE upstream_candidates SET credential=$value WHERE id=$id", ("$value", new byte[] { 1, 2, 3 }), ("$id", id)));
             Exception? thrown = null;
-            try { if (test) await web.Upstreams.TestCandidate(id, true, CancellationToken.None); else await web.Upstreams.DiscoverModels(id, CancellationToken.None); }
+            try { if (test) await web.Upstreams.TestCandidateAsync(id, true, CancellationToken.None); else await web.Upstreams.DiscoverModelsAsync(id, CancellationToken.None); }
             // 解密损坏的凭据要出错，这里只收下来核对类型。
             catch (Exception error) { thrown = error; }
-            var view = await web.Upstreams.ReadCandidate(id);
+            var view = await web.Upstreams.ReadCandidateAsync(id);
             Check(thrown is not null and not InvalidOperationException, (test ? "test: " : "discovery: ") + thrown?.GetType());
             Check(view.State == CandidateState.Untested && view.Phase == UpstreamCheckPhase.Idle && view.Deletable
                 && view.Report?.Message == UpstreamReport.UnfinishedLead + UpstreamReport.FaultReason + UpstreamReport.UnfinishedNext, (test ? "test: " : "discovery: ") + view.Report?.Message);
@@ -65,16 +65,16 @@ static class StabilityTests
         {
             var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             mock.Handler = async context => { entered.TrySetResult(); try { await Task.Delay(Timeout.Infinite, context.RequestAborted); } catch (OperationCanceledException) { /* 模拟不应答；取消后请求中止属于预期。 */ } };
-            var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-cancel-secret");
+            var id = await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), "fixture-cancel-secret");
             using var cancellation = new CancellationTokenSource();
-            Task pending = test ? web.Upstreams.TestCandidate(id, true, cancellation.Token) : web.Upstreams.DiscoverModels(id, cancellation.Token);
+            Task pending = test ? web.Upstreams.TestCandidateAsync(id, true, cancellation.Token) : web.Upstreams.DiscoverModelsAsync(id, cancellation.Token);
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(20));
-            Check((await web.Upstreams.ReadCandidate(id)).Phase == UpstreamCheckPhase.Checking, "A running check reads as checking");
+            Check((await web.Upstreams.ReadCandidateAsync(id)).Phase == UpstreamCheckPhase.Checking, "A running check reads as checking");
             await cancellation.CancelAsync();
             try { await pending.WaitAsync(TimeSpan.FromSeconds(30)); }
             // 取消以异常结束也算，核对的是落库的终态。
             catch (OperationCanceledException) { }
-            var view = await web.Upstreams.ReadCandidate(id);
+            var view = await web.Upstreams.ReadCandidateAsync(id);
             Check(view.State == CandidateState.Untested && view.Phase == UpstreamCheckPhase.Idle
                 && view.Report?.Message == UpstreamReport.UnfinishedLead + UpstreamReport.CancelledReason + UpstreamReport.UnfinishedNext, (test ? "test: " : "discovery: ") + view.Report?.Message);
         }
@@ -87,10 +87,10 @@ static class StabilityTests
         var raw = Directory.EnumerateFiles(pages, "*.cs*", SearchOption.AllDirectories).Where(file => File.ReadAllText(file).Contains("CandidateState.Testing", StringComparison.Ordinal)).ToArray();
         Check(raw.Length == 0, "Pages read the raw testing state: " + string.Join(", ", raw));
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
-        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-window-secret");
+        var id = await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), "fixture-window-secret");
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "UPDATE upstream_candidates SET state='testing', test_started_at=$at WHERE id=$id",
             ("$at", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - UpstreamCandidate.TestWindowSeconds - 5), ("$id", id)));
-        var view = await web.Upstreams.ReadCandidate(id);
+        var view = await web.Upstreams.ReadCandidateAsync(id);
         Check(view.Phase == UpstreamCheckPhase.Interrupted && view.Deletable);
         using var page = await web.Http.GetAsync(web.Url + "/Upstream");
         var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
@@ -103,7 +103,7 @@ static class StabilityTests
         await using var mock = await UpstreamFixture.Create();
         mock.Handler = async context => { try { await Task.Delay(Timeout.Infinite, context.RequestAborted); } catch (OperationCanceledException) { /* 模拟不应答；取消后请求中止属于预期。 */ } };
         await using var web = await WebFixture.Create(); await web.Login();
-        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-background-secret");
+        var id = await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), "fixture-background-secret");
         var started = await RawPost(web, "/Upstream?handler=Rediscover", new() { ["candidateId"] = id.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") });
         var match = System.Text.RegularExpressions.Regex.Match(started, "data-check-id=\"(\\d+)\"");
         Check(match.Success && started.Contains("aria-live=\"polite\"") && started.Contains("取消检测"), "The page must return at once with a status region");
@@ -112,11 +112,11 @@ static class StabilityTests
             Check((await state.Content.ReadAsStringAsync()).Contains("\"ended\":false"), "A hanging check is still running");
         var cancelled = await RawPost(web, "/Upstream?handler=CancelCheck", new() { ["checkId"] = check, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") });
         Check(cancelled.Contains(UpstreamReport.UnfinishedLead + UpstreamReport.CancelledReason), "Cancel must read the unfinished conclusion");
-        Check((await web.Upstreams.ReadCandidate(id)).Report?.Message.StartsWith(UpstreamReport.UnfinishedLead + UpstreamReport.CancelledReason, StringComparison.Ordinal) == true);
+        Check((await web.Upstreams.ReadCandidateAsync(id)).Report?.Message.StartsWith(UpstreamReport.UnfinishedLead + UpstreamReport.CancelledReason, StringComparison.Ordinal) == true);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "UPDATE upstream_candidates SET state='testing', test_started_at=$at WHERE id=$id",
             ("$at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()), ("$id", id)));
         await web.App.Services.GetRequiredService<UpstreamChecks>().StartAsync(CancellationToken.None);
-        Check((await web.Upstreams.ReadCandidate(id)).Report?.Message.StartsWith(UpstreamReport.UnfinishedLead + UpstreamReport.RestartReason, StringComparison.Ordinal) == true, "Restart must end a stale check");
+        Check((await web.Upstreams.ReadCandidateAsync(id)).Report?.Message.StartsWith(UpstreamReport.UnfinishedLead + UpstreamReport.RestartReason, StringComparison.Ordinal) == true, "Restart must end a stale check");
     }
 
     /// <summary>
@@ -129,11 +129,11 @@ static class StabilityTests
         await using var web = await WebFixture.Create(overrides: services =>
         {
             services.AddSingleton<IUsageService>(provider => FakeProxy<IUsageService>.Wrap(ActivatorUtilities.CreateInstance<UsageService>(provider),
-                method => failStart && method.Name == nameof(IUsageService.Start) ? new NotSupportedException("fixture-relay-fault") : null));
+                method => failStart && method.Name == nameof(IUsageService.StartAsync) ? new NotSupportedException("fixture-relay-fault") : null));
             services.AddSingleton<ICertificateService>(provider => FakeProxy<ICertificateService>.Wrap(ActivatorUtilities.CreateInstance<CertificateService>(provider),
-                method => method.Name == nameof(ICertificateService.ReadInfo) ? new NotSupportedException("fixture-management-fault") : null));
+                method => method.Name == nameof(ICertificateService.ReadInfoAsync) ? new NotSupportedException("fixture-management-fault") : null));
         });
-        var person = await web.Identities.Create("故障"); failStart = true;
+        var person = await web.Identities.CreateAsync("故障"); failStart = true;
         using var request = new HttpRequestMessage(HttpMethod.Post, web.Url + "/v1/messages") { Content = new StringContent("{\"model\":\"fixture-model\",\"note\":\"" + FakeToken + "\"}", Encoding.UTF8, "application/json") };
         request.Headers.Authorization = new("Bearer", person.Token); request.Headers.Add("x-fixture-note", FakeToken);
         using var response = await web.Http.SendAsync(request);
@@ -155,11 +155,11 @@ static class StabilityTests
         using var home = new TestHome();
         await using var admin = HouseholdRelay.Management.ManagementWeb.Build(home.Path, 0, services =>
             services.AddSingleton<ICertificateService>(provider => FakeProxy<ICertificateService>.Wrap(ActivatorUtilities.CreateInstance<CertificateService>(provider),
-                method => method.Name == nameof(ICertificateService.LoadForServing) ? new CryptographicException("fixture-certificate-fault") : null)));
+                method => method.Name == nameof(ICertificateService.LoadForServingAsync) ? new CryptographicException("fixture-certificate-fault") : null)));
         var lifetime = admin.Services.GetRequiredService<IHostApplicationLifetime>();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var registration = lifetime.ApplicationStarted.Register(() => started.TrySetResult());
-        var running = admin.Services.GetRequiredService<ServeCommand>().Run(admin, 0);
+        var running = admin.Services.GetRequiredService<ServeCommand>().RunAsync(admin, 0);
         var line = (await LogLines(home.Path, 1, text => text.Contains("\"stage\":\"serve:certificate\""))).Single();
         Check(line.Contains("System.Security.Cryptography.CryptographicException"), line);
         // 管理宿主照常启动完成后再叫停：证书失败只让对外 HTTPS 不启用。
@@ -190,7 +190,7 @@ static class StabilityTests
         await using var mock = await UpstreamFixture.Create();
         await using (var web = await WebFixture.Create(overrides: services => services.AddSingleton<IRelayEventLog>(events)))
         {
-            await mock.Activate(web.Upstreams); var person = await web.Identities.Create("书房");
+            await mock.Activate(web.Upstreams); var person = await web.Identities.CreateAsync("书房");
             using var response = await UpstreamFixture.RelayRequest(web, person.Token);
             Check(response.StatusCode == HttpStatusCode.OK, "A broken console must not fail the request");
         }
@@ -207,16 +207,16 @@ static class StabilityTests
     public static async Task ReissueKeepsAuthority()
     {
         await using var web = await WebFixture.Create(); var certificates = web.Certificates; var settings = web.Settings;
-        await certificates.CreatePrivate((await settings.Read()).Version, "https://localhost:8787", 8787);
-        var fingerprint = await certificates.AuthorityFingerprint(); var first = (await certificates.ReadInfo())!;
-        Check(await certificates.CanReissue());
-        await certificates.ReissuePrivate((await settings.Read()).Version, "https://127.0.0.1:8787", 8787);
-        var second = (await certificates.ReadInfo())!;
-        Check(await certificates.AuthorityFingerprint() == fingerprint && second.Thumbprint != first.Thumbprint && second.Host == "127.0.0.1", "Reissue keeps the root and replaces the leaf");
-        using (var serving = await certificates.LoadForServing()) Check(serving is not null);
+        await certificates.CreatePrivateAsync((await settings.ReadAsync()).Version, "https://localhost:8787", 8787);
+        var fingerprint = await certificates.AuthorityFingerprintAsync(); var first = (await certificates.ReadInfoAsync())!;
+        Check(await certificates.CanReissueAsync());
+        await certificates.ReissuePrivateAsync((await settings.ReadAsync()).Version, "https://127.0.0.1:8787", 8787);
+        var second = (await certificates.ReadInfoAsync())!;
+        Check(await certificates.AuthorityFingerprintAsync() == fingerprint && second.Thumbprint != first.Thumbprint && second.Host == "127.0.0.1", "Reissue keeps the root and replaces the leaf");
+        using (var serving = await certificates.LoadForServingAsync()) Check(serving is not null);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DELETE FROM secrets WHERE name='ca'"));
-        Check(!await certificates.CanReissue());
-        var refused = await Refusal(() => certificates.ReissuePrivate(1, "https://localhost:8787", 8787));
+        Check(!await certificates.CanReissueAsync());
+        var refused = await Refusal(() => certificates.ReissuePrivateAsync(1, "https://localhost:8787", 8787));
         Check(refused.Contains("旧版建的私有 CA"), refused);
         await web.Login();
         using var page = await web.Http.GetAsync(web.Url + "/Https");
@@ -228,24 +228,24 @@ static class StabilityTests
     public static async Task ImportKeepsPrevious()
     {
         await using var web = await WebFixture.Create(); var certificates = web.Certificates; var settings = web.Settings;
-        await certificates.CreatePrivate((await settings.Read()).Version, "https://localhost:8787", 8787);
-        var fingerprint = await certificates.AuthorityFingerprint();
+        await certificates.CreatePrivateAsync((await settings.ReadAsync()).Version, "https://localhost:8787", 8787);
+        var fingerprint = await certificates.AuthorityFingerprintAsync();
         await web.Login();
         using (var page = await web.Http.GetAsync(web.Url + "/Https"))
             Check(WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync()).Contains("我确认用导入的证书替换现在的私有 CA"), "The import form must show the confirmation");
         using var generated = TestProcess.CertificateFactory.CreateCertificate("localhost", out var pem); using var authority = X509Certificate2.CreateFromPem(pem);
         var pfx = generated.Export(X509ContentType.Pkcs12, "fixture-pfx-password");
-        var current = (await settings.Read()).Version;
-        var refused = await Refusal(() => certificates.Import(current, "https://localhost:5433", 8787, pfx, "fixture-pfx-password", false));
-        Check(refused.Contains("请先勾选") && await certificates.AuthorityFingerprint() == fingerprint, refused);
-        await certificates.Import((await settings.Read()).Version, "https://localhost:5433", 8787, pfx, "fixture-pfx-password", new X509Certificate2Collection(authority));
-        Check(await certificates.AuthorityFingerprint() is null && (await certificates.ReadInfo())?.Mode == "trusted" && await certificates.HasPrevious());
-        await certificates.RestorePrevious((await settings.Read()).Version);
-        Check(await certificates.AuthorityFingerprint() == fingerprint && (await certificates.ReadInfo())?.Mode == "private" && (await settings.Read()).Value.PublicUrl == "https://localhost:8787"
-            && await certificates.CanReissue(), "Restore brings back the private authority and its address");
-        using (var serving = await certificates.LoadForServing()) Check(serving is not null);
-        await certificates.RestorePrevious((await settings.Read()).Version);
-        Check((await certificates.ReadInfo())?.Mode == "trusted" && (await settings.Read()).Value.PublicUrl == "https://localhost:5433", "Restoring again returns to the imported one");
+        var current = (await settings.ReadAsync()).Version;
+        var refused = await Refusal(() => certificates.ImportAsync(current, "https://localhost:5433", 8787, pfx, "fixture-pfx-password", false));
+        Check(refused.Contains("请先勾选") && await certificates.AuthorityFingerprintAsync() == fingerprint, refused);
+        await certificates.ImportAsync((await settings.ReadAsync()).Version, "https://localhost:5433", 8787, pfx, "fixture-pfx-password", new X509Certificate2Collection(authority));
+        Check(await certificates.AuthorityFingerprintAsync() is null && (await certificates.ReadInfoAsync())?.Mode == "trusted" && await certificates.HasPreviousAsync());
+        await certificates.RestorePreviousAsync((await settings.ReadAsync()).Version);
+        Check(await certificates.AuthorityFingerprintAsync() == fingerprint && (await certificates.ReadInfoAsync())?.Mode == "private" && (await settings.ReadAsync()).Value.PublicUrl == "https://localhost:8787"
+            && await certificates.CanReissueAsync(), "Restore brings back the private authority and its address");
+        using (var serving = await certificates.LoadForServingAsync()) Check(serving is not null);
+        await certificates.RestorePreviousAsync((await settings.ReadAsync()).Version);
+        Check((await certificates.ReadInfoAsync())?.Mode == "trusted" && (await settings.ReadAsync()).Value.PublicUrl == "https://localhost:5433", "Restoring again returns to the imported one");
     }
 
     /// <summary>P-074：证书到期前 30 天三页（概览、HTTPS、连接说明）都提示，第 31 天不提示。</summary>
@@ -253,10 +253,10 @@ static class StabilityTests
     {
         var now = DateTimeOffset.UtcNow;
         Check(!new CertificateInfo("private", "localhost", now.AddDays(31), "x", now).ExpiringSoon(now) && new CertificateInfo("private", "localhost", now.AddDays(30), "x", now).ExpiringSoon(now));
-        await using var web = await WebFixture.Create(); await web.Certificates.CreatePrivate((await web.Settings.Read()).Version, "https://localhost:8787", 8787); await web.Login();
+        await using var web = await WebFixture.Create(); await web.Certificates.CreatePrivateAsync((await web.Settings.ReadAsync()).Version, "https://localhost:8787", 8787); await web.Login();
         foreach (var (days, warned) in new[] { (31.0, false), (30.0, true) })
         {
-            var info = (await web.Certificates.ReadInfo())! with { ValidUntil = DateTimeOffset.UtcNow.AddDays(days).AddMinutes(-1) };
+            var info = (await web.Certificates.ReadInfoAsync())! with { ValidUntil = DateTimeOffset.UtcNow.AddDays(days).AddMinutes(-1) };
             web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "UPDATE public_assets SET value=$value WHERE name='tls_info'",
                 ("$value", JsonSerializer.Serialize(info, ConfigurationFiles.Json))));
             foreach (var path in new[] { "/", "/Https", "/Connection" })
@@ -299,14 +299,14 @@ static class StabilityTests
     {
         using (var home = new TestHome())
         {
-            var first = new TestProcess(home.Path); Check(!(await first.Upstreams.ReadOverview()).Failover, "A new instance starts with failover off");
-            await first.Upstreams.SetFailover(true);
-            Check((await new TestProcess(home.Path).Upstreams.ReadOverview()).Failover, "A stored switch survives reopening");
+            var first = new TestProcess(home.Path); Check(!(await first.Upstreams.ReadOverviewAsync()).Failover, "A new instance starts with failover off");
+            await first.Upstreams.SetFailoverAsync(true);
+            Check((await new TestProcess(home.Path).Upstreams.ReadOverviewAsync()).Failover, "A stored switch survives reopening");
         }
         using var legacy = DatabaseUpgradeTests.Legacy("v8");
         using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(legacy.Path, ".state", "relay.db"), Pooling = false }.ToString()))
         { connection.Open(); using var command = connection.CreateCommand(); command.CommandText = "UPDATE upstream SET failover=1"; command.ExecuteNonQuery(); }
-        Check((await new TestProcess(legacy.Path).Upstreams.ReadOverview()).Failover, "An upgraded database keeps its stored switch");
+        Check((await new TestProcess(legacy.Path).Upstreams.ReadOverviewAsync()).Failover, "An upgraded database keeps its stored switch");
     }
 
     /// <summary>P-010：一家已保存上游的配置读不懂时，上游页照常打开、把它读成「配置已损坏」，备用顺序跳过它，日志留一行；不能拿它获取模型。</summary>
@@ -314,14 +314,14 @@ static class StabilityTests
     {
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(); await web.Login();
         await mock.Activate(web.Upstreams);
-        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-damaged-secret");
+        var id = await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, mock.Options(), "fixture-damaged-secret");
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "UPDATE upstream_candidates SET options_json='{broken', state='passed' WHERE id=$id", ("$id", id)));
-        var listed = await web.Upstreams.ListCandidates();
-        Check(listed.Single(item => item.Id == id).Damaged && (await web.Upstreams.ReadStandby()).All(item => item.UpstreamCandidateId != id));
+        var listed = await web.Upstreams.ListCandidatesAsync();
+        Check(listed.Single(item => item.Id == id).Damaged && (await web.Upstreams.ReadStandbyAsync()).All(item => item.UpstreamCandidateId != id));
         using var page = await web.Http.GetAsync(web.Url + "/Upstream");
         var html = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
         Check(page.IsSuccessStatusCode && html.Contains("配置已损坏：读不懂这一家存的配置"), "The page must open and name the damaged upstream");
-        var refused = await Refusal(() => web.Upstreams.DiscoverModels(id, CancellationToken.None));
+        var refused = await Refusal(() => web.Upstreams.DiscoverModelsAsync(id, CancellationToken.None));
         Check(refused.Contains("配置已损坏"), refused);
         Check((await LogLines(web.Home.Path, 1, line => line.Contains("\"stage\":\"upstream-config:"))).Count >= 1);
     }
@@ -330,13 +330,13 @@ static class StabilityTests
     public static async Task ImportRecordsEachFailure()
     {
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var version = (await web.Upstreams.ReadActive()).ActiveVersion;
-        var good = await web.Upstreams.SaveCandidate(version, mock.Options(), "fixture-import-good", "好的一家");
-        var bad = await web.Upstreams.SaveCandidate(version, mock.Options(), "fixture-import-bad", "坏的一家");
-        var export = await web.Upstreams.Export([good, bad], "fixture-export-password");
+        var version = (await web.Upstreams.ReadActiveAsync()).ActiveVersion;
+        var good = await web.Upstreams.SaveCandidateAsync(version, mock.Options(), "fixture-import-good", "好的一家");
+        var bad = await web.Upstreams.SaveCandidateAsync(version, mock.Options(), "fixture-import-bad", "坏的一家");
+        var export = await web.Upstreams.ExportAsync([good, bad], "fixture-export-password");
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction,
             "CREATE TRIGGER fixture_import BEFORE INSERT ON upstream_candidates WHEN NEW.name='坏的一家' BEGIN SELECT RAISE(ABORT,'fixture-import-failure'); END"));
-        var outcomes = await web.Upstreams.Import(version, export.File, "fixture-export-password", CancellationToken.None);
+        var outcomes = await web.Upstreams.ImportAsync(version, export.File, "fixture-export-password", CancellationToken.None);
         Check(outcomes.Count == 2 && outcomes.Single(item => item.Name == "好的一家").Error is null
             && outcomes.Single(item => item.Name == "坏的一家").Error?.Contains("意外错误") == true, string.Join(" / ", outcomes.Select(item => item.Name + ":" + item.Error)));
         Check((await LogLines(web.Home.Path, 1, line => line.Contains("\"stage\":\"upstream-import\""))).Count == 1);
@@ -351,13 +351,13 @@ static class StabilityTests
         var usage = FakeProxy<IUsageService>.Create((method, _) => method.Name switch
         {
             "get_Clock" => clock,
-            nameof(IUsageService.Recover) => Task.CompletedTask,
-            nameof(IUsageService.Cleanup) => Interlocked.Increment(ref cleanups) == 1 ? Task.FromResult(0) : Task.FromException<int>(new NotSupportedException("fixture-cleanup-fault")),
+            nameof(IUsageService.RecoverAsync) => Task.CompletedTask,
+            nameof(IUsageService.CleanupAsync) => Interlocked.Increment(ref cleanups) == 1 ? Task.FromResult(0) : Task.FromException<int>(new NotSupportedException("fixture-cleanup-fault")),
             nameof(IUsageService.MaintenanceFailure) => Failed(),
             _ => null,
         });
         var serving = FakeProxy<IServingLock>.Create((_, _) => new MemoryStream());
-        var identity = FakeProxy<ISiteIdentityService>.Create((method, _) => method.Name == nameof(ISiteIdentityService.Prepare) ? Task.CompletedTask : null);
+        var identity = FakeProxy<ISiteIdentityService>.Create((method, _) => method.Name == nameof(ISiteIdentityService.PrepareAsync) ? Task.CompletedTask : null);
         using var loggers = LoggerFactory.Create(logging => logging.AddRelayFileLog(home.Path));
         using var maintenance = new UsageMaintenance(usage, serving, identity, loggers.CreateLogger<UsageMaintenance>());
         await maintenance.StartAsync(CancellationToken.None);
@@ -381,15 +381,15 @@ static class StabilityTests
         var fake = FakeProxy<IClaudeCodeProbe>.Create((method, _) => method.Name switch
         {
             "get_IsAvailable" => true,
-            nameof(IClaudeCodeProbe.Run) => Task.FromException<ProbeReply>(fault),
+            nameof(IClaudeCodeProbe.RunAsync) => Task.FromException<ProbeReply>(fault),
             _ => null,
         });
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create(overrides: services => services.AddSingleton(fake));
         var options = mock.Options() with { Diagnostic = DiagnosticMethod.ClaudeCode };
-        var other = await web.Upstreams.TestCandidate(await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, options, "fixture-probe-a"), true, CancellationToken.None);
+        var other = await web.Upstreams.TestCandidateAsync(await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, options, "fixture-probe-a"), true, CancellationToken.None);
         Check(other.Message.Contains("本地地址规则拒绝了这次请求") && !other.Message.Contains("Claude Code 检测未完成"), other.Message);
         fault = new ClaudeCodeProbeIncompleteException("Claude Code 未发送检测请求。");
-        var native = await web.Upstreams.TestCandidate(await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, options, "fixture-probe-b"), true, CancellationToken.None);
+        var native = await web.Upstreams.TestCandidateAsync(await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, options, "fixture-probe-b"), true, CancellationToken.None);
         Check(native.Message.StartsWith("Claude Code 检测未完成", StringComparison.Ordinal), native.Message);
     }
 
@@ -397,13 +397,13 @@ static class StabilityTests
     public static async Task ErrorsCarryRequestIdAndPersonalUsageHidesQuotes()
     {
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        await mock.Activate(web.Upstreams); var person = await web.Identities.Create("客厅");
+        await mock.Activate(web.Upstreams); var person = await web.Identities.CreateAsync("客厅");
         using (var request = new HttpRequestMessage(HttpMethod.Post, web.Url + "/v1/messages") { Content = new StringContent("not json", Encoding.UTF8, "text/plain") })
         {
             request.Headers.Authorization = new("Bearer", person.Token);
             using var response = await web.Http.SendAsync(request);
             var requestId = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("request_id").GetString();
-            Check(response.StatusCode == HttpStatusCode.UnsupportedMediaType && (await web.RelayUsage.Query(new())).Rows.Any(row => row.RequestId == requestId), "The error body must carry the usage request id");
+            Check(response.StatusCode == HttpStatusCode.UnsupportedMediaType && (await web.RelayUsage.QueryAsync(new())).Rows.Any(row => row.RequestId == requestId), "The error body must carry the usage request id");
         }
         mock.Handler = context => { context.Response.StatusCode = 500; return context.Response.WriteAsJsonAsync(new { type = "error", error = new { type = "api_error", message = "fixture-attempt-words" } }); };
         using (var failed = await UpstreamFixture.RelayRequest(web, person.Token)) Check(failed.StatusCode == HttpStatusCode.InternalServerError);
@@ -494,16 +494,16 @@ static class StabilityTests
     /// <summary>手动触发的计时器时钟：<see cref="Fire"/> 一次就让周期计时器走一格。</summary>
     private sealed class ManualClock : TimeProvider
     {
-        private (TimerCallback Callback, object? State)? timer;
+        private (TimerCallback Callback, object? State)? _timer;
 
         /// <summary>记下计时器回调，不自己走。</summary>
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) { timer = (callback, state); return new ManualTimer(); }
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) { _timer = (callback, state); return new ManualTimer(); }
 
         /// <summary>触发一次。</summary>
-        public void Fire() { if (timer is { } registered) registered.Callback(registered.State); }
+        public void Fire() { if (_timer is { } registered) registered.Callback(registered.State); }
 
         /// <summary>已经有计时器登记了。</summary>
-        public bool Ready => timer is not null;
+        public bool Ready => _timer is not null;
 
         /// <summary>什么都不做的计时器句柄。</summary>
         private sealed class ManualTimer : ITimer

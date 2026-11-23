@@ -58,13 +58,13 @@ sealed class ControlledSiteIdentity(string deviceId) : ISiteIdentityService
     }
 
     /// <summary>不支持。</summary>
-    public Task Prepare(CancellationToken cancellation) => throw new NotSupportedException();
+    public Task PrepareAsync(CancellationToken cancellation) => throw new NotSupportedException();
 
     /// <summary>不支持。</summary>
-    public Task<SiteIdentityOperationResult> Refresh(string operationId, long expectedVersion, CancellationToken cancellation) => throw new NotSupportedException();
+    public Task<SiteIdentityOperationResult> RefreshAsync(string operationId, long expectedVersion, CancellationToken cancellation) => throw new NotSupportedException();
 
     /// <summary>不支持。</summary>
-    public Task<SiteIdentityOperationResult> Resume(string operationId, CancellationToken cancellation) => throw new NotSupportedException();
+    public Task<SiteIdentityOperationResult> ResumeAsync(string operationId, CancellationToken cancellation) => throw new NotSupportedException();
 
     /// <summary>归还一次许可。</summary>
     private void Leave()

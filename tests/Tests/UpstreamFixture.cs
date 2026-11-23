@@ -58,9 +58,9 @@ sealed class UpstreamFixture : IAsyncDisposable
     /// <summary>按当前版本保存候选上游，经明确同意后做诊断测试，测试必须允许激活，然后激活并返回候选编号。</summary>
     public async Task<long> Activate(IUpstreamService service, string credential = "fixture-new-upstream-secret", UpstreamOptions? options = null)
     {
-        var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, options ?? Options(), credential);
-        var report = await service.TestCandidate(id, true, CancellationToken.None);
-        TestSuite.Check(report.CanActivate, report.Message); await service.Activate(id); return id;
+        var id = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, options ?? Options(), credential);
+        var report = await service.TestCandidateAsync(id, true, CancellationToken.None);
+        TestSuite.Check(report.CanActivate, report.Message); await service.ActivateAsync(id); return id;
     }
     /// <summary>
     /// 以家庭成员令牌经管理网页主机上的中转发请求：/v1/models 路由用 GET，其余用 POST 带最小消息体；

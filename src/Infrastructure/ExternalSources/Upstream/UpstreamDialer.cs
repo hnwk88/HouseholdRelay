@@ -10,7 +10,7 @@ namespace Infrastructure.ExternalSources.Upstream;
 public static class UpstreamDialer
 {
     /// <summary>解析主机名并逐个校验地址：只要有一个地址不在允许范围（未开放内网时出现内网地址，或明文 http 上游出现公网地址）就整体拒绝，防止 DNS 返回混合结果绕过限制。</summary>
-    private static async Task<IPAddress[]> Resolve(string host, bool allowPrivate, bool privateOnly, CancellationToken cancellation)
+    private static async Task<IPAddress[]> ResolveAsync(string host, bool allowPrivate, bool privateOnly, CancellationToken cancellation)
     {
         var addresses = await Dns.GetHostAddressesAsync(host, cancellation);
         if (addresses.Length == 0 || addresses.Any(address => !(UpstreamAddress.IsPrivate(address) && allowPrivate || UpstreamAddress.IsPublic(address) && !privateOnly)))
@@ -22,26 +22,26 @@ public static class UpstreamDialer
     /// 作为 <see cref="SocketsHttpHandler.ConnectCallback"/> 为上游建立底层连接：先按全局设置解析代理（启用却取不到时抛出 <see cref="UpstreamProxyUnavailableException"/>，不发任何连接），
     /// 再校验目标地址；直连时连已校验的 IP，走代理时连到同样校验过的内网代理，再用 CONNECT 指向已校验的目标 IP 并检查代理回复 200。返回的流由 HTTP 处理器持有并释放。
     /// </summary>
-    public static async ValueTask<Stream> Connect(SocketsHttpConnectionContext context, UpstreamOptions options, IUpstreamProxy proxySettings, CancellationToken cancellation)
+    public static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, UpstreamOptions options, IUpstreamProxy proxySettings, CancellationToken cancellation)
     {
         var target = context.DnsEndPoint;
         var plain = options.BaseUrl.StartsWith("http://", StringComparison.Ordinal);
-        return await OpenTarget(target.Host, target.Port, plain, options.AllowPrivateNetwork, proxySettings, cancellation);
+        return await OpenTargetAsync(target.Host, target.Port, plain, options.AllowPrivateNetwork, proxySettings, cancellation);
     }
 
     /// <summary>
-    /// 按主机与端口建底层连接（不做 TLS），规则与 <see cref="Connect"/> 相同：先按全局设置解析代理，再校验目标地址；直连连已校验的 IP，
+    /// 按主机与端口建底层连接（不做 TLS），规则与 <see cref="ConnectAsync"/> 相同：先按全局设置解析代理，再校验目标地址；直连连已校验的 IP，
     /// 走代理时连已校验的内网代理并 CONNECT 到已校验的目标 IP。<paramref name="plain"/> 为真表示明文 http 上游（只许内网）。返回的流由调用方持有并释放。
     /// </summary>
-    public static async Task<Stream> OpenTarget(string host, int port, bool plain, bool allowPrivate, IUpstreamProxy proxySettings, CancellationToken cancellation)
+    public static async Task<Stream> OpenTargetAsync(string host, int port, bool plain, bool allowPrivate, IUpstreamProxy proxySettings, CancellationToken cancellation)
     {
         ArgumentException.ThrowIfNullOrEmpty(host); ArgumentNullException.ThrowIfNull(proxySettings);
         var route = proxySettings.Resolve(new UriBuilder(plain ? "http" : "https", host, port).Uri);
-        var addresses = await Resolve(host, allowPrivate, plain, cancellation);
-        if (route.Address is null) return await Open(addresses, port, cancellation);
+        var addresses = await ResolveAsync(host, allowPrivate, plain, cancellation);
+        if (route.Address is null) return await OpenAsync(addresses, port, cancellation);
         var proxy = UpstreamAddress.Proxy(route.Address.AbsoluteUri);
-        var proxyAddresses = await Resolve(proxy.DnsSafeHost, true, true, cancellation);
-        var stream = await Open(proxyAddresses, proxy.Port, cancellation);
+        var proxyAddresses = await ResolveAsync(proxy.DnsSafeHost, true, true, cancellation);
+        var stream = await OpenAsync(proxyAddresses, proxy.Port, cancellation);
         try
         {
             // 代理也连接已检查的目标 IP，不让代理重新解析目标主机而绕过地址范围限制。
@@ -64,7 +64,7 @@ public static class UpstreamDialer
     }
 
     /// <summary>按顺序尝试连接已校验的地址列表，第一个连上的地址返回网络流（流拥有套接字）；全部失败时抛出 <see cref="HttpRequestException"/>，内部异常是最后一个套接字错误。</summary>
-    private static async Task<Stream> Open(IPAddress[] addresses, int port, CancellationToken cancellation)
+    private static async Task<Stream> OpenAsync(IPAddress[] addresses, int port, CancellationToken cancellation)
     {
         SocketException? last = null;
         foreach (var address in addresses)

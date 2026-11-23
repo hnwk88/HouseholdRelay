@@ -11,5 +11,5 @@ public interface IIdentityCommandChannel
     /// <summary>
     /// 把动作交给运行中的服务并等它回结果。连不上、超时或回应无法读懂时抛 <see cref="InvalidOperationException"/>（读给操作者的原因与下一步），此时服务没有确认执行。
     /// </summary>
-    Task<IdentityCommandResult> Send(IdentityCommand command, CancellationToken cancellation);
+    Task<IdentityCommandResult> SendAsync(IdentityCommand command, CancellationToken cancellation);
 }

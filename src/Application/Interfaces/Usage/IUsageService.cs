@@ -19,25 +19,25 @@ public interface IUsageService
     DateTimeOffset Cutoff { get; }
 
     /// <summary>记录请求开始；保存失败时以 503 拒绝请求，不发往上游。</summary>
-    Task Start(string requestId, ClientAccess client, UsageKind kind);
+    Task StartAsync(string requestId, ClientAccess client, UsageKind kind);
 
     /// <summary>记录即将发送与首先要试的那一家（已保存上游主键）；保存失败时以 503 拒绝请求，不发往上游。</summary>
-    Task Dispatch(string requestId, long version, long? upstreamCandidateId, string? model);
+    Task DispatchAsync(string requestId, long version, long? upstreamCandidateId, string? model);
 
     /// <summary>保存请求结束结果，最多重试三次：写了返回已保存，早已结束返回无需再写，全部失败返回保存失败（已计入失败次数）。</summary>
-    Task<UsageFinish> Finish(string requestId, UsageEnd result);
+    Task<UsageFinish> FinishAsync(string requestId, UsageEnd result);
 
     /// <summary>服务启动时把上次遗留的未结束记录标记为中断。</summary>
-    Task Recover();
+    Task RecoverAsync();
 
     /// <summary>分批删除超出 40 天窗口的记录，返回删除总数。</summary>
-    Task<int> Cleanup(CancellationToken cancellation);
+    Task<int> CleanupAsync(CancellationToken cancellation);
 
     /// <summary>同上，不可取消。</summary>
-    Task<int> Cleanup() => Cleanup(CancellationToken.None);
+    Task<int> CleanupAsync() => CleanupAsync(CancellationToken.None);
 
     /// <summary>校验筛选条件后查询用量报告。</summary>
-    Task<UsageReport> Query(UsageFilter filter);
+    Task<UsageReport> QueryAsync(UsageFilter filter);
 
     /// <summary>记录一次后台维护失败。</summary>
     void MaintenanceFailure();

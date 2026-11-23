@@ -22,10 +22,10 @@ public interface IRelayReply
     void SetHeader(string name, string[] values);
 
     /// <summary>把 <paramref name="value"/> 序列化成 JSON 写出（application/json; charset=utf-8）。</summary>
-    Task WriteJson(object value, CancellationToken cancellation);
+    Task WriteJsonAsync(object value, CancellationToken cancellation);
 
     /// <summary>把程序目录里的一个文件原样写出。</summary>
-    Task SendFile(string path, CancellationToken cancellation);
+    Task SendFileAsync(string path, CancellationToken cancellation);
 
     /// <summary>中止连接，不再写任何东西。</summary>
     void Abort();

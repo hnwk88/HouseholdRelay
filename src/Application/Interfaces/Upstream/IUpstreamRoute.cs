@@ -12,10 +12,10 @@ public interface IUpstreamRoute : IDisposable
     IUpstreamLease Active { get; }
 
     /// <summary>这次请求还有没有上游能接：开关关闭时就是在用那一家的检查；开着时在用的或任一备用能接就通过，否则抛出在用那一家的拒绝（未配置、暂停或冷却）。</summary>
-    Task CheckState();
+    Task CheckStateAsync();
 
     /// <summary>给出顺序里下一家还没试过的上游；没有了返回 null。第一次调用一定给出一家，一家都接不了时抛出在用那一家的拒绝。</summary>
-    Task<IUpstreamLease?> Next(string? model);
+    Task<IUpstreamLease?> NextAsync(string? model);
 
     /// <summary>这家失败并被换掉：按 <see cref="UpstreamAttempt.Avoids"/> 让它暂避 5 分钟，记下原因供页面读出。</summary>
     void Avoid(IUpstreamLease lease, UpstreamAttempt attempt);

@@ -7,7 +7,7 @@ using Infrastructure.ExternalSources.Upstream;
 namespace Infrastructure.ExternalSources.Siyu;
 
 /// <summary>
-/// 思域的官方出口：经 <see cref="UpstreamDialer.OpenTarget"/> 走站点既有出口（全局代理、地址只许公网），再按系统信任完成 TLS；
+/// 思域的官方出口：经 <see cref="UpstreamDialer.OpenTargetAsync"/> 走站点既有出口（全局代理、地址只许公网），再按系统信任完成 TLS；
 /// SNI 是官方主机名，ALPN 只报 http/1.1（内层定界只懂 HTTP/1.1），对方选了别的协议就断开。建连与握手合计限时 <see cref="OpenTimeout"/>，与代理入口的握手上限同为 15 秒。
 /// </summary>
 internal sealed class OfficialConnector : IOfficialConnector
@@ -25,13 +25,13 @@ internal sealed class OfficialConnector : IOfficialConnector
     }
 
     /// <summary>连到 <paramref name="host"/>:443 并完成 TLS 握手；失败时已打开的连接先释放再抛出。</summary>
-    public async Task<Stream> Open(OfficialHost host, CancellationToken cancellation)
+    public async Task<Stream> OpenAsync(OfficialHost host, CancellationToken cancellation)
     {
         var name = OfficialTargets.Name(host);
         // 调用方取消（会话关闭、客户端断开）与建连上限合成一个：任一触发都立即放弃，不留半开的出站连接。
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         limit.CancelAfter(OpenTimeout);
-        var network = await UpstreamDialer.OpenTarget(name, OfficialTargets.Port, plain: false, allowPrivate: false, _proxy, limit.Token);
+        var network = await UpstreamDialer.OpenTargetAsync(name, OfficialTargets.Port, plain: false, allowPrivate: false, _proxy, limit.Token);
         var tls = new SslStream(network, leaveInnerStreamOpen: false);
         try
         {

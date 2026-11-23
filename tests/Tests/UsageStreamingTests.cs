@@ -18,7 +18,7 @@ static class UsageStreamingTests
     public static async Task FragmentsAndEndings()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var user = await web.Identities.Create("流式"); await upstream.Activate(web.Upstreams);
+        var user = await web.Identities.CreateAsync("流式"); await upstream.Activate(web.Upstreams);
         upstream.Handler = async context =>
         {
             context.Response.ContentType = "text/event-stream";
@@ -63,7 +63,7 @@ static class UsageStreamingTests
         {
             await using var upstream = await UpstreamFixture.Create();
             await using var web = await WebFixture.Create(config => config.RequestTimeoutSeconds = cancel ? 5 : 1);
-            var user = await web.Identities.Create("取消"); await upstream.Activate(web.Upstreams);
+            var user = await web.Identities.CreateAsync("取消"); await upstream.Activate(web.Upstreams);
             var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             upstream.Handler = async context =>
             {
@@ -83,9 +83,9 @@ static class UsageStreamingTests
             var received = "";
             while (!received.Contains("\"output_tokens\":4", StringComparison.Ordinal))
             { var read = await stream.ReadAsync(first).AsTask().WaitAsync(TimeSpan.FromSeconds(2)); Check(read > 0); received += Encoding.UTF8.GetString(first, 0, read); }
-            Check((await web.RelayUsage.Query(new())).Summary[0].Pending == 1);
+            Check((await web.RelayUsage.QueryAsync(new())).Summary[0].Pending == 1);
             // 流开放时配置提交可完成，证明没有跨网络请求持有写事务。
-            await Task.Run(() => web.Identities.Rename(user.UserId, "取消后仍归本人")).WaitAsync(TimeSpan.FromSeconds(1));
+            await Task.Run(() => web.Identities.RenameAsync(user.UserId, "取消后仍归本人")).WaitAsync(TimeSpan.FromSeconds(1));
             if (cancel) { cancellation.Cancel(); response.Dispose(); }
             else { try { await stream.CopyToAsync(Stream.Null); } catch (IOException) { /* 超时后中转会中断响应，读取剩余内容时出现 IO 异常属于预期，结论以用量记录为准。 */ } }
             await released.Task.WaitAsync(TimeSpan.FromSeconds(4));
@@ -103,7 +103,7 @@ static class UsageStreamingTests
     public static async Task BoundedEvents()
     {
         await using var upstream = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
-        var user = await web.Identities.Create("大流"); await upstream.Activate(web.Upstreams);
+        var user = await web.Identities.CreateAsync("大流"); await upstream.Activate(web.Upstreams);
         upstream.Handler = async context =>
         {
             context.Response.ContentType = "text/event-stream";

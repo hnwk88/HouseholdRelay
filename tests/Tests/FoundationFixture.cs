@@ -88,7 +88,7 @@ sealed class WebFixture : IAsyncDisposable
             if (configure is not null) services.AddSingleton(provider =>
             {
                 // 容器的工厂委托只能同步返回；读取设置改成异步后在这里同步等完，保证 configure 改写的是读回的那一份。
-                var configuration = provider.GetRequiredService<IConfigurationService>().Read().GetAwaiter().GetResult().Value; configure(configuration); return configuration;
+                var configuration = provider.GetRequiredService<IConfigurationService>().ReadAsync().GetAwaiter().GetResult().Value; configure(configuration); return configuration;
             });
             overrides?.Invoke(services);
         });
@@ -154,7 +154,7 @@ sealed class WebFixture : IAsyncDisposable
     /// <summary>如尚未初始化则用首次引导码设置测试密码，再通过登录表单登录默认会话；登录必须返回 302 跳转。</summary>
     public async Task Login()
     {
-        if (!await Administrators.IsInitialized()) await Administrators.Initialize((await Administrators.BootstrapCode())!, Password);
+        if (!await Administrators.IsInitializedAsync()) await Administrators.InitializeAsync((await Administrators.BootstrapCodeAsync())!, Password);
         using var response = await Post("/Login", new() { ["Password"] = Password, ["__RequestVerificationToken"] = await Csrf("/Login") });
         TestSuite.Check(response.StatusCode == HttpStatusCode.Redirect, "Login failed");
     }

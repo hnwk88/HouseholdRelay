@@ -16,10 +16,10 @@ public static class DeviceMetadataPathTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(configuration => configuration.LegacyOfficialClosed = true, claude.Register);
         var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
-        var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, options, FakeClaude.Credential("fixture-protocol-token", 60), "模拟官方", CancellationToken.None);
-        var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);
-        Check(report.CanActivate, report.Message); await web.Upstreams.Activate(candidate);
-        var token = (await web.Identities.Create("旧接法客户端")).Token;
+        var candidate = await web.Upstreams.ImportOfficialAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, options, FakeClaude.Credential("fixture-protocol-token", 60), "模拟官方", CancellationToken.None);
+        var report = await web.Upstreams.TestCandidateAsync(candidate, true, CancellationToken.None);
+        Check(report.CanActivate, report.Message); await web.Upstreams.ActivateAsync(candidate);
+        var token = (await web.Identities.CreateAsync("旧接法客户端")).Token;
         var before = mock.Calls.Count;
         using (var request = UsageFixture.Request(web, token, "legacy-closed", body: Sample(false, new string('a', 64), "fixture-model", claude.Version, "sdk-cli")))
         using (var response = await web.Http.SendAsync(request))
@@ -38,13 +38,13 @@ public static class DeviceMetadataPathTests
         var logs = new ConcurrentQueue<string>();
         await using var web = await WebFixture.Create(configuration => configuration.NormalizeDeviceMetadata = false, services =>
         { claude.Register(services); services.AddSingleton<IRelayEventLog>(new FixtureLog(logs)); });
-        var settings = await web.Settings.Read(); settings.Value.NormalizeDeviceMetadata = false; await web.Settings.Save(settings.Version, settings.Value);
+        var settings = await web.Settings.ReadAsync(); settings.Value.NormalizeDeviceMetadata = false; await web.Settings.SaveAsync(settings.Version, settings.Value);
         var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
-        var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, options, FakeClaude.Credential("fixture-protocol-token", 60), "模拟官方", CancellationToken.None);
-        var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);
-        Check(report.CanActivate, report.Message); await web.Upstreams.Activate(candidate);
-        var token = (await web.Identities.Create("矩阵客户端")).Token;
-        var canonical = (await web.Settings.Read()).Value.DeviceId;
+        var candidate = await web.Upstreams.ImportOfficialAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, options, FakeClaude.Credential("fixture-protocol-token", 60), "模拟官方", CancellationToken.None);
+        var report = await web.Upstreams.TestCandidateAsync(candidate, true, CancellationToken.None);
+        Check(report.CanActivate, report.Message); await web.Upstreams.ActivateAsync(candidate);
+        var token = (await web.Identities.CreateAsync("矩阵客户端")).Token;
+        var canonical = (await web.Settings.ReadAsync()).Value.DeviceId;
         var generation = web.App.Services.GetRequiredService<ISiteIdentityService>().Current.Version;
         web.App.Services.GetRequiredService<IProtocolDiagnostics>().Start();
         var first = mock.Calls.Count;
@@ -66,14 +66,14 @@ public static class DeviceMetadataPathTests
             using (var transport = new UpstreamConnection(new(1, options, "fixture-protocol-token", accountUuid: FakeClaude.AccountUuid), web.App.Services.GetRequiredService<IUpstreamProxy>()))
             {
                 var identity = ClaudeCodeIdentity.From(FakeClaude.Identity(claude.Version), claude.Version, "sdk-cli", DateTimeOffset.UnixEpoch);
-                var reply = await web.App.Services.GetRequiredService<IClaudeCodeProbe>().Run(transport, identity, CancellationToken.None);
+                var reply = await web.App.Services.GetRequiredService<IClaudeCodeProbe>().RunAsync(transport, identity, CancellationToken.None);
                 Check((int)reply.Status == 200, "The actual probe implementation must forward one valid sample.");
             }
             AssertSample(mock.Calls.Last(), expected, downstream, canonical, hashes);
             sequence += 2;
             Check(mock.Calls.Count == first + sequence, "Each business or probe sample sends exactly once.");
         }
-        Check(sequence == 8 && hashes.Count == 1 && !(await web.Settings.Read()).Value.NormalizeDeviceMetadata, "The eight-line matrix must use one device even with compatibility normalization disabled.");
+        Check(sequence == 8 && hashes.Count == 1 && !(await web.Settings.ReadAsync()).Value.NormalizeDeviceMetadata, "The eight-line matrix must use one device even with compatibility normalization disabled.");
         var legacy = JsonSerializer.Serialize("user_" + new string('a', 64) + "_account_account_session_session");
         var duplicateDevice = JsonSerializer.Serialize("{\"device_id\":\"a\",\"device_id\":\"b\"}");
         string[] invalid =
@@ -92,7 +92,7 @@ public static class DeviceMetadataPathTests
             Check((int)response.StatusCode == 400, "Unsupported official metadata must be a local 400.");
             Check(mock.Calls.Count == allowed, "Each negative category must produce zero upstream requests.");
         }
-        using var lease = await web.Pool.Acquire();
+        using var lease = await web.Pool.AcquireAsync();
         Check(!lease.Paused && lease.CooldownSeconds == 0, "Local failures do not change upstream authentication or cooldown.");
         var records = logs.Select(line => JsonSerializer.Deserialize<JsonElement>(line))
             .Where(entry => entry.TryGetProperty("diagnostic", out var kind) && kind.GetString() == "site_identity").ToArray();
@@ -120,19 +120,19 @@ public static class DeviceMetadataPathTests
         await using var mock = await UpstreamFixture.Create();
         await using var web = await WebFixture.Create(overrides: claude.Register);
         var options = mock.Options(mode: "oauth", authentication: "bearer") with { OfficialLogin = true };
-        var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, options, FakeClaude.Credential("fixture-account-token", 60), "模拟官方", CancellationToken.None);
-        var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(candidate)).Uid, ".claude.json");
+        var candidate = await web.Upstreams.ImportOfficialAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, options, FakeClaude.Credential("fixture-account-token", 60), "模拟官方", CancellationToken.None);
+        var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidateAsync(candidate)).Uid, ".claude.json");
         using (var imported = JsonDocument.Parse(File.ReadAllBytes(configuration))) Check(!imported.RootElement.TryGetProperty("oauthAccount", out _), "An imported login file has no oauthAccount, like a real one");
-        await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
+        await web.Upstreams.DiscoverModelsAsync(candidate, CancellationToken.None);
         var profile = mock.Calls.Single(call => call.Path == "/api/oauth/profile");
         Check(profile.Body.Length == 0 && profile.Headers["Authorization"] == "Bearer fixture-account-token" && profile.Headers["User-Agent"] == "claude-code/" + claude.Version
             && profile.Headers["Cache-Control"] == "no-cache" && !profile.Headers.Keys.Any(key => key.StartsWith("x-stainless-", StringComparison.OrdinalIgnoreCase) || key.Equals("anthropic-beta", StringComparison.OrdinalIgnoreCase)),
             "The profile request carries exactly the native login headers");
         using (var recorded = JsonDocument.Parse(File.ReadAllBytes(configuration)))
             Check(recorded.RootElement.GetProperty("oauthAccount").GetProperty("accountUuid").GetString() == FakeClaude.AccountUuid, "Discovery records the official account UUID in the account directory");
-        var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);
-        Check(report.CanActivate, report.Message); await web.Upstreams.Activate(candidate);
-        var token = (await web.Identities.Create("账户编号客户端")).Token;
+        var report = await web.Upstreams.TestCandidateAsync(candidate, true, CancellationToken.None);
+        Check(report.CanActivate, report.Message); await web.Upstreams.ActivateAsync(candidate);
+        var token = (await web.Identities.CreateAsync("账户编号客户端")).Token;
         async Task<HttpResponseMessage> Business()
         {
             using var request = UsageFixture.Request(web, token, "account-uuid", body: Sample(true, new string('a', 64), "fixture-model", claude.Version, "sdk-cli"));
@@ -142,12 +142,12 @@ public static class DeviceMetadataPathTests
         using (var response = await Business()) Check(response.IsSuccessStatusCode && Wire() == FakeClaude.AccountUuid, "Business requests carry the recorded account UUID");
         const string switched = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
         mock.Profile = context => UpstreamFixture.ProfileReply(context, switched);
-        report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None); Check(report.CanActivate, report.Message);
+        report = await web.Upstreams.TestCandidateAsync(candidate, true, CancellationToken.None); Check(report.CanActivate, report.Message);
         using (var recorded = JsonDocument.Parse(File.ReadAllBytes(configuration)))
             Check(recorded.RootElement.GetProperty("oauthAccount").GetProperty("accountUuid").GetString() == switched, "A changed official account is synchronized by the next test");
         using (var response = await Business()) Check(response.IsSuccessStatusCode && Wire() == switched, "The active connection uses the synchronized account UUID");
         mock.Profile = context => { context.Response.StatusCode = 401; return Task.CompletedTask; };
-        try { await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None); Check(false, "A refused profile must fail the test"); }
+        try { await web.Upstreams.TestCandidateAsync(candidate, true, CancellationToken.None); Check(false, "A refused profile must fail the test"); }
         // 资料接口被拒是本用例的目标：读句说明没有取得账户编号、要重新登录。
         catch (InvalidOperationException error) { Check(error.Message.Contains("账户编号", StringComparison.Ordinal) && error.Message.Contains("重新登录", StringComparison.Ordinal), error.Message); }
         var withoutAccount = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(configuration))!.AsObject(); withoutAccount.Remove("oauthAccount");
@@ -160,7 +160,7 @@ public static class DeviceMetadataPathTests
             Check((int)response.StatusCode == 503 && said.Contains("测试", StringComparison.Ordinal) && mock.Calls.Count == sent,
                 $"Without an account UUID the relay refuses locally, tells the admin to test, and sends nothing: {(int)response.StatusCode} {said} sent={mock.Calls.Count - sent}");
         }
-        using var lease = await web.Pool.Acquire();
+        using var lease = await web.Pool.AcquireAsync();
         Check(!lease.Paused && lease.CooldownSeconds == 0, "The missing account UUID is a local block, not an upstream pause or cooldown");
     }
 
@@ -191,13 +191,13 @@ public static class DeviceMetadataPathTests
                 : streaming ? Reply(context, "text/event-stream", Encoding.UTF8.GetBytes(events))
                 : Reply(context, "application/json", JsonSerializer.SerializeToUtf8Bytes(new { id = "msg_fixture", type = "message", role = "assistant", model = "fixture-model",
                     content = new[] { new { type = "text", text = "OK" } }, stop_reason = "end_turn" }));
-            var candidate = await web.Upstreams.ImportOfficial((await web.Upstreams.ReadActive()).ActiveVersion, options, FakeClaude.Credential("fixture-compressed-" + encoding + (streaming ? "-sse" : "-json"), 60), "模拟官方", CancellationToken.None);
-            var catalog = await web.Upstreams.DiscoverModels(candidate, CancellationToken.None);
+            var candidate = await web.Upstreams.ImportOfficialAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, options, FakeClaude.Credential("fixture-compressed-" + encoding + (streaming ? "-sse" : "-json"), 60), "模拟官方", CancellationToken.None);
+            var catalog = await web.Upstreams.DiscoverModelsAsync(candidate, CancellationToken.None);
             Check(catalog.Status == Core.Upstream.CatalogStatus.Passed && catalog.Models.SequenceEqual(["fixture-model"]), label + " catalog decoded: " + catalog.Message);
-            var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidate(candidate)).Uid, ".claude.json");
+            var configuration = Path.Combine(web.Home.Path, ".state", "official-accounts", (await web.Upstreams.ReadCandidateAsync(candidate)).Uid, ".claude.json");
             using (var recorded = JsonDocument.Parse(File.ReadAllBytes(configuration)))
                 Check(recorded.RootElement.GetProperty("oauthAccount").GetProperty("accountUuid").GetString() == FakeClaude.AccountUuid, label + " profile decoded and recorded");
-            var report = await web.Upstreams.TestCandidate(candidate, true, CancellationToken.None);
+            var report = await web.Upstreams.TestCandidateAsync(candidate, true, CancellationToken.None);
             Check(report.CanActivate, label + " test decoded the probe reply: " + report.Message);
         }
     }

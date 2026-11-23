@@ -37,7 +37,7 @@ public sealed class FakeSiyuTunnel(OfficialHost host) : ISiyuTunnel
     public void Close() => _closed.Cancel();
 
     /// <summary>个人令牌不对抛 401 本地拒绝；否则记下路由并给许可。</summary>
-    public Task<ISiyuPermit> Admit(SiyuRoute route, string bearerToken, CancellationToken cancellation)
+    public Task<ISiyuPermit> AdmitAsync(SiyuRoute route, string bearerToken, CancellationToken cancellation)
     {
         if (bearerToken != PersonalToken) throw new SiyuRefusal(401, "personal-token", "思域的个人令牌已失效。请更新此启动配置的令牌，再启动。");
         // 准入可能并发发生，记录表加锁。

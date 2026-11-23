@@ -21,27 +21,27 @@ static class UpstreamSecurityTests
         await using var plain = await UpstreamFixture.Create();
         foreach (var url in new[] { plain.Url.Replace("http://", "https://", StringComparison.Ordinal), "http://127.0.0.1:1", "http://169.254.169.254", "http://[::ffff:169.254.169.254]", "http://192.0.2.1" })
         {
-            var id = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, plain.Options() with { BaseUrl = url }, "fixture-network-secret");
+            var id = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, plain.Options() with { BaseUrl = url }, "fixture-network-secret");
             using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var result = await service.TestCandidate(id, true, bound.Token); Check(!result.CanActivate);
+            var result = await service.TestCandidateAsync(id, true, bound.Token); Check(!result.CanActivate);
         }
         // localhost 也走真实 DNS 和连接前地址校验，不能以 HTTPS 绕过私网显式选择。
-        var denied = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, plain.Options() with { BaseUrl = plain.Url.Replace("127.0.0.1", "localhost").Replace("http:", "https:"), AllowPrivateNetwork = false }, "fixture-private-secret");
-        var refused = await service.TestCandidate(denied, true, CancellationToken.None); Check(refused.Connection == Core.Upstream.CheckStatus.Failed && plain.Calls.IsEmpty);
+        var denied = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, plain.Options() with { BaseUrl = plain.Url.Replace("127.0.0.1", "localhost").Replace("http:", "https:"), AllowPrivateNetwork = false }, "fixture-private-secret");
+        var refused = await service.TestCandidateAsync(denied, true, CancellationToken.None); Check(refused.Connection == Core.Upstream.CheckStatus.Failed && plain.Calls.IsEmpty);
         using var generated = TestProcess.CertificateFactory.CreateCertificate("localhost", out _);
         using var certificate = TestProcess.CertificateFactory.LoadServerCertificate(generated.Export(X509ContentType.Pfx));
         await using var untrusted = await UpstreamFixture.Create(certificate);
-        var tls = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, untrusted.Options(), "fixture-tls-secret");
-        var failedTls = await service.TestCandidate(tls, true, CancellationToken.None);
+        var tls = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, untrusted.Options(), "fixture-tls-secret");
+        var failedTls = await service.TestCandidateAsync(tls, true, CancellationToken.None);
         Check(failedTls.Connection == Core.Upstream.CheckStatus.Failed && untrusted.Calls.IsEmpty, "Untrusted TLS must fail before sending credentials");
         plain.Handler = async context => { try { await Task.Delay(Timeout.Infinite, context.RequestAborted); } catch (OperationCanceledException) { /* 模拟永不应答的上游；诊断取消后请求中止属于预期，安静结束即可。 */ } };
-        var slow = await service.SaveCandidate((await service.ReadActive()).ActiveVersion, plain.Options(), "fixture-slow-secret");
+        var slow = await service.SaveCandidateAsync((await service.ReadActiveAsync()).ActiveVersion, plain.Options(), "fixture-slow-secret");
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
         // 订单 148：管理员取消不算结论，这一家落到「检测未完成」（未测试），不记成未通过；返回的报告仍是「已取消」。
-        var cancelled = await service.TestCandidate(slow, true, cancel.Token); var after = await service.ReadCandidate(slow);
+        var cancelled = await service.TestCandidateAsync(slow, true, cancel.Token); var after = await service.ReadCandidateAsync(slow);
         Check(cancelled.Call == Core.Upstream.CheckStatus.Cancelled && after.State == Core.Upstream.CandidateState.Untested
             && after.Report?.Message.StartsWith(Core.Upstream.UpstreamReport.UnfinishedLead + Core.Upstream.UpstreamReport.CancelledReason, StringComparison.Ordinal) == true, after.Report?.Message ?? "no report");
-        Check(!(await service.ReadActive()).Configured);
+        Check(!(await service.ReadActiveAsync()).Configured);
     }
 
     /// <summary>
@@ -55,19 +55,19 @@ static class UpstreamSecurityTests
         using var generated = TestProcess.CertificateFactory.CreateCertificate("localhost", out var pem); using var authority = X509Certificate2.CreateFromPem(pem);
         var roots = new X509Certificate2Collection(authority); var bundle = new X509Certificate2Collection(generated); bundle.Add(authority);
         var bytes = bundle.Export(X509ContentType.Pkcs12, "fixture-pfx-password")!;
-        await CheckRejected(async () => await certificates.Import((await settings.Read()).Version, "https://localhost", 8787, bytes, "wrong-password"));
-        await CheckRejected(async () => await certificates.Import((await settings.Read()).Version, "https://localhost", 8787, bytes, "fixture-pfx-password"));
-        await CheckRejected(async () => await certificates.Import((await settings.Read()).Version, "https://different.example", 8787, bytes, "fixture-pfx-password", roots));
-        await CheckRejected(async () => await certificates.Import((await settings.Read()).Version + 1, "https://localhost", 8787, bytes, "fixture-pfx-password", roots));
+        await CheckRejected(async () => await certificates.ImportAsync((await settings.ReadAsync()).Version, "https://localhost", 8787, bytes, "wrong-password"));
+        await CheckRejected(async () => await certificates.ImportAsync((await settings.ReadAsync()).Version, "https://localhost", 8787, bytes, "fixture-pfx-password"));
+        await CheckRejected(async () => await certificates.ImportAsync((await settings.ReadAsync()).Version, "https://different.example", 8787, bytes, "fixture-pfx-password", roots));
+        await CheckRejected(async () => await certificates.ImportAsync((await settings.ReadAsync()).Version + 1, "https://localhost", 8787, bytes, "fixture-pfx-password", roots));
         using var expiredKey = RSA.Create(2048);
         var expiredRequest = new CertificateRequest("CN=localhost", expiredKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         var san = new SubjectAlternativeNameBuilder(); san.AddDnsName("localhost"); expiredRequest.CertificateExtensions.Add(san.Build());
         using var expired = expiredRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddDays(-1));
-        await CheckRejected(async () => await certificates.Import((await settings.Read()).Version, "https://localhost", 8787, expired.Export(X509ContentType.Pkcs12), null));
-        Check(!await settings.HasCertificate() && await certificates.ReadInfo() is null);
-        await certificates.Import((await settings.Read()).Version, "https://localhost", 8787, bytes, "fixture-pfx-password", roots);
-        Check((await certificates.ReadInfo())?.Host == "localhost" && await settings.HasCertificate());
-        var restarted = new TestProcess(home.Path); var stored = (await restarted.Settings.LoadCertificate())!;
+        await CheckRejected(async () => await certificates.ImportAsync((await settings.ReadAsync()).Version, "https://localhost", 8787, expired.Export(X509ContentType.Pkcs12), null));
+        Check(!await settings.HasCertificateAsync() && await certificates.ReadInfoAsync() is null);
+        await certificates.ImportAsync((await settings.ReadAsync()).Version, "https://localhost", 8787, bytes, "fixture-pfx-password", roots);
+        Check((await certificates.ReadInfoAsync())?.Host == "localhost" && await settings.HasCertificateAsync());
+        var restarted = new TestProcess(home.Path); var stored = (await restarted.Settings.LoadCertificateAsync())!;
         var collection = X509CertificateLoader.LoadPkcs12Collection(stored, null, X509KeyStorageFlags.EphemeralKeySet);
         try
         {
@@ -94,11 +94,11 @@ static class UpstreamSecurityTests
         using var connection = database.Open();
         var protectedBytes = (byte[])RelayDatabase.Scalar(connection, null, "SELECT protected FROM secrets WHERE name='tls'")!;
         Check(!protectedBytes.SequenceEqual(bytes));
-        var publicUrl = await settings.Read(); publicUrl.Value.PublicUrl = "https://different.example";
-        await CheckRejected(() => settings.Save(publicUrl.Version, publicUrl.Value));
+        var publicUrl = await settings.ReadAsync(); publicUrl.Value.PublicUrl = "https://different.example";
+        await CheckRejected(() => settings.SaveAsync(publicUrl.Version, publicUrl.Value));
         using var legacyHome = new TestHome(); var legacyDatabase = new TestProcess(legacyHome.Path);
-        await legacyDatabase.Settings.ConfigureLegacyTls("localhost", 5433, 8787);
-        using var legacyChain = (await legacyDatabase.Certificates.LoadForServing())!;
+        await legacyDatabase.Settings.ConfigureLegacyTlsAsync("localhost", 5433, 8787);
+        using var legacyChain = (await legacyDatabase.Certificates.LoadForServingAsync())!;
         Check(legacyChain.Chain.Count == 2 && legacyChain.Chain.Cast<X509Certificate2>().Any(item => !item.HasPrivateKey), "Legacy CA must accompany its leaf when serving TLS");
     }
 

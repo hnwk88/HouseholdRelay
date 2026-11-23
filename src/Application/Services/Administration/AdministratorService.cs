@@ -13,14 +13,14 @@ namespace Application.Services.Administration;
 public sealed class AdministratorService(IServiceScopeFactory scopes, IAdministratorPasswordHasher hasher, ISecretProtector protector) : IAdministratorService
 {
     /// <summary>是否已完成首次设置（恰好存在一名管理员）；每次都直接查库，不做缓存。</summary>
-    public async Task<bool> IsInitialized()
+    public async Task<bool> IsInitializedAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
         return await scope.Repository<Administrator>().CountAsync() == 1;
     }
 
     /// <summary>解密并返回一次性引导码，供本机启动时显示；首次设置完成后库里已无引导码，返回 null。解密用的明文缓冲在返回前清零。</summary>
-    public async Task<string?> BootstrapCode()
+    public async Task<string?> BootstrapCodeAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
         if (await scope.Repository<BootstrapCode>().GetByIdAsync(Core.Identity.BootstrapCode.SingletonId) is not { } code) return null;
@@ -34,7 +34,7 @@ public sealed class AdministratorService(IServiceScopeFactory scopes, IAdministr
     /// 用引导码完成首次设置：密码须为 12–128 个字符，引导码超过 512 字符直接判为不正确；
     /// 在一个事务里核对还没有管理员、引导码哈希相符，写入管理员（主键由库生成）并物理删除引导码。不合法时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
-    public async Task Initialize(string code, string password)
+    public async Task InitializeAsync(string code, string password)
     {
         if (password.Length is < 12 or > 128) throw new InvalidOperationException("管理密码需要 12 至 128 个字符。");
         if (code.Length > 512) throw new InvalidOperationException("引导码不正确。");
@@ -58,7 +58,7 @@ public sealed class AdministratorService(IServiceScopeFactory scopes, IAdministr
     /// 校验管理密码，通过后签发 8 小时有效的会话令牌（库里只存其哈希）并返回明文令牌；同一次提交里物理删除已过期的会话。
     /// 密码长度不在 1–128、尚未设置或密码错误时返回 null。
     /// </summary>
-    public async Task<string?> Login(string password)
+    public async Task<string?> LoginAsync(string password)
     {
         if (password.Length is < 1 or > 128) return null;
         await using var scope = scopes.CreateAsyncScope();
@@ -74,7 +74,7 @@ public sealed class AdministratorService(IServiceScopeFactory scopes, IAdministr
     }
 
     /// <summary>按当前 UTC 时间判断会话是否存在且未过期；空值或超过 512 字符的会话直接视为无效，不查库。</summary>
-    public async Task<bool> IsSessionValid(string? session)
+    public async Task<bool> IsSessionValidAsync(string? session)
     {
         if (string.IsNullOrEmpty(session) || session.Length > 512) return false;
         var hash = ConfigurationFiles.Hash(session); var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -83,7 +83,7 @@ public sealed class AdministratorService(IServiceScopeFactory scopes, IAdministr
     }
 
     /// <summary>物理删除会话使其立即失效，复制出去的 Cookie 随之作废；会话为空时什么也不做。</summary>
-    public async Task Logout(string? session)
+    public async Task LogoutAsync(string? session)
     {
         if (string.IsNullOrEmpty(session)) return;
         var hash = ConfigurationFiles.Hash(session);

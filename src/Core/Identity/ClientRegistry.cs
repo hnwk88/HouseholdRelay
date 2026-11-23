@@ -7,29 +7,29 @@ namespace Core.Identity;
 /// <summary>个人令牌鉴权快照；每次鉴权前可重读已提交名单，使其他进程的撤销立即生效。</summary>
 public sealed class ClientRegistry
 {
-    private ClientAccess[] clients;
+    private ClientAccess[] _clients;
     private readonly Func<Task<IReadOnlyList<ClientAccess>>>? _readCommitted;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     /// <summary>用初始名单建立快照（构造时不校验）；<paramref name="readCommitted"/> 为 null 时只用内存名单，不在鉴权前重读数据库。</summary>
     public ClientRegistry(IEnumerable<ClientAccess> values, Func<Task<IReadOnlyList<ClientAccess>>>? readCommitted = null)
-    { clients = values.ToArray(); this._readCommitted = readCommitted; }
+    { _clients = values.ToArray(); this._readCommitted = readCommitted; }
 
     /// <summary>名单每次被替换或清空后通知的订阅者（思域据此关闭令牌已失效的会话）；只增不减，随单例活到进程结束。</summary>
-    private Action<IReadOnlyList<ClientAccess>>[] observers = [];
+    private Action<IReadOnlyList<ClientAccess>>[] _observers = [];
 
     /// <summary>校验后整体替换名单快照；校验失败时抛出异常且保留旧快照。以原子引用替换实现，读线程不会看到半更新的名单。替换后通知订阅者。</summary>
     public void Replace(IReadOnlyList<ClientAccess> values)
     {
         RelayConfiguration.ValidateClients(values);
         var snapshot = values.ToArray();
-        Volatile.Write(ref clients, snapshot);
+        Volatile.Write(ref _clients, snapshot);
         Notify(snapshot);
     }
 
     /// <summary>清空名单，使之后所有令牌都鉴权失败；用于数据库不可读时的失败即拒绝。清空后通知订阅者。</summary>
     public void DisableAll()
     {
-        Volatile.Write(ref clients, []);
+        Volatile.Write(ref _clients, []);
         Notify([]);
     }
 
@@ -41,17 +41,17 @@ public sealed class ClientRegistry
     {
         ArgumentNullException.ThrowIfNull(observer);
         // 订阅只在启动组装时发生，加锁保证并发订阅不丢项；通知读的是数组快照，不必持锁。
-        lock (_observerLock) observers = [.. observers, observer];
+        lock (_observerLock) _observers = [.. _observers, observer];
     }
 
     /// <summary>名单中是否仍有这名使用者这一版启用中的令牌（按主键比较）。</summary>
     public bool IsCurrent(long userId, long tokenId) =>
-        Volatile.Read(ref clients).Any(c => c.Enabled && c.UserId == userId && c.TokenId == tokenId);
+        Volatile.Read(ref _clients).Any(c => c.Enabled && c.UserId == userId && c.TokenId == tokenId);
 
     /// <summary>把当前名单交给每个订阅者。</summary>
     private void Notify(IReadOnlyList<ClientAccess> snapshot)
     {
-        foreach (var observer in Volatile.Read(ref observers)) observer(snapshot);
+        foreach (var observer in Volatile.Read(ref _observers)) observer(snapshot);
     }
 
     private readonly object _observerLock = new();
@@ -60,7 +60,7 @@ public sealed class ClientRegistry
     /// 按个人令牌鉴权：令牌为空或超过 512 字符直接返回 null；否则先重读已提交名单，再以定长比较查找启用中的匹配项，未命中返回 null。
     /// 重读失败时清空名单并抛出 503 的 <see cref="RelayFailure"/>。可被多个请求并发调用，重读过程串行执行。
     /// </summary>
-    public async Task<ClientAccess?> Authenticate(string? token)
+    public async Task<ClientAccess?> AuthenticateAsync(string? token)
     {
         if (string.IsNullOrEmpty(token) || token.Length > 512) return null;
         // 每个鉴权边界读取数据库已提交快照，使另一个 CLI 进程的撤销也立即生效。
@@ -78,6 +78,6 @@ public sealed class ClientRegistry
             finally { _refreshLock.Release(); }
         }
         var hash = Convert.FromHexString(ConfigurationFiles.Hash(token));
-        return Volatile.Read(ref clients).FirstOrDefault(c => c.Enabled && CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(c.TokenHash)));
+        return Volatile.Read(ref _clients).FirstOrDefault(c => c.Enabled && CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(c.TokenHash)));
     }
 }

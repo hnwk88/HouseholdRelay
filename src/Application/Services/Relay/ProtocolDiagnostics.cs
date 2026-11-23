@@ -9,9 +9,9 @@ namespace Application.Services.Relay;
 public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) : IProtocolDiagnostics
 {
     private readonly object _sync = new();
-    private DateTimeOffset until;
-    private int samples;
-    private bool enabled;
+    private DateTimeOffset _until;
+    private int _samples;
+    private bool _enabled;
 
     /// <summary>采集状态受同一锁保护，预算耗尽立即读作停止。</summary>
     public string Status
@@ -19,7 +19,7 @@ public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) 
         get
         {
             // 时间与样本预算在同一锁下判断，状态读取也会结束过期采集。
-            lock (_sync) return Active() ? $"临时取证进行中，已记录 {samples} 条，最多一百条或十分钟。" : "临时取证已关闭。";
+            lock (_sync) return Active() ? $"临时取证进行中，已记录 {_samples} 条，最多一百条或十分钟。" : "临时取证已关闭。";
         }
     }
 
@@ -27,14 +27,14 @@ public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) 
     public void Start()
     {
         // 开始和记录共用同一把锁，不会把旧采集样本计入新预算。
-        lock (_sync) { samples = 0; until = clock.GetUtcNow() + TimeSpan.FromMinutes(10); enabled = true; }
+        lock (_sync) { _samples = 0; _until = clock.GetUtcNow() + TimeSpan.FromMinutes(10); _enabled = true; }
     }
 
     /// <summary>管理员关闭后后续记录立即停止。</summary>
     public void Stop()
     {
         // 与记录预算同步，停止返回后不会接受新样本。
-        lock (_sync) enabled = false;
+        lock (_sync) _enabled = false;
     }
 
     /// <summary>先检查预算，再写白名单字段；无法确认的环境、目录与会话明确记为未知。</summary>
@@ -45,7 +45,7 @@ public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) 
         lock (_sync)
         {
             if (!Active()) return;
-            samples++;
+            _samples++;
             log.Write(new
             {
                 diagnostic = "site_identity", correlation = Hash(correlation), at = clock.GetUtcNow(),
@@ -68,7 +68,7 @@ public sealed class ProtocolDiagnostics(IRelayEventLog log, TimeProvider clock) 
     /// <summary>调用方已持锁，任一预算达到即停止。</summary>
     private bool Active()
     {
-        if (enabled && (samples >= 100 || clock.GetUtcNow() >= until)) enabled = false;
-        return enabled;
+        if (_enabled && (_samples >= 100 || clock.GetUtcNow() >= _until)) _enabled = false;
+        return _enabled;
     }
 }

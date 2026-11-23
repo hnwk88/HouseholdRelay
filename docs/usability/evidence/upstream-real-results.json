@@ -246,7 +246,7 @@
     }
   ],
   "server_stopped": true,
-  "temporary_instance": "C:\\Users\\wang.kai\\AppData\\Local\\Temp\\HouseholdRelay-rework-browser-j5Rafv",
+  "temporary_instance": "%USERPROFILE%\\AppData\\Local\\Temp\\HouseholdRelay-rework-browser-j5Rafv",
   "browser": "156.0.4314.50",
   "switch_back": {
     "exit_code": 0,

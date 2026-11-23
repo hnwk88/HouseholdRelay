@@ -6,8 +6,8 @@ namespace Application.Interfaces.Upstream;
 public interface IActiveUpstreamSource
 {
     /// <summary>读取当前活动上游快照（含解密后的凭据）。</summary>
-    Task<UpstreamSnapshot> ReadActive();
+    Task<UpstreamSnapshot> ReadActiveAsync();
 
     /// <summary>读取在用那一家以外、测试通过的已保存上游快照（含凭据），按上游页的顺序；自动切换时按需读取，独立中转模式没有备用上游。</summary>
-    Task<IReadOnlyList<UpstreamSnapshot>> ReadStandby();
+    Task<IReadOnlyList<UpstreamSnapshot>> ReadStandbyAsync();
 }

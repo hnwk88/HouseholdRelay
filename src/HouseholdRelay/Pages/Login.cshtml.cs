@@ -17,14 +17,14 @@ public sealed class LoginModel(IAdministratorService administrators) : PageModel
     /// <summary>打开登录页：未初始化则转到 Setup，已登录则直接进首页，否则显示登录表单。</summary>
     public async Task<IActionResult> OnGetAsync()
     {
-        if (!await administrators.IsInitialized()) return RedirectToPage("/Setup");
+        if (!await administrators.IsInitializedAsync()) return RedirectToPage("/Setup");
         return User.Identity?.IsAuthenticated == true ? RedirectToPage("/Index") : Page();
     }
     /// <summary>提交登录：密码正确时由管理员服务签发会话标识，写入非持久的管理 Cookie（关闭浏览器即失效，之后每次请求还会核对会话是否仍有效）；密码错误只给统一提示，不区分原因。</summary>
     public async Task<IActionResult> OnPostAsync()
     {
-        if (!await administrators.IsInitialized()) return RedirectToPage("/Setup");
-        var session = ModelState.IsValid ? await administrators.Login(Password) : null;
+        if (!await administrators.IsInitializedAsync()) return RedirectToPage("/Setup");
+        var session = ModelState.IsValid ? await administrators.LoginAsync(Password) : null;
         if (session is not null)
         {
             var principal = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim(ManagementWeb.SessionClaim, session) }, ManagementWeb.Scheme));

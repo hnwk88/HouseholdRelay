@@ -7,5 +7,5 @@
 public interface IMcpDiscoveryProbe
 {
     /// <summary>重发一次发现；成功返回编号，失败返回 null。</summary>
-    Task<IReadOnlyList<string>?> Discover(byte[] requestTemplate, string accessToken, CancellationToken cancellation);
+    Task<IReadOnlyList<string>?> DiscoverAsync(byte[] requestTemplate, string accessToken, CancellationToken cancellation);
 }

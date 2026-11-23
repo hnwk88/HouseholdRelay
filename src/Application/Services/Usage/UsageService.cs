@@ -31,8 +31,8 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     public TimeProvider Clock { get; } = timeProvider;
 
     /// <summary>本进程启动以来累计的用量保存失败次数（含后台维护失败），线程安全读取；重启后归零。</summary>
-    public long PersistenceFailures => Interlocked.Read(ref failures);
-    private long failures;
+    public long PersistenceFailures => Interlocked.Read(ref _failures);
+    private long _failures;
     private readonly SemaphoreSlim _writes = new(1, 1);
 
     /// <summary>当前 UTC 时间，取自 <see cref="Clock"/>。</summary>
@@ -45,7 +45,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// 在发往上游之前写入请求开始记录（归属取自已鉴权的使用者与令牌，版本记此刻的活动版本）。写入串行进行，最多等待 2 秒；
     /// 等不到或存储故障时计入失败并抛出 503 的 <see cref="RelayFailure"/>，请求不会发往上游。
     /// </summary>
-    public async Task Start(string requestId, ClientAccess client, UsageKind kind)
+    public async Task StartAsync(string requestId, ClientAccess client, UsageKind kind)
     {
         var acquired = false; var startedAt = Now;
         try
@@ -72,7 +72,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// 即将发往上游时把开始记录标记为已发送、记下首先要试的那一家，并复制它当时的单价快照与名称快照。开始记录不存在或已不在开始状态、写入排队超时或存储故障时，
     /// 计入失败并抛出 503 的 <see cref="RelayFailure"/>，请求不会发往上游。
     /// </summary>
-    public async Task Dispatch(string requestId, long version, long? upstreamCandidateId, string? model)
+    public async Task DispatchAsync(string requestId, long version, long? upstreamCandidateId, string? model)
     {
         var acquired = false;
         try
@@ -84,7 +84,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
             await requests.WithLockWaitAsync(_writeWait, async () =>
             {
                 var row = await requests.FirstOrDefaultAsync(item => item.RequestId == requestId);
-                var (price, name) = await Snapshot(scope, upstreamCandidateId, model);
+                var (price, name) = await SnapshotAsync(scope, upstreamCandidateId, model);
                 if (row is null || !row.Dispatch(version, upstreamCandidateId, model, price, name))
                     throw new InvalidOperationException("Usage start record unavailable.");
                 return await requests.SaveChangesAsync();
@@ -103,7 +103,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// 存储故障时最多共尝试 3 次（间隔 100、200 毫秒），全部失败则计入失败并返回 <see cref="UsageFinish.Failed"/>，不抛出。
     /// 重试等待不受请求取消影响，客户端断开也会尽量把结果写完。
     /// </summary>
-    public async Task<UsageFinish> Finish(string requestId, UsageEnd result)
+    public async Task<UsageFinish> FinishAsync(string requestId, UsageEnd result)
     {
         for (var attempt = 0; attempt < 3; attempt++)
         {
@@ -112,7 +112,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
             {
                 acquired = await _writes.WaitAsync(TimeSpan.FromSeconds(2));
                 if (!acquired) throw new InvalidOperationException("Usage write queue is busy.");
-                return await Complete(requestId, result) ? UsageFinish.Saved : UsageFinish.AlreadyEnded;
+                return await CompleteAsync(requestId, result) ? UsageFinish.Saved : UsageFinish.AlreadyEnded;
             }
             // 结束记录写失败不应让已完成的请求报错，所以只记失败并有限重试；重试前先归还写入名额，避免退避等待期间挡住其他请求的写入。
             // 退避等待故意不接收请求的取消令牌：结束保存与请求取消无关，客户端断开后也要尽量写完。
@@ -129,7 +129,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     }
 
     /// <summary>服务启动时把上次遗留、仍处于开始状态的记录统一标记为中断（以当前时间为结束时间）。</summary>
-    public async Task Recover()
+    public async Task RecoverAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
         var requests = scope.Repository<UsageRequest>();
@@ -145,13 +145,13 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// 以调用时刻计算一次截止点，分批（每批最多 500 行，最早的先删）物理删除超出 40 天保留窗口的记录，它们的上游尝试由外键级联一并删除；返回删除的用量记录总数。
     /// 每批之前检查取消；满批时让出线程再继续，避免长时间占用。
     /// </summary>
-    public async Task<int> Cleanup(CancellationToken cancellation)
+    public async Task<int> CleanupAsync(CancellationToken cancellation)
     {
         var cutoff = Cutoff.UtcTicks; var removed = 0; int batch;
         do
         {
             cancellation.ThrowIfCancellationRequested();
-            batch = await DeleteExpiredBatch(cutoff);
+            batch = await DeleteExpiredBatchAsync(cutoff);
             removed += batch;
             if (batch == CleanupBatch) await Task.Yield();
         } while (batch == CleanupBatch);
@@ -162,7 +162,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// 校验筛选条件后在 40 天窗口内查询用量报告，并附上本进程的保存失败次数：窗口内符合条件的记录一次读出，汇总、分段、金额与当页明细都由 <see cref="UsageReportBuilder"/> 从这同一份算出，互相对得上。
     /// 条件不合法时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
-    public async Task<UsageReport> Query(UsageFilter filter)
+    public async Task<UsageReport> QueryAsync(UsageFilter filter)
     {
         filter.Validate();
         var now = Now; var cutoff = UsageRetention.Cutoff(now);
@@ -196,7 +196,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// 在一个事务里读出记录、定下记账的那一家与单价快照、算金额，写入结束结果与各次尝试；要么都在，要么都不在，重试保存时不会留下重复的尝试。
     /// 返回这次有没有写：记录早已结束（<see cref="UsageRequest.Complete"/> 拒绝）时为假。
     /// </summary>
-    private async Task<bool> Complete(string requestId, UsageEnd result)
+    private async Task<bool> CompleteAsync(string requestId, UsageEnd result)
     {
         await using var scope = scopes.CreateAsyncScope();
         var requests = scope.Repository<UsageRequest>();
@@ -207,12 +207,12 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
             var row = await requests.FirstOrDefaultAsync(item => item.RequestId == requestId) ?? throw new InvalidOperationException("Usage start record unavailable.");
             if (!row.IsStarted) return 0;
             var served = row.ServedBy(result);
-            var (price, name) = served == row.UpstreamCandidateId ? (row.PriceJson, row.UpstreamName) : await Snapshot(scope, served, row.Model);
+            var (price, name) = served == row.UpstreamCandidateId ? (row.PriceJson, row.UpstreamName) : await SnapshotAsync(scope, served, row.Model);
             // 金额只由纯规则按单价快照计算；这里只负责在同一事务里读快照、写结果。实体拒绝（早已结束）就什么都不写。
             if (!row.Complete(Now.UtcTicks, result, UsageMoneyRules.Calculate(row.Kind, result, price), served, price, name)) return 0;
             written = true;
             var attempts = scope.Repository<UsageAttempt>();
-            var names = await Names(scope, result.Attempts.Select(item => item.UpstreamCandidateId));
+            var names = await NamesAsync(scope, result.Attempts.Select(item => item.UpstreamCandidateId));
             await attempts.AddRangeAsync(result.Attempts.Select(item => UsageAttempt.From(row.Id,
                 item, item.UpstreamCandidateId is { } id ? names.GetValueOrDefault(id) : null)).ToList());
             return await requests.SaveChangesAsync();
@@ -221,7 +221,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     }
 
     /// <summary>删除一批（最多 <see cref="CleanupBatch"/> 行、最早的先删）早于截止点的记录，返回删除的用量记录行数。</summary>
-    private async Task<int> DeleteExpiredBatch(long cutoffTicks)
+    private async Task<int> DeleteExpiredBatchAsync(long cutoffTicks)
     {
         await using var scope = scopes.CreateAsyncScope();
         var requests = scope.Repository<UsageRequest>();
@@ -236,7 +236,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     }
 
     /// <summary>某一家某个模型此刻的单价 JSON 与那一家此刻的名称（停用的也算）；没有那一家时两者都为空。</summary>
-    private static async Task<(string? Price, string? Name)> Snapshot(AsyncServiceScope scope, long? upstreamCandidateId, string? model)
+    private static async Task<(string? Price, string? Name)> SnapshotAsync(AsyncServiceScope scope, long? upstreamCandidateId, string? model)
     {
         if (upstreamCandidateId is not { } id) return (null, null);
         var price = model is null ? null : await scope.Repository<UsagePriceRecord>().FirstOrDefaultAsync(item => item.UpstreamCandidateId == id && item.Model == model);
@@ -245,7 +245,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     }
 
     /// <summary>这些已保存上游此刻的名称（停用的也算）。</summary>
-    private static async Task<Dictionary<long, string>> Names(AsyncServiceScope scope, IEnumerable<long?> ids)
+    private static async Task<Dictionary<long, string>> NamesAsync(AsyncServiceScope scope, IEnumerable<long?> ids)
     {
         var wanted = ids.OfType<long>().Distinct().ToArray();
         if (wanted.Length == 0) return [];
@@ -255,7 +255,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
     /// <summary>原子地累加失败次数，并写一条只含时间、请求编号和阶段的事件日志，不记录异常细节。</summary>
     private void Failure(string? id, string stage)
     {
-        Interlocked.Increment(ref failures);
+        Interlocked.Increment(ref _failures);
         log.Write(new { time = Now, eventType = "usage_storage_failure", requestId = id, stage });
     }
 

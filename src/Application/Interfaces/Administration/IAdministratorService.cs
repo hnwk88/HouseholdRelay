@@ -4,20 +4,20 @@
 public interface IAdministratorService
 {
     /// <summary>是否已完成首次设置。</summary>
-    Task<bool> IsInitialized();
+    Task<bool> IsInitializedAsync();
 
     /// <summary>解密并返回一次性引导码，只在本机启动窗口显示；设置完成后为空。</summary>
-    Task<string?> BootstrapCode();
+    Task<string?> BootstrapCodeAsync();
 
     /// <summary>用引导码完成首次设置并保存管理密码。</summary>
-    Task Initialize(string code, string password);
+    Task InitializeAsync(string code, string password);
 
     /// <summary>校验管理密码并签发 8 小时会话；密码错误时返回空。</summary>
-    Task<string?> Login(string password);
+    Task<string?> LoginAsync(string password);
 
     /// <summary>会话是否有效。</summary>
-    Task<bool> IsSessionValid(string? session);
+    Task<bool> IsSessionValidAsync(string? session);
 
     /// <summary>撤销会话。</summary>
-    Task Logout(string? session);
+    Task LogoutAsync(string? session);
 }

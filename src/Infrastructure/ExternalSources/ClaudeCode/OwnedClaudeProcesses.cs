@@ -107,18 +107,18 @@ internal sealed class OwnedClaudeProcesses(IRelayInstance instance, ISecretProte
     /// <summary>登记句柄本身不持有阻塞锁，子进程异常或父服务崩溃都保留磁盘证据。</summary>
     private sealed class Registration(string path) : IOwnedClaudeProcess
     {
-        private bool registered;
-        private bool completed;
+        private bool _registered;
+        private bool _completed;
 
         /// <summary>写临时文件后原子替换 starting，保持原登记的权限。</summary>
         public void Register(int processId, DateTimeOffset startedAt)
         {
-            if (registered || completed || processId <= 0 || startedAt == default) throw Unavailable();
+            if (_registered || _completed || processId <= 0 || startedAt == default) throw Unavailable();
             var temporary = path + ".tmp";
             try
             {
                 WriteNew(temporary, new("running", processId, startedAt.ToUniversalTime()));
-                CheckFile(path); File.Replace(temporary, path, null); registered = true;
+                CheckFile(path); File.Replace(temporary, path, null); _registered = true;
             }
             // 只移除本次已知临时文件，主 starting 标记无论失败原因都保留供重启检查。
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
@@ -127,23 +127,23 @@ internal sealed class OwnedClaudeProcesses(IRelayInstance instance, ISecretProte
         /// <summary>只有登记过且已退出的进程可完成，未知 starting 不会被 Dispose 或错误清理抹去。</summary>
         public void Complete()
         {
-            if (completed) return;
-            if (!registered) throw Unavailable();
+            if (_completed) return;
+            if (!_registered) throw Unavailable();
             var marker = Read(path);
             if (marker is not null && (marker.State != "running" || marker.ProcessId is not { } id || marker.StartedAt is not { } at || IsAlive(id, at)))
                 throw Unavailable();
             // 已确认生命周期结束，删除本次随机登记；重复完成或恢复清理均安全。
-            File.Delete(path); completed = true;
+            File.Delete(path); _completed = true;
         }
 
         /// <summary>调用方必须掌握系统启动失败的明确结果；有 PID 或已完成的记录不能按未启动处理。</summary>
         public void CancelBeforeStart()
         {
-            if (registered || completed) throw Unavailable();
+            if (_registered || _completed) throw Unavailable();
             var marker = Read(path);
             if (marker is not { State: "starting", ProcessId: null, StartedAt: null }) throw Unavailable();
             // 当前调用栈见证操作系统拒绝启动，只删除尚未启动的本次登记，不用于重启后猜测。
-            File.Delete(path); completed = true;
+            File.Delete(path); _completed = true;
         }
 
         /// <summary>不自动删除登记：没有显式完成就没有足够证据断定子进程已退出。</summary>

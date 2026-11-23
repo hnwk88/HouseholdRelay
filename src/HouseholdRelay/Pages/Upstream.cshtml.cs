@@ -81,7 +81,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
     /// </remarks>
     public async Task OnGetAsync(long? candidateId, long? checkId, long? rename, long? delete, long? export)
     {
-        await Load(candidateId, checkId);
+        await LoadAsync(candidateId, checkId);
         RenameId = Saved.Any(item => item.Id == rename) ? rename : null;
         DeleteId = Saved.Any(item => item.Id == delete && item.Deletable) ? delete : null;
         ExportId = Saved.Any(item => item.Id == export && !item.Damaged) ? export : null;
@@ -102,14 +102,14 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         if (!checks.Cancel(checkId)) ModelState.AddModelError("", "这次检测已经结束了，不用取消。结果在下面。");
         // 取消后等它收尾一小会儿（最多 5 秒），页面直接读出「检测未完成」，不用再按刷新；等不到就读出「正在取消」，状态区随后自动读出结论。
         else for (var waited = 0; waited < 50 && checks.Read(checkId) is { Ended: false }; waited++) await Task.Delay(100, HttpContext.RequestAborted);
-        await Load(check?.UpstreamCandidateId, checkId); return Page();
+        await LoadAsync(check?.UpstreamCandidateId, checkId); return Page();
     }
 
     /// <summary>API 供应商：加密保存名称、地址、密钥后立刻获取模型（不花额度）；密钥只在这一次提交里出现，处理后清空。</summary>
-    public Task<IActionResult> OnPostDiscoverApiAsync() => Discover(Api, Api.ToApiOptions());
+    public Task<IActionResult> OnPostDiscoverApiAsync() => DiscoverAsync(Api, Api.ToApiOptions());
 
     /// <summary>官方账户：加密保存名称、地址、账户令牌后立刻获取模型（不花额度）。</summary>
-    public Task<IActionResult> OnPostDiscoverAccountAsync() => Discover(Account, Account.ToAccountOptions());
+    public Task<IActionResult> OnPostDiscoverAccountAsync() => DiscoverAsync(Account, Account.ToAccountOptions());
 
     /// <summary>
     /// 登录官方账户（需已登录且通过防 CSRF 校验）：委托本机 Claude Code 打开浏览器登录，等登录完成后保存为具名上游并立刻获取模型（不花额度）；
@@ -121,13 +121,13 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         long? working = null; long? check = null;
         try
         {
-            var id = await upstreams.LoginOfficial(Version, Login.ToLoginOptions(), Login.Name, HttpContext.RequestAborted); working = id;
-            check = checks.StartDiscovery(id, $"官方账户登录成功，已保存为「{(await upstreams.ReadCandidate(id)).Name}」。");
+            var id = await upstreams.LoginOfficialAsync(Version, Login.ToLoginOptions(), Login.Name, HttpContext.RequestAborted); working = id;
+            check = checks.StartDiscovery(id, $"官方账户登录成功，已保存为「{(await upstreams.ReadCandidateAsync(id)).Name}」。");
             Login = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost }; FocusId = ButtonId(id);
         }
         // 未安装、登录取消或超时、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(working, check); return Page();
+        await LoadAsync(working, check); return Page();
     }
 
     /// <summary>
@@ -140,14 +140,14 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         long? check = null;
         try
         {
-            var name = DisplayName(await upstreams.ReadCandidate(candidateId));
-            await upstreams.Relogin(candidateId, HttpContext.RequestAborted);
+            var name = DisplayName(await upstreams.ReadCandidateAsync(candidateId));
+            await upstreams.ReloginAsync(candidateId, HttpContext.RequestAborted);
             check = checks.StartDiscovery(candidateId, $"已重新登录「{name}」，还是原来那个官方账户，换上了新的登录凭据；这家上游的主键和思域的设置都不用改。");
             FocusId = ButtonId(candidateId);
         }
         // 不是登录得到的官方账户、已搬走、登成了别的账户、取消或超时：读出原因与下一步，原凭据不动。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(candidateId, check); return Page();
+        await LoadAsync(candidateId, check); return Page();
     }
 
     /// <summary>
@@ -166,15 +166,15 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
             await using (var input = ImportFile.OpenReadStream())
                 if (await input.ReadAtLeastAsync(content, content.Length, false, HttpContext.RequestAborted) < content.Length)
                     throw new InvalidOperationException("登录文件没有读完整，请重新选择后再按「导入登录文件」。");
-            var id = await upstreams.ImportOfficial(Version, Import.ToLoginOptions(), content, Import.Name, HttpContext.RequestAborted); working = id;
-            check = checks.StartDiscovery(id, $"登录文件已导入，已保存为「{(await upstreams.ReadCandidate(id)).Name}」。");
+            var id = await upstreams.ImportOfficialAsync(Version, Import.ToLoginOptions(), content, Import.Name, HttpContext.RequestAborted); working = id;
+            check = checks.StartDiscovery(id, $"登录文件已导入，已保存为「{(await upstreams.ReadCandidateAsync(id)).Name}」。");
             Import = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost }; FocusId = ButtonId(id);
         }
         // 文件不合格、未安装 Claude Code、代理取不到、名称不合规则或活动版本已变化：只作为表单错误读出，不改动活动上游。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         // 登录文件里有访问令牌和刷新令牌：无论成败都清零字节、清掉文件绑定值。
         finally { if (content is not null) CryptographicOperations.ZeroMemory(content); ImportFile = null; }
-        await Load(working, check); return Page();
+        await LoadAsync(working, check); return Page();
     }
 
     /// <summary>
@@ -187,12 +187,12 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         long? check = null;
         try
         {
-            if (model is not null) await upstreams.ChooseModel(candidateId, model);
+            if (model is not null) await upstreams.ChooseModelAsync(candidateId, model);
             check = checks.StartTest(candidateId); FocusId = ButtonId(candidateId);
         }
         // 未选模型、模型名不合规则、上游不存在或正在检测：挂到测试小表单的模型输入上读出，不改动活动上游。
         catch (InvalidOperationException error) { ModelState.AddModelError(ModelKey, error.Message); }
-        await Load(candidateId, check); return Page();
+        await LoadAsync(candidateId, check); return Page();
     }
 
     /// <summary>切换（需已登录且通过防 CSRF 校验）：把测试通过的上游原子切换为活动版本，核对的是本页打开时看到的版本；在途请求继续用旧版本，个人令牌和中转地址不变。</summary>
@@ -201,30 +201,30 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         ModelState.Clear();
         try
         {
-            await upstreams.Activate(candidateId, Version);
-            Notice = $"已切换到「{(await upstreams.ReadCandidate(candidateId)).Name}」。后续请求使用它；个人令牌和中转地址不用换。"; FocusId = ButtonId(candidateId);
+            await upstreams.ActivateAsync(candidateId, Version);
+            Notice = $"已切换到「{(await upstreams.ReadCandidateAsync(candidateId)).Name}」。后续请求使用它；个人令牌和中转地址不用换。"; FocusId = ButtonId(candidateId);
         }
         // 没测通过或活动版本已被别处改动：读出原因，活动上游保持原样。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(null); return Page();
+        await LoadAsync(null); return Page();
     }
 
     /// <summary>升级中转的 Claude Code（需已登录且通过防 CSRF 校验）：用本机安装方式自带的升级，后台已在升级时等那一次；页面读出结果，失败时带升级命令原话。</summary>
     public async Task<IActionResult> OnPostUpgradeClaudeCodeAsync(CancellationToken cancellation)
     {
         ModelState.Clear();
-        Notice = await updater.Update(cancellation);
-        await Load(null); return Page();
+        Notice = await updater.UpdateAsync(cancellation);
+        await LoadAsync(null); return Page();
     }
 
     /// <summary>保存自动切换开关（需已登录且通过防 CSRF 校验）：保存即生效，下一个请求就按新开关走，不用重启，也不改在用的那一家。</summary>
     public async Task<IActionResult> OnPostFailoverAsync(bool failover)
     {
         ModelState.Clear();
-        await upstreams.SetFailover(failover);
+        await upstreams.SetFailoverAsync(failover);
         FocusId = "failover-switch";
         Notice = failover ? "自动切换已打开：在用的上游失败时，会按顺序换到其他测试通过的上游。" : "自动切换已关闭：只用在用的那一家，它失败时把错误直接交给客户端。";
-        await Load(null); return Page();
+        await LoadAsync(null); return Page();
     }
 
     /// <summary>
@@ -239,9 +239,9 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
             if (exportPassword != exportPasswordAgain)
             {
                 ModelState.AddModelError(ExportAgainKey, "两次输入的导出密码不一样，请重新输入两遍，再按「导出加密文件」。");
-                await Load(null); return Page();
+                await LoadAsync(null); return Page();
             }
-            var export = await upstreams.Export(exportIds ?? [], exportPassword ?? "");
+            var export = await upstreams.ExportAsync(exportIds ?? [], exportPassword ?? "");
             ExportFileName = $"household-relay-upstreams-{DateTimeOffset.Now:yyyyMMdd-HHmm}.hrupstreams";
             ExportDownload = "data:application/octet-stream;base64," + Convert.ToBase64String(export.File);
             Notice = $"已导出 {export.Names.Count} 家上游：{Quoted(export.Names)}。浏览器正在下载「{ExportFileName}」；没有自动下载时，按下面的「下载导出文件」。"
@@ -250,7 +250,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         }
         // 两次密码不一样、密码长度不对、没勾、上游已不在、官方账户凭据不在或续期没结束：读出原因，什么都不改。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(null); return Page();
+        await LoadAsync(null); return Page();
     }
 
     /// <summary>
@@ -269,7 +269,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
             await using (var input = UpstreamFile.OpenReadStream())
                 if (await input.ReadAtLeastAsync(content, content.Length, false, HttpContext.RequestAborted) < content.Length)
                     throw new InvalidOperationException("导出文件没有读完整，请重新选择后再按「导入上游」。");
-            var outcomes = await upstreams.Import(Version, content, importPassword ?? "", HttpContext.RequestAborted);
+            var outcomes = await upstreams.ImportAsync(Version, content, importPassword ?? "", HttpContext.RequestAborted);
             var added = outcomes.Where(item => item.Error is null).Select(item => item.Name).ToArray();
             var failed = outcomes.Where(item => item.Error is not null).Select(item => $"「{item.Name}」：{item.Error}").ToArray();
             var next = "下一步：逐家按「选择模型并测试」，测试通过后再切换。";
@@ -281,17 +281,17 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         // 导出文件里有全部密钥和登录文件（虽已加密）：无论成败都清零字节、清掉文件绑定值。
         finally { if (content is not null) CryptographicOperations.ZeroMemory(content); UpstreamFile = null; }
-        await Load(null); return Page();
+        await LoadAsync(null); return Page();
     }
 
     /// <summary>改名（需已登录且通过防 CSRF 校验）：只改显示名称，切换和用量都按主键关联，不受影响。</summary>
     public async Task<IActionResult> OnPostRenameAsync(long candidateId, string? newName)
     {
         ModelState.Clear();
-        try { await upstreams.Rename(candidateId, newName ?? ""); Notice = $"已改名为「{(await upstreams.ReadCandidate(candidateId)).Name}」。"; FocusId = ButtonId(candidateId); }
+        try { await upstreams.RenameAsync(candidateId, newName ?? ""); Notice = $"已改名为「{(await upstreams.ReadCandidateAsync(candidateId)).Name}」。"; FocusId = ButtonId(candidateId); }
         // 名称为空、过长或上游不存在：挂到改名小表单的输入框上读出，小表单留着，名称保持原样。
         catch (InvalidOperationException error) { ModelState.AddModelError(NewNameKey, error.Message); RenameId = candidateId; }
-        await Load(null);
+        await LoadAsync(null);
         if (RenameId is not null && Saved.All(item => item.Id != RenameId)) RenameId = null;
         return Page();
     }
@@ -304,10 +304,10 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
     {
         ModelState.Clear();
         long? check = null;
-        try { check = checks.StartDiscovery(candidateId, $"已重新获取「{(await upstreams.ReadCandidate(candidateId)).Name}」的模型。"); FocusId = ButtonId(candidateId); }
+        try { check = checks.StartDiscovery(candidateId, $"已重新获取「{(await upstreams.ReadCandidateAsync(candidateId)).Name}」的模型。"); FocusId = ButtonId(candidateId); }
         // 上游不存在或正在检测：读出原因；上游自己的拒绝由目录读句说明，不走这里。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(candidateId, check); return Page();
+        await LoadAsync(candidateId, check); return Page();
     }
 
     /// <summary>删除（需已登录且通过防 CSRF 校验）：须勾选确认（没勾时错误挂到勾选框上，确认小表单留着）；当前使用中或正在检测的上游由服务拒绝。删除成功后焦点去下一家。</summary>
@@ -315,16 +315,16 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
     {
         ModelState.Clear();
         // 删除后焦点去列表里原来排在它后面的那一家；它是最后一家就去前一家；一家都不剩就去列表标题。
-        var before = (await upstreams.ListCandidates()).Select(item => item.Id).ToList(); var position = before.IndexOf(candidateId);
+        var before = (await upstreams.ListCandidatesAsync()).Select(item => item.Id).ToList(); var position = before.IndexOf(candidateId);
         try
         {
-            var name = (await upstreams.ReadCandidate(candidateId)).Name;
+            var name = (await upstreams.ReadCandidateAsync(candidateId)).Name;
             if (!deleteConfirmed)
             {
                 ModelState.AddModelError(DeleteConfirmedKey, $"要删除「{name}」，请先勾选删除按钮前面的确认框，再按删除。");
-                await Load(null); DeleteId = Saved.Any(item => item.Id == candidateId && item.Deletable) ? candidateId : null; return Page();
+                await LoadAsync(null); DeleteId = Saved.Any(item => item.Id == candidateId && item.Deletable) ? candidateId : null; return Page();
             }
-            var references = await upstreams.Delete(candidateId);
+            var references = await upstreams.DeleteAsync(candidateId);
             Notice = references is { Requests: 0, Attempts: 0, Prices: 0 } ? $"已删除「{name}」，没有用量或单价引用它，本机已清除它的密钥。"
                 : $"已删除「{name}」，本机已清除它的密钥。它有 {references.Requests} 条用量记录、{references.Attempts} 次上游尝试、{references.Prices} 条单价，"
                     + "历史照常保留，用量页仍读出它的名字。";
@@ -333,17 +333,17 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         }
         // 当前使用中、正在检测或上游不存在：读出原因，什么都不删。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
-        await Load(null); return Page();
+        await LoadAsync(null); return Page();
     }
 
     /// <summary>两张表单共用的保存加获取模型：成功后清空表单并把它作为正在设置的上游；任一步拒绝都读出原因。密钥无论成败都清空。</summary>
-    private async Task<IActionResult> Discover(UpstreamInput input, UpstreamOptions options)
+    private async Task<IActionResult> DiscoverAsync(UpstreamInput input, UpstreamOptions options)
     {
         long? working = null; long? check = null;
         try
         {
-            var id = await upstreams.SaveCandidate(Version, options, input.Credential ?? "", input.Name ?? ""); working = id;
-            check = checks.StartDiscovery(id, $"已保存「{(await upstreams.ReadCandidate(id)).Name}」。"); FocusId = ButtonId(id);
+            var id = await upstreams.SaveCandidateAsync(Version, options, input.Credential ?? "", input.Name ?? ""); working = id;
+            check = checks.StartDiscovery(id, $"已保存「{(await upstreams.ReadCandidateAsync(id)).Name}」。"); FocusId = ButtonId(id);
             ModelState.Clear(); Api = new(); Account = new() { BaseUrl = "https://" + UpstreamDetection.OfficialHost };
         }
         // 名称、地址、密钥不合规则或活动版本已变化：只作为表单错误读出；已保存但获取模型被拒的情况由目录读句说明，不走这里。
@@ -356,19 +356,19 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
             if (input.BaseUrl?.Contains(secret, StringComparison.Ordinal) == true) { input.BaseUrl = null; ModelState.Remove(prefix + "." + nameof(UpstreamInput.BaseUrl)); }
         }
         input.Credential = null; ModelState.Remove(prefix + "." + nameof(UpstreamInput.Credential));
-        await Load(working, check); return Page();
+        await LoadAsync(working, check); return Page();
     }
 
     /// <summary>重新读取页面，不点名后台检测（正在设置的那一家有进行中的检测时照样读出）。</summary>
-    private Task Load(long? workingId) => Load(workingId, null);
+    private Task LoadAsync(long? workingId) => LoadAsync(workingId, null);
 
     /// <summary>
     /// 重新读取活动上游、已保存列表、正在设置的上游和上游池运行状态，并把版本号更新为最新；再读出要读的那次后台检测：
     /// 点名的（<paramref name="checkId"/>），没点名就取正在设置的那一家进行中的。已结束的把结论放进提示（没走到结论的放进错误）。
     /// </summary>
-    private async Task Load(long? workingId, long? checkId)
+    private async Task LoadAsync(long? workingId, long? checkId)
     {
-        Active = await upstreams.ReadOverview(); Saved = await upstreams.ListCandidates(); Version = Active.Version; ModelState.Remove(nameof(Version));
+        Active = await upstreams.ReadOverviewAsync(); Saved = await upstreams.ListCandidatesAsync(); Version = Active.Version; ModelState.Remove(nameof(Version));
         // 其他按钮的提交不带官方账户表单字段，绑定会给出空地址；补回官方地址，避免读屏读到一个空的必填框。
         if (string.IsNullOrWhiteSpace(Account.BaseUrl)) Account.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
         if (string.IsNullOrWhiteSpace(Login.BaseUrl)) Login.BaseUrl = "https://" + UpstreamDetection.OfficialHost;
@@ -393,7 +393,7 @@ public sealed class UpstreamModel(IUpstreamService upstreams, IUpstreamChecks ch
         RuntimeStatus = Active.RuntimeText(MovedText is not null, state.Paused, state.CooldownSeconds);
         RoutingText = RoutingSentence(upstreamPool, Active, Saved);
         IdentityText = identities.Describe();
-        var users = await people.List();
+        var users = await people.ListAsync();
         UpdateText = updater.Describe(id => users.FirstOrDefault(user => user.Id == id)?.DisplayName ?? "已删除的使用者");
     }
 

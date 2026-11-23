@@ -23,7 +23,7 @@ static class UpstreamAttemptTests
     public static async Task Overloaded503()
     {
         var (upstream, web, logs) = await Start(); await using var _ = upstream; await using var __ = web;
-        var user = await web.Identities.Create("尝试记录"); var candidate = await Activate(web, upstream, "顺丰中转");
+        var user = await web.Identities.CreateAsync("尝试记录"); var candidate = await Activate(web, upstream, "顺丰中转");
         Check(await Call(web, user.Token) == HttpStatusCode.OK);
         const string body = """{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}""";
         upstream.Handler = async context =>
@@ -42,7 +42,7 @@ static class UpstreamAttemptTests
         Check(success.UpstreamCandidateId == candidate && success.Name == "顺丰中转" && success.UpstreamStatus == 200 && success.ErrorType is null && success.HeadersMs is not null);
         Check(failure.UpstreamCandidateId == candidate && failure.Number == 1 && failure.UpstreamStatus == 503 && failure.ErrorType == "overloaded_error"
             && failure.ErrorMessage == "Overloaded" && failure.ConnectFailure is null && failure.Disposition == Core.Usage.AttemptDisposition.Client && failure.UpstreamRequestId == "req_fixture_503"
-            && failure.Version == (await web.Upstreams.ReadActive()).ActiveVersion && failure.HeadersMs <= failure.DurationMs, "503 attempt fields");
+            && failure.Version == (await web.Upstreams.ReadActiveAsync()).ActiveVersion && failure.HeadersMs <= failure.DurationMs, "503 attempt fields");
         var events = Events(logs);
         Check(events.Last().EnumerateObject().Select(item => item.Name).SequenceEqual(["time", "requestId", "client", "route", "status", "outcome", "durationMs", "upstream", "attempts", "error"]),
             "Event line keeps its original fields in order and appends upstream, attempts and error");
@@ -59,7 +59,7 @@ static class UpstreamAttemptTests
     public static async Task Unreadable502()
     {
         var (upstream, web, logs) = await Start(); await using var _ = upstream; await using var __ = web;
-        var user = await web.Identities.Create("非 JSON"); await Activate(web, upstream, "顺丰中转");
+        var user = await web.Identities.CreateAsync("非 JSON"); await Activate(web, upstream, "顺丰中转");
         upstream.Handler = async context => { context.Response.StatusCode = 502; context.Response.ContentType = "text/html"; await context.Response.WriteAsync("<html>Bad Gateway " + Secret + "</html>"); };
         using (var request = Request(web, user.Token))
         using (var response = await web.Http.SendAsync(request))
@@ -78,7 +78,7 @@ static class UpstreamAttemptTests
     public static async Task ConnectTimeout()
     {
         var (upstream, web, logs) = await Start(); await using var _ = upstream; await using var __ = web;
-        var user = await web.Identities.Create("建连超时"); await Activate(web, upstream, "顺丰中转");
+        var user = await web.Identities.CreateAsync("建连超时"); await Activate(web, upstream, "顺丰中转");
         using var silent = new TcpListener(IPAddress.Loopback, 0); silent.Start();
         await ForceActive(web, upstream.Options() with { BaseUrl = "https://127.0.0.1:" + ((IPEndPoint)silent.LocalEndpoint).Port }, "沉默上游");
         using (var request = Request(web, user.Token))
@@ -103,7 +103,7 @@ static class UpstreamAttemptTests
     public static async Task TlsFailure()
     {
         var (upstream, web, _) = await Start(); await using var __ = upstream; await using var ___ = web;
-        var user = await web.Identities.Create("TLS 失败"); await Activate(web, upstream, "顺丰中转");
+        var user = await web.Identities.CreateAsync("TLS 失败"); await Activate(web, upstream, "顺丰中转");
         using var generated = TestProcess.CertificateFactory.CreateCertificate("localhost", out _);
         using var certificate = TestProcess.CertificateFactory.LoadServerCertificate(generated.Export(X509ContentType.Pfx));
         await using var untrusted = await UpstreamFixture.Create(certificate);
@@ -131,7 +131,7 @@ static class UpstreamAttemptTests
     public static async Task SecretsNeverRecorded()
     {
         var (upstream, web, logs) = await Start(); await using var _ = upstream; await using var __ = web;
-        var user = await web.Identities.Create("秘密反例"); await Activate(web, upstream, "顺丰中转");
+        var user = await web.Identities.CreateAsync("秘密反例"); await Activate(web, upstream, "顺丰中转");
         var message = "invalid key " + Secret + " for " + user.Token + " " + new string('x', 400);
         upstream.Handler = context => { context.Response.StatusCode = 500; return context.Response.WriteAsJsonAsync(new { type = "error", error = new { type = "api_error", message } }); };
         Check(await Call(web, user.Token) == HttpStatusCode.InternalServerError);
@@ -152,19 +152,19 @@ static class UpstreamAttemptTests
     /// <summary>40 天清理：固定时钟下，早于窗口一个刻度的用量连同它的尝试记录一起删掉，恰好在边界上的保留。</summary>
     public static async Task AttemptsExpireWithUsage()
     {
-        using var home = new TestHome(); var process = new TestProcess(home.Path); var token = await process.Identities.Create("清理");
-        var user = (await process.Identities.Clients.Authenticate(token.Token))!;
+        using var home = new TestHome(); var process = new TestProcess(home.Path); var token = await process.Identities.CreateAsync("清理");
+        var user = (await process.Identities.Clients.AuthenticateAsync(token.Token))!;
         // 尝试记录对已保存上游有外键：先存一家真实上游，用它的主键记账。
-        var candidate = await process.Upstreams.SaveCandidate((await process.Upstreams.ReadOverview()).Version, new UpstreamOptions { BaseUrl = "https://cleanup.example.com" }, "sk-cleanup-0001", "清理用上游");
+        var candidate = await process.Upstreams.SaveCandidateAsync((await process.Upstreams.ReadOverviewAsync()).Version, new UpstreamOptions { BaseUrl = "https://cleanup.example.com" }, "sk-cleanup-0001", "清理用上游");
         var now = new DateTimeOffset(2026, 11, 2, 6, 30, 0, TimeSpan.Zero); var clock = new UsageClock(now); var usage = new TestProcess(home.Path, clock).Usage;
         foreach (var (id, time) in new[] { ("expired", now.AddDays(-40).AddTicks(-1)), ("boundary", now.AddDays(-40)) })
         {
-            clock.Set(time); await usage.Start(id, user, Core.Usage.UsageKind.Inference); await usage.Dispatch(id, 1, candidate, "fixture-model");
-            Check(await usage.Finish(id, new UsageEnd(Core.Usage.UsageOutcome.Failed, true, 503, 503, 1, Core.Usage.UsageCompleteness.Partial, new()) { Attempts = [new UpstreamAttempt(1, candidate, 1, time)] }) == Core.Usage.UsageFinish.Saved);
+            clock.Set(time); await usage.StartAsync(id, user, Core.Usage.UsageKind.Inference); await usage.DispatchAsync(id, 1, candidate, "fixture-model");
+            Check(await usage.FinishAsync(id, new UsageEnd(Core.Usage.UsageOutcome.Failed, true, 503, 503, 1, Core.Usage.UsageCompleteness.Partial, new()) { Attempts = [new UpstreamAttempt(1, candidate, 1, time)] }) == Core.Usage.UsageFinish.Saved);
         }
         int Count(string sql) { using var connection = process.Database.Open(); return Convert.ToInt32(RelayDatabase.Scalar(connection, null, sql)); }
         Check(Count("SELECT COUNT(*) FROM usage_attempts") == 2);
-        clock.Set(now); Check(await usage.Cleanup() == 1);
+        clock.Set(now); Check(await usage.CleanupAsync() == 1);
         // 尝试记录按整数外键挂在用量下；清理删掉的那条用量连同它的尝试一起没了，剩下的一条尝试属于边界上那条。
         Check(Count("SELECT COUNT(*) FROM usage_attempts") == 1 && Count("SELECT COUNT(*) FROM usage_attempts a JOIN usage_requests r ON r.id=a.usage_request_id WHERE r.request_id='boundary'") == 1);
         Check(Count("SELECT COUNT(*) FROM usage_requests") == 1);
@@ -227,25 +227,25 @@ static class UpstreamAttemptTests
     {
         var logs = new ConcurrentQueue<string>(); var upstream = await UpstreamFixture.Create();
         var web = await WebFixture.Create(overrides: services => services.AddSingleton<IRelayEventLog>(new FixtureLog(logs)));
-        await web.Upstreams.SetFailover(false);
+        await web.Upstreams.SetFailoverAsync(false);
         return (upstream, web, logs);
     }
 
     /// <summary>以给定供应商名称保存、测试并激活指向模拟上游的候选，返回候选主键。</summary>
     private static async Task<long> Activate(WebFixture web, UpstreamFixture upstream, string name)
     {
-        var id = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, upstream.Options(), Secret, name);
-        Check((await web.Upstreams.TestCandidate(id, true, CancellationToken.None)).CanActivate); await web.Upstreams.Activate(id); return id;
+        var id = await web.Upstreams.SaveCandidateAsync((await web.Upstreams.ReadActiveAsync()).ActiveVersion, upstream.Options(), Secret, name);
+        Check((await web.Upstreams.TestCandidateAsync(id, true, CancellationToken.None)).CanActivate); await web.Upstreams.ActivateAsync(id); return id;
     }
 
     /// <summary>模拟「测过之后上游变坏」：保存一个连不上的候选，把当前在用那家的通过报告抄给它，再切换过去，返回它的主键。</summary>
     private static async Task<long> ForceActive(WebFixture web, UpstreamOptions options, string name)
     {
-        var active = await web.Upstreams.ReadActive(); var id = await web.Upstreams.SaveCandidate(active.ActiveVersion, options, Secret, name);
+        var active = await web.Upstreams.ReadActiveAsync(); var id = await web.Upstreams.SaveCandidateAsync(active.ActiveVersion, options, Secret, name);
         web.Database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, """
             UPDATE upstream_candidates SET state='passed',report_json=(SELECT report_json FROM upstream WHERE id=1) WHERE id=$id
             """, ("$id", id)));
-        await web.Upstreams.Activate(id); return id;
+        await web.Upstreams.ActivateAsync(id); return id;
     }
 
     /// <summary>报告里只有一条明细时取它唯一的一次上游尝试。</summary>

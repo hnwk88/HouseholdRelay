@@ -8,6 +8,6 @@ public static class SettingsRepositoryExtensions
 {
     /// <summary>取出设置那一行（跟踪中，可直接改了提交）；缺失时抛出提示恢复配套备份。</summary>
     /// <param name="settings">设置仓储。</param>
-    public static async Task<RelaySettings> LoadSettings(this IRepository<RelaySettings> settings) =>
+    public static async Task<RelaySettings> LoadSettingsAsync(this IRepository<RelaySettings> settings) =>
         await settings.GetByIdAsync(RelaySettings.SingletonId) ?? throw new InvalidOperationException("实例配置缺失，请恢复配套备份。");
 }

@@ -56,8 +56,8 @@ internal sealed class ClaudeCodeProbe : IClaudeCodeProbe
     /// 经本机临时端点让隔离的 Claude Code 发出唯一一次候选请求并转发给上游；发往官方账户时只带 <paramref name="identity"/> 这份统一身份。
     /// 代理已启用却取不到地址时在启动子进程前抛出 <see cref="Core.Upstream.UpstreamProxyUnavailableException"/>。
     /// </summary>
-    public Task<ProbeReply> Run(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) =>
-        Session<ProbeReply>(transport.Snapshot.Options.Model, null, new Uri(transport.Snapshot.Options.BaseUrl), transport.Snapshot.Options.OfficialAccount, async (context, completion) =>
+    public Task<ProbeReply> RunAsync(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) =>
+        SessionAsync<ProbeReply>(transport.Snapshot.Options.Model, null, new Uri(transport.Snapshot.Options.BaseUrl), transport.Snapshot.Options.OfficialAccount, async (context, completion) =>
         {
             var attemptSite = _siteIdentity.Current;
             var official = transport.Snapshot.Options.OfficialAccount;
@@ -65,22 +65,22 @@ internal sealed class ClaudeCodeProbe : IClaudeCodeProbe
             var dispatched = false;
             try
             {
-                var body = await UpstreamResponses.ReadBounded(context.Request.Body, 1024 * 1024, cancellation);
+                var body = await UpstreamResponses.ReadBoundedAsync(context.Request.Body, 1024 * 1024, cancellation);
                 using var request = transport.Request("/v1/messages", context.Request.QueryString.ToString(), body, "POST",
                     context.Request.Headers.UserAgent.ToString(), context.Request.Headers, identity, deviceId: attemptSite.DeviceId);
                 if (official) _diagnostics.Record(correlation, "assembled", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint);
                 if (official) _diagnostics.Record(correlation, "dispatch", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint);
                 dispatched = true;
-                using var response = await transport.Send(request, cancellation);
+                using var response = await transport.SendAsync(request, cancellation);
                 if (official) _diagnostics.Record(correlation, "response", "/v1/messages", attemptSite.Version, attemptSite.DeviceId, identity?.Version, identity?.Entrypoint,
                     (int)response.StatusCode, response.StatusCode switch { HttpStatusCode.Unauthorized => "authentication", HttpStatusCode.Forbidden => "forbidden", HttpStatusCode.TooManyRequests => "rate_limit", _ => null });
                 // 先按 Content-Encoding 解开：官方按客户端的 Accept-Encoding 回压缩正文，判定与转给本机客户端都用明文（副本不再带压缩编码）。
-                var bytes = await UpstreamResponses.ReadDecoded(response, 1024 * 1024, cancellation);
+                var bytes = await UpstreamResponses.ReadDecodedAsync(response, 1024 * 1024, cancellation);
                 var streaming = response.Content.Headers.ContentType?.MediaType == "text/event-stream";
                 // 用已有响应边界返回给本机客户端，防止错误正文中的上游秘密进入客户端临时文件。
                 using var copy = new HttpResponseMessage(response.StatusCode) { Content = new ByteArrayContent(bytes) };
                 copy.Content.Headers.ContentType = response.Content.Headers.ContentType;
-                await UpstreamResponses.Copy(copy, new HttpResponseReply(context), transport.Snapshot.Credential!, "diagnostic", null, cancellation);
+                await UpstreamResponses.CopyAsync(copy, new HttpResponseReply(context), transport.Snapshot.Credential!, "diagnostic", null, cancellation);
                 completion.TrySetResult(new(response.StatusCode, bytes, streaming));
             }
             // 只接住网络、读写、取消、中转失败和统一身份缺失：把原因交给等待方，并中断本机连接，避免客户端拿到半截响应后继续重试。
@@ -96,8 +96,8 @@ internal sealed class ClaudeCodeProbe : IClaudeCodeProbe
     /// 让隔离的 Claude Code 以入口 <paramref name="entrypoint"/> 那种模式向本机临时端点发一次请求，只记下它带的请求头（去掉认证头）就回 400 结束会话；不转发、不碰任何上游，不计费。
     /// cli 在伪控制台里跑交互模式（不开窗口，配置目录预写首次运行设置），其余用 <c>--print</c>。子进程的代理变量按官方地址的全局代理设置写，与登录、续期的子进程是同一个环境。
     /// </summary>
-    public Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(string entrypoint, CancellationToken cancellation) =>
-        Session<IReadOnlyList<KeyValuePair<string, string>>>(null, entrypoint, OfficialAccountLogin.OfficialTarget, true, (context, completion) =>
+    public Task<IReadOnlyList<KeyValuePair<string, string>>> CaptureAsync(string entrypoint, CancellationToken cancellation) =>
+        SessionAsync<IReadOnlyList<KeyValuePair<string, string>>>(null, entrypoint, OfficialAccountLogin.OfficialTarget, true, (context, completion) =>
         {
             completion.TrySetResult([.. context.Request.Headers.Where(header => !header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
                 .SelectMany(header => header.Value.Select(value => KeyValuePair.Create(header.Key, value ?? "")))]);
@@ -109,7 +109,7 @@ internal sealed class ClaudeCodeProbe : IClaudeCodeProbe
     /// 等到 <paramref name="handle"/> 给出结果就返回；<paramref name="settle"/> 对结果为真时还要等子进程正常退出并排空输出，确认客户端完整走完一次会话。
     /// 先找 claude.exe 再按 <paramref name="target"/> 解析代理，两步失败都在启动子进程之前抛出。<paramref name="entrypoint"/> 为 null 时是检测（<c>--print</c>），否则是按这个入口抓身份。
     /// </summary>
-    private async Task<T> Session<T>(string? model, string? entrypoint, Uri target, bool officialOperation, Func<HttpContext, TaskCompletionSource<T>, Task> handle, Func<T, bool> settle, CancellationToken cancellation)
+    private async Task<T> SessionAsync<T>(string? model, string? entrypoint, Uri target, bool officialOperation, Func<HttpContext, TaskCompletionSource<T>, Task> handle, Func<T, bool> settle, CancellationToken cancellation)
     {
         using var operation = officialOperation ? _siteIdentity.Enter() : null;
         string executable;

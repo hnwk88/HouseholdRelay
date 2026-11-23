@@ -28,7 +28,7 @@ public interface IUpstreamLease : IDisposable
     HttpRequestMessage Request(string route, string query, byte[] body, string method, string userAgent);
 
     /// <summary>发送请求并拒绝任何跳转响应。</summary>
-    Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken cancellation);
+    Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellation);
 
     /// <summary>根据响应状态记录认证暂停或限流冷却。</summary>
     void Observe(HttpResponseMessage response);

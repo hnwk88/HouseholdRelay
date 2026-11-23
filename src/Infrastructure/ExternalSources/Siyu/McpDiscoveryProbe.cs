@@ -19,7 +19,7 @@ internal sealed class McpDiscoveryProbe : IMcpDiscoveryProbe
     }
 
     /// <summary>重发一次发现；成功返回编号，失败返回 null。</summary>
-    public async Task<IReadOnlyList<string>?> Discover(byte[] requestTemplate, string accessToken, CancellationToken cancellation)
+    public async Task<IReadOnlyList<string>?> DiscoverAsync(byte[] requestTemplate, string accessToken, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(requestTemplate); ArgumentException.ThrowIfNullOrEmpty(accessToken);
         Http1RequestHead head;
@@ -29,7 +29,7 @@ internal sealed class McpDiscoveryProbe : IMcpDiscoveryProbe
         if (head.Method != "GET" || !SiyuRoutes.TryMatch(OfficialHost.Api, head.Method, head.Target, out var route) || route.Purpose != SiyuPurpose.McpServers) return null;
         try
         {
-            await using var upstream = await _connector.Open(OfficialHost.Api, cancellation);
+            await using var upstream = await _connector.OpenAsync(OfficialHost.Api, cancellation);
             await upstream.WriteAsync(head.WithAuthorization(accessToken), cancellation);
             await upstream.FlushAsync(cancellation);
             var reader = new Http1Reader(upstream);
@@ -40,7 +40,7 @@ internal sealed class McpDiscoveryProbe : IMcpDiscoveryProbe
                 var response = Http1ResponseHead.Parse(raw, head.Method);
                 if (response.Interim) continue;
                 if (response.Status != 200) return null;
-                var wire = await Http1BodyBuffer.Read(reader, response, cancellation);
+                var wire = await Http1BodyBuffer.ReadAsync(reader, response, cancellation);
                 return Http1Entity.Decode(wire, response.Framing, response.Fields) is { } entity && McpServerList.TryReadIds(entity, out var ids) ? ids : null;
             }
         }

@@ -27,7 +27,7 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
     /// 返回入口 <paramref name="entrypoint"/> 与本机此刻这份 claude.exe 对得上的身份：指纹没变直接用已取到的；变了或从没取过就在本机以那种模式重取一次（不碰官方），失败时抛出读给人听的原因。
     /// 不能实抓的入口按 <see cref="ClaudeCodeClient.DefaultEntrypoint"/> 取。
     /// </summary>
-    public async Task<ClaudeCodeIdentity> Current(string entrypoint, CancellationToken cancellation)
+    public async Task<ClaudeCodeIdentity> CurrentAsync(string entrypoint, CancellationToken cancellation)
     {
         using var operation = siteIdentity.Enter();
         if (!ClaudeCodeClient.CapturableEntrypoints.Contains(entrypoint)) entrypoint = ClaudeCodeClient.DefaultEntrypoint;
@@ -40,7 +40,7 @@ internal sealed class ClaudeCodeIdentitySource(IClientLauncher launcher, IClaude
             if (Known(entrypoint, fingerprint) is { } settled) return settled;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation); timeout.CancelAfter(_captureLimit);
             ClaudeCodeIdentity identity;
-            try { identity = ClaudeCodeIdentity.From(await probe.Capture(entrypoint, timeout.Token), FileVersion(executable), entrypoint, clock.GetUtcNow()); }
+            try { identity = ClaudeCodeIdentity.From(await probe.CaptureAsync(entrypoint, timeout.Token), FileVersion(executable), entrypoint, clock.GetUtcNow()); }
             // 取不全、对不上：记下这句原因。
             catch (ClaudeCodeIdentityUnavailableException error) { throw Remember(entrypoint, fingerprint, error.Message); }
             // 代理已启用却取不到地址：原样交给调用方按代理不可用处理，不记成身份问题。

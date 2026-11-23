@@ -12,11 +12,11 @@ public interface IClientLauncher
     string FindClaude();
 
     /// <summary>读取本机 Claude Code 版本并组成其请求特征字符串。</summary>
-    Task<string> DetectUserAgent();
+    Task<string> DetectUserAgentAsync();
 
     /// <summary>按旧客户端包准备启动参数：清除冲突的凭据变量，只为子进程注入中转地址、令牌和 CA。</summary>
     ProcessStartInfo Prepare(string bundleDirectory, IEnumerable<string> arguments);
 
     /// <summary>启动客户端并等待退出，返回其退出码。</summary>
-    Task<int> Run(string directory, string[] arguments);
+    Task<int> RunAsync(string directory, string[] arguments);
 }

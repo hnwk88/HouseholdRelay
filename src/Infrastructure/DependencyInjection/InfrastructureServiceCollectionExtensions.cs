@@ -55,9 +55,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IDatabaseMigration, IntegerKeySchema>();
         // 负责把库从版本 10 升到 11（每张表补齐通用实体基类的列，复合主键与按名字存的表改整数主键）；选 Singleton 的原因：迁移无状态，只在打开数据库时按顺序执行一次。
         services.AddSingleton<IDatabaseMigration, EntityBaseSchema>();
-        // 提供站点设备编号的唯一生成入口（D-012）；选 Singleton 的原因：无状态，全进程共用一个入口。
+        // 提供站点设备编号的唯一生成入口（只在首次建站和管理员手动维护时换号，别处不许自己造编号）；选 Singleton 的原因：无状态，全进程共用一个入口。
         services.AddSingleton<IDeviceIdGenerator, RandomDeviceIdGenerator>();
+        // 负责打开数据库并按顺序跑上面的迁移链；选 Singleton 的原因：迁移只在打开时跑一次，连接串与实例信息全进程共用。
         services.AddSingleton<RelayDatabase>();
+        // 实例信息由同一个数据库对象提供，换个接口取，不另开一份。
         services.AddSingleton<IRelayInstance>(provider => provider.GetRequiredService<RelayDatabase>());
         // 负责以独占打开 serving.lock 保证同一数据目录只有一个服务进程；选 Singleton 的原因：锁在进程生命周期内只持有一份。
         services.AddSingleton<IServingLock, ServingLockFile>();
@@ -98,7 +100,7 @@ public static class InfrastructureServiceCollectionExtensions
         // 配置服务经上游服务与探测间接依赖代理，所以到真要取代理时才解析它，构造时不成环。
         // IWebProxy 的取代理是同步合同，只能在这里同步等待一次读设置；Microsoft.Data.Sqlite 的异步读在内部同步完成，没有同步上下文，不会死锁。
         services.AddSingleton<IUpstreamProxy>(provider =>
-            new SystemUpstreamProxy(() => provider.GetRequiredService<IConfigurationService>().Read().GetAwaiter().GetResult().Value));
+            new SystemUpstreamProxy(() => provider.GetRequiredService<IConfigurationService>().ReadAsync().GetAwaiter().GetResult().Value));
         // 负责定位并启动本机原生 Claude Code；选 Singleton 的原因：无状态。
         services.AddSingleton<IClientLauncher, ClientLauncher>();
         // 执行隔离的原生客户端诊断；选 Singleton 的原因：无状态，每次诊断各起各的子进程。
@@ -107,6 +109,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IClaudeCodeIdentitySource, ClaudeCodeIdentitySource>();
         // 负责让本机 Claude Code 跟上客户端版本；选 Singleton 的原因：保证同一时刻只跑一次升级，失败间隔全进程共享。
         services.AddSingleton<IClaudeCodeUpdater, ClaudeCodeUpdater>();
+        // 官方账户登录进程的启动参数（是否出窗口、等登录的时限）；选 Singleton 的原因：启动时定一次，全进程共用。
         services.AddSingleton(new OfficialLoginOptions());
         // 负责官方账户的登录、导出与目录管理；选 Singleton 的原因：登录进行中的状态全进程共享一份。
         services.AddSingleton<IOfficialAccountLogin, OfficialAccountLogin>();
@@ -117,7 +120,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         // 维护思域代理 CA（DPAPI 存 secrets 的 siyu_proxy_ca，和站点 CA 分开）与叶证书；选 Singleton 的原因：CA 私钥与叶证书只在内存里留一份。
         // 证书接口是同步合同，只能在这里同步等待一次读库；Microsoft.Data.Sqlite 的异步读在内部同步完成，没有同步上下文，不会死锁。
-        services.AddSingleton<Application.Interfaces.Siyu.ISiyuProxyCertificates>(provider => SiyuProxyCertificates.Load(provider.GetRequiredService<IServiceScopeFactory>(),
+        services.AddSingleton<Application.Interfaces.Siyu.ISiyuProxyCertificates>(provider => SiyuProxyCertificates.LoadAsync(provider.GetRequiredService<IServiceScopeFactory>(),
             provider.GetRequiredService<ISecretProtector>(), provider.GetRequiredService<ICertificateFactory>(), provider.GetRequiredService<TimeProvider>()).GetAwaiter().GetResult());
         // 提供思域的官方出口；选 Singleton 的原因：无状态，每次各开一条连接，代理设置每次重读。
         services.AddSingleton<Application.Interfaces.Siyu.IOfficialConnector, ExternalSources.Siyu.OfficialConnector>();

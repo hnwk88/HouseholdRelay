@@ -17,11 +17,11 @@ sealed class FixedSiteIdentity(string deviceId) : ISiteIdentityService
     /// <summary>永不维护，传输停止信号永不触发。</summary>
     public CancellationToken TransportStopping => CancellationToken.None;
     /// <summary>没有私有配置要准备。</summary>
-    public Task Prepare(CancellationToken cancellation) => Task.CompletedTask;
+    public Task PrepareAsync(CancellationToken cancellation) => Task.CompletedTask;
     /// <summary>不支持维护。</summary>
-    public Task<SiteIdentityOperationResult> Refresh(string operationId, long expectedVersion, CancellationToken cancellation) => throw new NotSupportedException();
+    public Task<SiteIdentityOperationResult> RefreshAsync(string operationId, long expectedVersion, CancellationToken cancellation) => throw new NotSupportedException();
     /// <summary>不支持维护。</summary>
-    public Task<SiteIdentityOperationResult> Resume(string operationId, CancellationToken cancellation) => throw new NotSupportedException();
+    public Task<SiteIdentityOperationResult> ResumeAsync(string operationId, CancellationToken cancellation) => throw new NotSupportedException();
 
     /// <summary>空许可。</summary>
     private sealed class Permit : IDisposable

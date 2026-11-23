@@ -31,7 +31,7 @@ public interface IRelayExchange
     IReadOnlyDictionary<string, StringValues> Query { get; }
 
     /// <summary>读一段请求体，读完返回 0。宿主读请求时发现格式错误或超限，抛出带原状态码与「Invalid or oversized request.」的 <see cref="RelayFailure"/>。</summary>
-    ValueTask<int> Read(Memory<byte> buffer, CancellationToken cancellation);
+    ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellation);
 
     /// <summary>客户端断开时取消。</summary>
     CancellationToken Aborted { get; }
@@ -46,5 +46,5 @@ public interface IRelayExchange
     /// 按 Anthropic 错误格式写出中转失败，在 <c>error</c> 之后带上这次的中转请求编号 <c>request_id</c>（家人报错时报这串，管理员在事件日志里按它查）；
     /// 响应已开始或客户端已断开时直接中止连接。
     /// </summary>
-    Task Fail(RelayFailure error, string requestId);
+    Task FailAsync(RelayFailure error, string requestId);
 }

@@ -40,11 +40,11 @@ static class UpstreamNamingMigrationTests
             Check((string?)RelayDatabase.Scalar(connection, null, "SELECT state FROM upstream_candidates WHERE id='old-candidate'") == "activated");
         }
         Check(Settings(home) == settingsBefore);
-        var upgraded = new TestProcess(home.Path); var settings = (await upgraded.Settings.Read()).Value;
+        var upgraded = new TestProcess(home.Path); var settings = (await upgraded.Settings.ReadAsync()).Value;
         Check(settings.ProxyMode == Core.Configuration.ProxyMode.Manual && settings.ProxyUrl == "http://127.0.0.1:7897");
-        var saved = await upgraded.Upstreams.ListCandidates();
+        var saved = await upgraded.Upstreams.ListCandidatesAsync();
         Check(saved.Select(item => (item.Uid, item.Name, item.State)).SequenceEqual([("old-candidate", "aitoll.net", CandidateState.Passed), ("newer-candidate", "api.sftoken.top", CandidateState.Passed)]));
-        var active = await upgraded.Upstreams.ReadActive();
+        var active = await upgraded.Upstreams.ReadActiveAsync();
         Check(active.UpstreamCandidateId == saved[0].Id && active.Name == "aitoll.net" && active.Credential == "fixture-migrated-secret" && active.Options.Diagnostic == Core.Upstream.DiagnosticMethod.ClaudeCode);
         using (var connection = upgraded.Database.Open())
         {
@@ -52,8 +52,8 @@ static class UpstreamNamingMigrationTests
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "SELECT COUNT(*) FROM upstream_candidates WHERE options_json LIKE '%proxyUrl%'")) == 0);
             Check(!((string)RelayDatabase.Scalar(connection, null, "SELECT options_json FROM upstream WHERE id=1")!).Contains("proxyUrl"));
         }
-        await upgraded.Upstreams.Activate(saved[1].Id, (await upgraded.Upstreams.ReadActive()).ActiveVersion); await upgraded.Upstreams.Activate(saved[0].Id, (await upgraded.Upstreams.ReadActive()).ActiveVersion);
-        Check((await upgraded.Upstreams.ReadActive()).UpstreamCandidateId == saved[0].Id, "Migrated candidates can be switched back and forth");
+        await upgraded.Upstreams.ActivateAsync(saved[1].Id, (await upgraded.Upstreams.ReadActiveAsync()).ActiveVersion); await upgraded.Upstreams.ActivateAsync(saved[0].Id, (await upgraded.Upstreams.ReadActiveAsync()).ActiveVersion);
+        Check((await upgraded.Upstreams.ReadActiveAsync()).UpstreamCandidateId == saved[0].Id, "Migrated candidates can be switched back and forth");
     }
 
     /// <summary>
@@ -67,12 +67,12 @@ static class UpstreamNamingMigrationTests
         Seed(home, connection => RelayDatabase.Execute(connection, null, "UPDATE upstream SET options_json=$json,credential=$secret WHERE id=1",
             ("$json", """{"mode":"oauth","authentication":"bearer","baseUrl":"https://api.anthropic.com","oAuthBeta":true}"""), ("$secret", secret)));
         var version = Settings(home).Split(':')[0];
-        var upgraded = new TestProcess(home.Path); var active = await upgraded.Upstreams.ReadActive();
+        var upgraded = new TestProcess(home.Path); var active = await upgraded.Upstreams.ReadActiveAsync();
         // 迁移只核对原有加密凭据；未准备官方身份的测试进程不通过活动读取开放转发。
         Check(active.UpstreamCandidateId is not null && active.Name == "api.anthropic.com" && upgraded.ActiveCredential() == "fixture-orphan-secret");
-        var created = await upgraded.Upstreams.ReadCandidate(active.UpstreamCandidateId!.Value);
-        Check(created.State == Core.Upstream.CandidateState.Untested && created.Options.Mode == Core.Upstream.UpstreamMode.OAuth && created.Uid.Length == 32 && (await upgraded.Upstreams.ListCandidates()).Count == 1);
-        Check((await upgraded.Settings.Read()).Value.ProxyMode == Core.Configuration.ProxyMode.None && (await upgraded.Settings.Read()).Version.ToString(CultureInfo.InvariantCulture) == version);
+        var created = await upgraded.Upstreams.ReadCandidateAsync(active.UpstreamCandidateId!.Value);
+        Check(created.State == Core.Upstream.CandidateState.Untested && created.Options.Mode == Core.Upstream.UpstreamMode.OAuth && created.Uid.Length == 32 && (await upgraded.Upstreams.ListCandidatesAsync()).Count == 1);
+        Check((await upgraded.Settings.ReadAsync()).Value.ProxyMode == Core.Configuration.ProxyMode.None && (await upgraded.Settings.ReadAsync()).Version.ToString(CultureInfo.InvariantCulture) == version);
     }
 
     /// <summary>在真实 v3 旧库上清掉夹具自带的三家候选（它们带的代理会参与全局代理的选择），再交给 <paramref name="seed"/> 写入用例要的旧数据；只写数据行，不改结构。</summary>

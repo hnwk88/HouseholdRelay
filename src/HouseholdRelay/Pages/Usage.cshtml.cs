@@ -44,11 +44,11 @@ public sealed class UsageModel(IUsageService usage, IIdentityService identities,
     public async Task OnGetAsync()
     {
         Granularity ??= "day"; TimeZone ??= TimeZoneInfo.Local.Id;
-        Users = await identities.List(); Upstreams = await upstreams.ListCandidates();
+        Users = await identities.ListAsync(); Upstreams = await upstreams.ListCandidatesAsync();
         if (UpstreamCandidateId is { } only)
             UpstreamText = $"只看「{Upstreams.FirstOrDefault(item => item.Id == only)?.Name ?? "已删除的上游"}」这一家上游记账的请求。要看全部，把「上游」改回「全部上游」再查询。";
         if (!ModelState.IsValid) return;
-        try { Report = await usage.Query(new(UserId, From, Until, UsageFilter.Closed<UsageKind>(Kind), ModelName, UsageFilter.Closed<UsageOutcome>(Outcome), PageNumber, Granularity, TimeZone, UpstreamCandidateId)); }
+        try { Report = await usage.QueryAsync(new(UserId, From, Until, UsageFilter.Closed<UsageKind>(Kind), ModelName, UsageFilter.Closed<UsageOutcome>(Outcome), PageNumber, Granularity, TimeZone, UpstreamCandidateId)); }
         // 筛选条件不合法（时间倒置、未知类别或时区等）时抛 InvalidOperationException，只显示为页面错误，不展示报告。
         catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
     }

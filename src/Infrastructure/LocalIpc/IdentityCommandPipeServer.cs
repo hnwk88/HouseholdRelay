@@ -39,24 +39,24 @@ internal sealed class IdentityCommandPipeServer(IRelayInstance instance, Identit
                 try { await pipe.WaitForConnectionAsync(stoppingToken); }
                 // 服务停止：不再接新连接。
                 catch (OperationCanceledException) { return; }
-                await Serve(pipe, stoppingToken);
+                await ServeAsync(pipe, stoppingToken);
             }
         }
     }
 
     /// <summary>读一行动作、执行、回一行结果；坏请求回固定原因，不提交任何改动。连接断开等传输故障只结束这一个连接。</summary>
-    private async Task Serve(NamedPipeServerStream pipe, CancellationToken stopping)
+    private async Task ServeAsync(NamedPipeServerStream pipe, CancellationToken stopping)
     {
         try
         {
             // 服务停止与读请求时限合成一个令牌，只约束读请求，不约束随后的执行。
             using var wait = CancellationTokenSource.CreateLinkedTokenSource(stopping);
             wait.CancelAfter(_requestWait);
-            var command = await IdentityCommandPipe.ReadLine<IdentityCommand>(pipe, wait.Token);
+            var command = await IdentityCommandPipe.ReadLineAsync<IdentityCommand>(pipe, wait.Token);
             // 执行不受读请求时限约束：已开始的提交要做完，结果照实回给命令行。
             var result = command is null ? new IdentityCommandResult(null, "命令行发来的管理请求无法读懂，没有保存。请用同一版本的程序重试。")
-                : await handler.Execute(command);
-            await IdentityCommandPipe.WriteLine(pipe, result, stopping);
+                : await handler.ExecuteAsync(command);
+            await IdentityCommandPipe.WriteLineAsync(pipe, result, stopping);
         }
         // 命令行中途断开、读超时或服务停止：只结束这个连接，接下一个；不影响服务。
         catch (Exception error) when (error is IOException or OperationCanceledException or ObjectDisposedException)

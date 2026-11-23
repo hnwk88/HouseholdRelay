@@ -34,9 +34,9 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>，未配置凭据（或登录凭据已不在）时快照的凭据为 null。
     /// 来源的官方账户已导出搬走时也为 null：不读令牌也就不触发续期，转发按「未配置」处理（自动切换开着时换到备用上游）。
     /// </summary>
-    public async Task<UpstreamSnapshot> ReadActive()
+    public async Task<UpstreamSnapshot> ReadActiveAsync()
     {
-        var (row, source, options) = await Active();
+        var (row, source, options) = await ActiveAsync();
         var (credential, accountUuid, blocked, reason) = ReadCredential(options, row.Credential, source?.ExportedAt is not null, source?.Uid);
         return new(row.Version, options, credential, Report(row.ReportJson), row.UpstreamCandidateId, Named(source?.Name), row.Failover, blocked, accountUuid, reason);
     }
@@ -45,7 +45,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 读取在用那一家以外、测试通过、没有导出搬走的已保存上游快照，按上游页顺序（创建先后），版本记为此刻的活动版本：官方登录的读它账户目录里的最新令牌（取不到时凭据为 null，转发会跳过它），其余解密库中凭据。
     /// 配置或报告 JSON 损坏的那一家跳过，不挡住其余备用上游。
     /// </summary>
-    public async Task<IReadOnlyList<UpstreamSnapshot>> ReadStandby()
+    public async Task<IReadOnlyList<UpstreamSnapshot>> ReadStandbyAsync()
     {
         List<UpstreamCandidate> rows; ActiveUpstream? active;
         await using (var scope = scopes.CreateAsyncScope())
@@ -86,43 +86,43 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     }
 
     /// <summary>打开或关闭自动切换；保存即生效，下一个请求就按新开关取尝试顺序，不改版本、不换在用的那一家。</summary>
-    public async Task SetFailover(bool enabled)
+    public async Task SetFailoverAsync(bool enabled)
     {
         await using var scope = scopes.CreateAsyncScope();
         var active = scope.Repository<ActiveUpstream>();
         (await active.GetByIdAsync(ActiveUpstream.SingletonId) ?? throw new InvalidOperationException("上游配置缺失。")).Failover = enabled;
-        await Commit(active, "活动上游刚被另一页面或命令改过，请重新加载页面再试。");
+        await CommitAsync(active, "活动上游刚被另一页面或命令改过，请重新加载页面再试。");
     }
 
     /// <summary>
     /// 读取活动上游的非秘密部分供页面展示：不解密、不读令牌，官方登录上游的「已配置」只看账户目录里有没有凭据文件，不等刷新；
-    /// 「已配置」与 <see cref="ReadActive"/> 的 <see cref="UpstreamSnapshot.Configured"/> 同一口径（已导出搬走的读作未配置）。活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>。
+    /// 「已配置」与 <see cref="ReadActiveAsync"/> 的 <see cref="UpstreamSnapshot.Configured"/> 同一口径（已导出搬走的读作未配置）。活动行缺失或配置 JSON 损坏时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
-    public async Task<UpstreamOverview> ReadOverview()
+    public async Task<UpstreamOverview> ReadOverviewAsync()
     {
-        var (row, source, options) = await Active();
+        var (row, source, options) = await ActiveAsync();
         var configured = row.Credential is not null && source?.ExportedAt is null && (!options.OfficialLogin || source?.Uid is { } account && officialAccounts.HasCredential(account));
         return new(row.Version, options, configured, Report(row.ReportJson), row.UpstreamCandidateId, Named(source?.Name), row.Failover);
     }
 
     /// <summary>读取最近创建的上游（不含凭据）；一个都没有时返回 null。</summary>
-    public async Task<UpstreamCandidateView?> LatestCandidate() => (await ListCandidates()).LastOrDefault();
+    public async Task<UpstreamCandidateView?> LatestCandidateAsync() => (await ListCandidatesAsync()).LastOrDefault();
 
     /// <summary>按创建先后列出全部未停用的已保存上游的非秘密部分，每家带上此刻能不能删。</summary>
-    public async Task<IReadOnlyList<UpstreamCandidateView>> ListCandidates()
+    public async Task<IReadOnlyList<UpstreamCandidateView>> ListCandidatesAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
-        var active = await ActiveCandidateId(scope);
+        var active = await ActiveCandidateIdAsync(scope);
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         return InPageOrder(await scope.Repository<UpstreamCandidate>().GetAllAsync()).Select(item => ToView(item, now, active)).ToArray();
     }
 
     /// <summary>按主键读取已保存上游的非秘密部分（名称、基于的活动版本、配置、状态与检测报告）；不存在或已停用时抛出 <see cref="InvalidOperationException"/> 提示重新加载。</summary>
-    public async Task<UpstreamCandidateView> ReadCandidate(long id)
+    public async Task<UpstreamCandidateView> ReadCandidateAsync(long id)
     {
         await using var scope = scopes.CreateAsyncScope();
         var row = await scope.Repository<UpstreamCandidate>().GetByIdAsync(id) ?? throw Missing();
-        return ToView(row, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), await ActiveCandidateId(scope));
+        return ToView(row, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), await ActiveCandidateIdAsync(scope));
     }
 
     /// <summary>
@@ -130,7 +130,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 凭据长度不少于 8 时，若出现在配置 JSON、名称或（转义后）出现在地址中则拒绝，防止秘密被写进会明文展示的字段。
     /// <paramref name="name"/> 为空时用地址主机名；活动版本已不是 <paramref name="expectedVersion"/> 时拒绝并提示重新加载。
     /// </summary>
-    public async Task<long> SaveCandidate(long expectedVersion, UpstreamOptions options, string credential, string? name)
+    public async Task<long> SaveCandidateAsync(long expectedVersion, UpstreamOptions options, string credential, string? name)
     {
         options = options.Validated();
         using var operation = options.OfficialAccount ? siteIdentity.Enter() : null;
@@ -146,34 +146,34 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         try
         {
             var encrypted = protector.Protect(plain);
-            return await Insert(Guid.NewGuid().ToString("N"), expectedVersion, name, json, encrypted);
+            return await InsertAsync(Guid.NewGuid().ToString("N"), expectedVersion, name, json, encrypted);
         }
         // 无论加密或写库是否成功都清零凭据明文字节，避免秘密残留在内存中。
         finally { CryptographicOperations.ZeroMemory(plain); }
     }
 
-    /// <summary>委托 <see cref="IOfficialAccountLogin.Login"/> 在新上游自己的配置目录里登录，再按 <see cref="AddOfficial"/> 取名、保存。</summary>
-    public Task<long> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation) =>
-        AddOfficial(expectedVersion, options, name, id => officialAccounts.Login(id, cancellation));
+    /// <summary>委托 <see cref="IOfficialAccountLogin.LoginAsync"/> 在新上游自己的配置目录里登录，再按 <see cref="AddOfficialAsync"/> 取名、保存。</summary>
+    public Task<long> LoginOfficialAsync(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation) =>
+        AddOfficialAsync(expectedVersion, options, name, id => officialAccounts.LoginAsync(id, cancellation));
 
     /// <summary>
-    /// 重新登录：先在临时目录里登录、用新令牌向官方取一次账户资料，与这一家记下的账户编号比对；相同（或这一家还没有编号）才经 <see cref="IOfficialAccountLogin.Adopt"/> 换上新凭据并记下资料，
+    /// 重新登录：先在临时目录里登录、用新令牌向官方取一次账户资料，与这一家记下的账户编号比对；相同（或这一家还没有编号）才经 <see cref="IOfficialAccountLogin.AdoptAsync"/> 换上新凭据并记下资料，
     /// 不同就读出登成了别的账户与下一步。临时目录无论成败都删掉。
     /// </summary>
-    public async Task<string?> Relogin(long id, CancellationToken cancellation)
+    public async Task<string?> ReloginAsync(long id, CancellationToken cancellation)
     {
-        var candidate = await ReadUsable(id); var name = Named(candidate.Name);
+        var candidate = await ReadUsableAsync(id); var name = Named(candidate.Name);
         if (!candidate.Options.OfficialLogin)
             throw new InvalidOperationException($"「{name}」不是登录得到的官方账户，没有登录可以重做。它的密钥或令牌失效时，请删除它，再在「添加上游」里重新添加。");
         if (candidate.ExportedAt is not null)
             throw new InvalidOperationException($"「{name}」已经导出搬走，本机不再用它，不能重新登录。要在本机继续用官方账户，请在「添加上游」里按「登录官方账户」。");
         using var operation = siteIdentity.Enter();
         var staging = Guid.NewGuid().ToString("N");
-        var email = await officialAccounts.Login(staging, cancellation);
+        var email = await officialAccounts.LoginAsync(staging, cancellation);
         try
         {
             var token = officialAccounts.ReadAccessToken(staging) ?? throw new InvalidOperationException("登录命令结束了，但没有拿到官方账户凭据。请再按一次「重新登录」。");
-            var profile = await probe.Profile(new(candidate.ExpectedVersion, candidate.Options, token), cancellation);
+            var profile = await probe.ProfileAsync(new(candidate.ExpectedVersion, candidate.Options, token), cancellation);
             string? previous;
             try { previous = officialAccounts.ReadAccountUuid(candidate.Uid); }
             // 从没测试过的账户（例如刚导入）私有配置里还没有账户编号：没有可比的，按同一个账户接上，换上后由账户资料补上编号。
@@ -181,7 +181,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
             if (previous is not null && !string.Equals(previous, profile.AccountUuid, StringComparison.Ordinal))
                 throw new InvalidOperationException($"这次登录的是另一个官方账户{(email is null ? "" : $"（{email}）")}，不是「{name}」原来的那个账户，所以没有换掉它的登录，原来的凭据照旧。"
                     + "请再按「重新登录」，在浏览器里登录原来的那个账户；要改用这个新账户，请在「添加上游」里按「登录官方账户」另加一家。");
-            await officialAccounts.Adopt(candidate.Uid, staging);
+            await officialAccounts.AdoptAsync(candidate.Uid, staging);
             officialAccounts.RecordAccount(candidate.Uid, profile);
             return email;
         }
@@ -189,18 +189,18 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         finally { officialAccounts.Remove(staging); }
     }
 
-    /// <summary>委托 <see cref="IOfficialAccountLogin.Import"/> 把登录文件放进新上游自己的配置目录，再按 <see cref="AddOfficial"/> 取名、保存；得到的上游与登录得到的不可区分。</summary>
-    public Task<long> ImportOfficial(long expectedVersion, UpstreamOptions options, byte[] content, string? name, CancellationToken cancellation) =>
-        AddOfficial(expectedVersion, options, name, id => officialAccounts.Import(id, content, cancellation));
+    /// <summary>委托 <see cref="IOfficialAccountLogin.ImportAsync"/> 把登录文件放进新上游自己的配置目录，再按 <see cref="AddOfficialAsync"/> 取名、保存；得到的上游与登录得到的不可区分。</summary>
+    public Task<long> ImportOfficialAsync(long expectedVersion, UpstreamOptions options, byte[] content, string? name, CancellationToken cancellation) =>
+        AddOfficialAsync(expectedVersion, options, name, id => officialAccounts.ImportAsync(id, content, cancellation));
 
     /// <summary>校验后改名；名称只做显示，切换、检测记录和用量都按主键关联，改名不影响它们。不存在或已停用时提示重新加载。</summary>
-    public async Task Rename(long id, string name)
+    public async Task RenameAsync(long id, string name)
     {
         name = ValidName(name);
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();
         (await candidates.GetByIdAsync(id) ?? throw Missing()).Name = name;
-        await Commit(candidates, Changed);
+        await CommitAsync(candidates, Changed);
     }
 
     /// <summary>
@@ -208,14 +208,14 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 能删就清掉加密凭据并软删除，同一事务里数出仍按主键引用它的用量、尝试和单价条数返回。
     /// 停用后用量、尝试和单价照常按外键引用它，用量页读出它的名字；删掉的是官方登录上游时再删它的账户目录。
     /// </summary>
-    public async Task<UpstreamReferences> Delete(long id)
+    public async Task<UpstreamReferences> DeleteAsync(long id)
     {
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();
         var (references, removed) = await candidates.ExecuteInTransactionAsync(async () =>
         {
             var candidate = await candidates.GetByIdAsync(id) ?? throw Missing();
-            var active = await ActiveCandidateId(scope); var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var active = await ActiveCandidateIdAsync(scope); var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             if (!candidate.Deletable(now, active))
                 throw new InvalidOperationException(active == id ? "这个上游正在使用中，不能删除。请先切换到别的上游，再删除它。" : "这个上游正在检测，请等检测结束后再删除。");
             candidate.PrepareDeactivation(now, active);
@@ -245,50 +245,50 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 自动探测时把被接受的认证方式写回配置，手动指定时保持原值；目录与读句存为未测试报告，供页面列出下拉框。
     /// 当前使用中的那个已经在转发：结束后（含失败、取消）写回原状态、原配置与原报告，获取成功时只把报告里的模型目录换成新的，不读成未测试。
     /// </summary>
-    public async Task<ModelCatalog> DiscoverModels(long id, CancellationToken cancellation)
+    public async Task<ModelCatalog> DiscoverModelsAsync(long id, CancellationToken cancellation)
     {
-        var candidate = await ReadUsable(id);
+        var candidate = await ReadUsableAsync(id);
         using var operation = candidate.Options.OfficialAccount ? siteIdentity.Enter() : null;
-        var (token, accountUuid) = await LoginToken(candidate, cancellation);
-        var kept = candidate.Report is { } previous && (await ActiveCandidateId()) == id ? previous : null;
-        var secret = await BeginTest(id);
+        var (token, accountUuid) = await LoginTokenAsync(candidate, cancellation);
+        var kept = candidate.Report is { } previous && (await ActiveCandidateIdAsync()) == id ? previous : null;
+        var secret = await BeginTestAsync(id);
         // 标记检测中之后的每一步都在收尾块里：出错或被取消时，在用的那一家写回原样，其余的写成「检测未完成」，不会停在检测中。
         try
         {
             ModelCatalog catalog;
-            try { catalog = await probe.Discover(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation); }
+            try { catalog = await probe.DiscoverAsync(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation); }
             // 在用的那个获取途中失败或被取消：写回原样，不让它停在「检测中」、丢掉测试结论。
-            catch when (kept is not null) { await FinishTest(id, candidate.State, Serialize(kept), Serialize(candidate.Options)); throw; }
+            catch when (kept is not null) { await FinishTestAsync(id, candidate.State, Serialize(kept), Serialize(candidate.Options)); throw; }
             // 探测把管理员取消读成一份「已取消」目录照旧返回；不是在用的那一家这时不算拿到结论，写成「检测未完成」。在用的那一家照下面写回原样。
-            if (kept is null && cancellation.IsCancellationRequested) { await Interrupt(id, UpstreamReport.CancelledReason); return catalog; }
+            if (kept is null && cancellation.IsCancellationRequested) { await InterruptAsync(id, UpstreamReport.CancelledReason); return catalog; }
             if (kept is not null)
             {
-                await FinishTest(id, candidate.State, Serialize(catalog.Status == CatalogStatus.Passed ? kept with { Models = catalog.Models } : kept), Serialize(candidate.Options));
+                await FinishTestAsync(id, candidate.State, Serialize(catalog.Status == CatalogStatus.Passed ? kept with { Models = catalog.Models } : kept), Serialize(candidate.Options));
                 return catalog;
             }
             var options = catalog.Authentication is { } accepted && !candidate.Options.AuthenticationManual ? candidate.Options with { Authentication = accepted } : candidate.Options;
             var report = new UpstreamReport(DateTimeOffset.UtcNow, catalog.Status == CatalogStatus.Failed ? CheckStatus.Failed : CheckStatus.Passed,
                 UpstreamDetection.AuthenticationCheck(catalog.Status), UpstreamDetection.DiscoveryCheck(catalog.Status), CheckStatus.Unverified, catalog.Models, null, catalog.Message);
-            await ResetToUntested(id, Serialize(options), Serialize(report));
+            await ResetToUntestedAsync(id, Serialize(options), Serialize(report));
             return catalog;
         }
         catch (Exception error) when (kept is null)
         {
             // 不是在用的那一家：任何异常（含取消）都先写成「检测未完成」再原样抛出，读句只说原因类别，细节由调用方记日志。
-            await Interrupt(id, UnfinishedReason(error, cancellation)); throw;
+            await InterruptAsync(id, UnfinishedReason(error, cancellation)); throw;
         }
     }
 
     /// <summary>选定要测试的模型：名称按 <see cref="UpstreamOptions.Validated"/> 校验；与原值相同时不改动，不同时保留模型目录、清除旧的通过状态，须重新测试才能切换。</summary>
-    public async Task ChooseModel(long id, string model)
+    public async Task ChooseModelAsync(long id, string model)
     {
         model = model.Trim();
         if (model.Length == 0) throw new InvalidOperationException("请先选择或填写要测试的模型。");
-        var candidate = await ReadUsable(id);
+        var candidate = await ReadUsableAsync(id);
         if (candidate.Options.Model == model) return;
         var options = (candidate.Options with { Model = model }).Validated();
         var report = candidate.Report is { } previous ? previous with { Call = CheckStatus.Unverified, VerifiedModel = null, Message = $"模型已改为 {model}，尚未测试。" } : null;
-        await ResetToUntested(id, Serialize(options), report is null ? null : Serialize(report));
+        await ResetToUntestedAsync(id, Serialize(options), report is null ? null : Serialize(report));
     }
 
     /// <summary>
@@ -296,27 +296,27 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 先把它标记为检测中（正在检测时拒绝重复发起），检测结束后按 <see cref="UpstreamReport.CanActivate"/> 记为通过或失败，
     /// 并写回实际采用的认证方式与检测方式（手动指定的项目由诊断保持原值）。取消令牌会传给检测过程；检测抛出异常时不会写回结果。
     /// </summary>
-    public async Task<UpstreamReport> TestCandidate(long id, bool confirmed, CancellationToken cancellation)
+    public async Task<UpstreamReport> TestCandidateAsync(long id, bool confirmed, CancellationToken cancellation)
     {
         if (!confirmed) throw new InvalidOperationException("请先确认最小模型测试可能消耗少量上游额度。");
-        var candidate = await ReadUsable(id);
+        var candidate = await ReadUsableAsync(id);
         using var operation = candidate.Options.OfficialAccount ? siteIdentity.Enter() : null;
         if (candidate.Options.Model.Length == 0) throw new InvalidOperationException("请先选择或填写要测试的模型，再测试。");
-        var (token, accountUuid) = await LoginToken(candidate, cancellation);
-        var secret = await BeginTest(id);
+        var (token, accountUuid) = await LoginTokenAsync(candidate, cancellation);
+        var secret = await BeginTestAsync(id);
         try
         {
             // 网络等待不占用写事务，也不接触当前服务的暂停和冷却状态。
-            var result = await probe.Run(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation);
+            var result = await probe.RunAsync(new(candidate.ExpectedVersion, candidate.Options, token ?? Decrypt(secret), accountUuid: accountUuid), cancellation);
             // 探测自己把取消读成一份「已取消」报告照旧返回给调用方；但管理员取消的不算结论，这一家写成「检测未完成」，不记成未通过。超时仍按未通过记。
-            if (cancellation.IsCancellationRequested) { await Interrupt(id, UpstreamReport.CancelledReason); return result.Report; }
-            await FinishTest(id, result.Report.CanActivate ? CandidateState.Passed : CandidateState.Failed, Serialize(result.Report), Serialize(result.Used));
+            if (cancellation.IsCancellationRequested) { await InterruptAsync(id, UpstreamReport.CancelledReason); return result.Report; }
+            await FinishTestAsync(id, result.Report.CanActivate ? CandidateState.Passed : CandidateState.Failed, Serialize(result.Report), Serialize(result.Used));
             return result.Report;
         }
         catch (Exception error)
         {
             // 标记检测中之后出错或被取消：写成「检测未完成」再原样抛出，不停在检测中；已经写回结论的不覆盖。
-            await Interrupt(id, UnfinishedReason(error, cancellation)); throw;
+            await InterruptAsync(id, UnfinishedReason(error, cancellation)); throw;
         }
     }
 
@@ -324,29 +324,29 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 服务启动时把库里残留的「检测中」一律写成「检测未完成」：检测任务只在内存里，进程重启后不会有谁再把它们写完。
     /// 返回改了几家。只由正式服务的后台检测在启动时调用一次。
     /// </summary>
-    public async Task<int> RecoverInterruptedChecks()
+    public async Task<int> RecoverInterruptedChecksAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();
         var rows = await candidates.FindAsync(item => item.State == CandidateState.Testing);
         var now = DateTimeOffset.UtcNow; var changed = 0;
         foreach (var row in rows) if (row.Interrupt(now, UpstreamReport.RestartReason)) changed++;
-        if (changed > 0) await Commit(candidates, Changed);
+        if (changed > 0) await CommitAsync(candidates, Changed);
         return changed;
     }
 
     /// <summary>
     /// 把检测通过的上游原子地切换为新的活动版本：在一个事务里读出它与活动上游，由 <see cref="ActiveUpstream.Activate"/> 核对检测结果、没有导出搬走与活动版本后改写。
     /// </summary>
-    public Task Activate(long id, long expectedVersion) => Activate(id, (long?)expectedVersion);
+    public Task ActivateAsync(long id, long expectedVersion) => ActivateAsync(id, (long?)expectedVersion);
 
     /// <summary>切换过去，活动版本按这家保存时基于的那个版本核对。</summary>
-    public Task Activate(long id) => Activate(id, (long?)null);
+    public Task ActivateAsync(long id) => ActivateAsync(id, (long?)null);
 
     /// <summary>两个切换入口的汇合处：<paramref name="expectedVersion"/> 为空时由 <see cref="ActiveUpstream.Activate"/> 按候选保存时的版本核对。</summary>
-    private async Task Activate(long id, long? expectedVersion)
+    private async Task ActivateAsync(long id, long? expectedVersion)
     {
-        using var operation = (await ReadUsable(id)).Options.OfficialAccount ? siteIdentity.Enter() : null;
+        using var operation = (await ReadUsableAsync(id)).Options.OfficialAccount ? siteIdentity.Enter() : null;
         await using var scope = scopes.CreateAsyncScope();
         var active = scope.Repository<ActiveUpstream>();
         await active.ExecuteInTransactionAsync(async () =>
@@ -360,31 +360,31 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
 
     /// <summary>
     /// 把勾选的上游（按上游页顺序）加密导出：API 密钥与贴进来的账户令牌解密后放进文件，登录得到的官方账户放它账户目录里的登录文件原文；
-    /// 整个文件用 <paramref name="password"/> 加密，密码不保存。官方账户经 <see cref="IOfficialAccountLogin.Export"/> 停掉续期、读出登录文件，
+    /// 整个文件用 <paramref name="password"/> 加密，密码不保存。官方账户经 <see cref="IOfficialAccountLogin.ExportAsync"/> 停掉续期、读出登录文件，
     /// 加密成功后在库里记为已导出，此后本实例不再用它转发、不再续期；任一步失败都不记、照常续期。明文正文用完清零。
     /// 密码不在 12–128 个字符、一家都没勾、勾的上游已不在时抛出 <see cref="InvalidOperationException"/> 读出原因。
     /// </summary>
-    public async Task<UpstreamExport> Export(IReadOnlyCollection<long> ids, string password)
+    public async Task<UpstreamExport> ExportAsync(IReadOnlyCollection<long> ids, string password)
     {
         if (password.Length is < 12 or > 128) throw new InvalidOperationException("导出密码需要 12 至 128 个字符。导入时要输入同一个密码，请记牢。");
         var wanted = ids.ToHashSet();
         if (wanted.Count == 0) throw new InvalidOperationException("请至少勾选一家要导出的上游，再按「导出加密文件」。");
-        var chosen = (await ListCandidates()).Where(item => wanted.Contains(item.Id)).ToArray();
+        var chosen = (await ListCandidatesAsync()).Where(item => wanted.Contains(item.Id)).ToArray();
         if (chosen.Length != wanted.Count) throw new InvalidOperationException("要导出的上游有一家已经不在了，请重新加载页面后再导出。");
         using var operation = chosen.Any(item => item.Options.OfficialAccount) ? siteIdentity.Enter() : null;
         var officials = chosen.Where(item => item.Options.OfficialLogin).ToArray();
-        return await officialAccounts.Export(officials.Select(item => item.Uid).ToArray(), async files =>
+        return await officialAccounts.ExportAsync(officials.Select(item => item.Uid).ToArray(), async files =>
         {
             var logins = officials.Select((item, index) => (item.Id, File: files[index])).ToDictionary(pair => pair.Id, pair => pair.File);
             var upstreams = new List<ExportedUpstream>();
             foreach (var item in chosen)
                 upstreams.Add(item.Options.OfficialLogin ? new ExportedUpstream(item.Name, item.Options, null, logins[item.Id])
-                    : new ExportedUpstream(item.Name, item.Options, Decrypt(await ReadCredential(item.Id)), null));
+                    : new ExportedUpstream(item.Name, item.Options, Decrypt(await ReadCredentialAsync(item.Id)), null));
             var plain = JsonSerializer.SerializeToUtf8Bytes(new UpstreamArchive(upstreams.ToArray()), ConfigurationFiles.Json);
             try
             {
                 var file = cipher.Seal(plain, password);
-                await MarkExported(officials.Select(item => item.Id).ToArray());
+                await MarkExportedAsync(officials.Select(item => item.Id).ToArray());
                 // 已记为导出（搬走）并提交：本机不再用它们，思域结束这些账户上的会话。
                 foreach (var item in officials) retirements.Retire(item.Id);
                 return new UpstreamExport(file, chosen.Select(item => item.Name).ToArray(), officials.Select(item => item.Name).ToArray());
@@ -395,12 +395,12 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     }
 
     /// <summary>
-    /// 用 <paramref name="password"/> 解开导出文件，按文件里的顺序逐家加成未测试上游，排在已有上游后面：API 密钥与账户令牌走 <see cref="SaveCandidate"/>，
-    /// 官方账户的登录文件走 <see cref="ImportOfficial"/>（同一套校验、各自的账户目录），名称照文件。
+    /// 用 <paramref name="password"/> 解开导出文件，按文件里的顺序逐家加成未测试上游，排在已有上游后面：API 密钥与账户令牌走 <see cref="SaveCandidateAsync"/>，
+    /// 官方账户的登录文件走 <see cref="ImportOfficialAsync"/>（同一套校验、各自的账户目录），名称照文件。
     /// 文件超过 <see cref="UploadLimits.UpstreamExportBytes"/>、不是导出文件、格式版本不认识、密码不对、文件被改过、读不懂或活动版本已变化时抛出 <see cref="InvalidOperationException"/>，一家都不写；
     /// 解开以后某一家被拒（例如本机没装 Claude Code）只记在它自己的结果里，其余照导。解开的正文和登录文件用完清零。
     /// </summary>
-    public async Task<IReadOnlyList<UpstreamImportOutcome>> Import(long expectedVersion, byte[] file, string password, CancellationToken cancellation)
+    public async Task<IReadOnlyList<UpstreamImportOutcome>> ImportAsync(long expectedVersion, byte[] file, string password, CancellationToken cancellation)
     {
         if (file.Length > UploadLimits.UpstreamExportBytes) throw new InvalidOperationException("选的文件超过 1 MB，不是上游导出文件。请选旧电脑上按「导出加密文件」下载的那个文件。");
         if (password.Length is 0 or > 128) throw new InvalidOperationException("请输入导出时设的那个密码（12 至 128 个字符），再按「导入上游」。");
@@ -415,7 +415,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         {
             if (archive?.Upstreams is not { Count: > 0 } upstreams || upstreams.Any(item => item?.Options is null))
                 throw new InvalidOperationException("导出文件解开了，但里面的上游读不懂或是空的。请把两边的中转升级到同一版本，再导出、导入一次。");
-            if ((await ActiveVersion()) != expectedVersion) throw new InvalidOperationException("活动配置已改变，请重新加载后再导入。");
+            if ((await ActiveVersionAsync()) != expectedVersion) throw new InvalidOperationException("活动配置已改变，请重新加载后再导入。");
             var outcomes = new List<UpstreamImportOutcome>();
             foreach (var item in upstreams)
             {
@@ -423,8 +423,8 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
                 try
                 {
                     var id = item.Options.OfficialLogin
-                        ? await ImportOfficial(expectedVersion, item.Options, item.LoginFile ?? throw new InvalidOperationException("文件里缺少这个官方账户的登录文件。"), item.Name, cancellation)
-                        : await SaveCandidate(expectedVersion, item.Options, item.Credential ?? throw new InvalidOperationException("文件里缺少这家上游的密钥。"), item.Name);
+                        ? await ImportOfficialAsync(expectedVersion, item.Options, item.LoginFile ?? throw new InvalidOperationException("文件里缺少这个官方账户的登录文件。"), item.Name, cancellation)
+                        : await SaveCandidateAsync(expectedVersion, item.Options, item.Credential ?? throw new InvalidOperationException("文件里缺少这家上游的密钥。"), item.Name);
                     outcomes.Add(new(name, id, null));
                 }
                 // 这一家被拒（名称、地址不合规则，没装 Claude Code，代理取不到等）：记下原因，其余照导。
@@ -456,7 +456,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 再保存为账户模式（Bearer、官方登录）的未测试上游，返回库生成的主键。名称为空时用登录邮箱（超过 40 字截断），邮箱也取不到时叫「官方账户」；
     /// 库里只存加密的空凭据占位，令牌留在账户目录里由 CLI 维护。写库被拒（活动版本已变化）时删掉刚放好的账户目录。
     /// </summary>
-    private async Task<long> AddOfficial(long expectedVersion, UpstreamOptions options, string? name, Func<string, Task<string?>> acquire)
+    private async Task<long> AddOfficialAsync(long expectedVersion, UpstreamOptions options, string? name, Func<string, Task<string?>> acquire)
     {
         options = (options with { Mode = UpstreamMode.OAuth, Authentication = AuthenticationScheme.Bearer, AuthenticationManual = false, OfficialLogin = true }).Validated();
         using var operation = siteIdentity.Enter();
@@ -466,14 +466,14 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
         try
         {
             chosen ??= ValidName(email is { Length: > 0 } ? email.Length > 40 ? email[..40] : email : "官方账户");
-            return await Insert(uid, expectedVersion, chosen, Serialize(options), protector.Protect([]));
+            return await InsertAsync(uid, expectedVersion, chosen, Serialize(options), protector.Protect([]));
         }
         // 凭据已在账户目录里、上游却没建成：删掉目录，不留没有上游引用的账户；异常原样读出。
         catch { officialAccounts.Remove(uid); throw; }
     }
 
     /// <summary>在一个事务里核对活动版本仍是 <paramref name="expectedVersion"/>，写入带名称与对外编号的未测试上游，返回库生成的主键。</summary>
-    private async Task<long> Insert(string uid, long expectedVersion, string name, string optionsJson, byte[] protectedCredential)
+    private async Task<long> InsertAsync(string uid, long expectedVersion, string name, string optionsJson, byte[] protectedCredential)
     {
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();
@@ -490,7 +490,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     }
 
     /// <summary>标记候选检测中并取出加密凭据；两分钟内的并发检测、不存在或已停用都拒绝（读「正在检测」）。</summary>
-    private async Task<byte[]> BeginTest(long id)
+    private async Task<byte[]> BeginTestAsync(long id)
     {
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();
@@ -504,20 +504,20 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     }
 
     /// <summary>保存检测结果状态、报告与实际采用的配置；那一家这期间被停用了就什么都不写。</summary>
-    private async Task FinishTest(long id, CandidateState state, string reportJson, string optionsJson)
+    private async Task FinishTestAsync(long id, CandidateState state, string reportJson, string optionsJson)
     {
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();
         if (await candidates.GetByIdAsync(id) is not { } candidate) return;
         candidate.FinishTest(state, reportJson, optionsJson);
-        await Commit(candidates, Changed);
+        await CommitAsync(candidates, Changed);
     }
 
     /// <summary>
     /// 检测没有走到结论时写成「检测未完成」：那一家这期间被停用了，或已经写回结论，就什么都不改。收尾块里调用，自己不再抛出：
     /// 库这时也写不进去的话，这一家停在检测中，过了检测窗口读作「检测未完成」，服务下次启动时再写成终态。
     /// </summary>
-    private async Task Interrupt(long id, string reason)
+    private async Task InterruptAsync(long id, string reason)
     {
         try
         {
@@ -538,23 +538,23 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     };
 
     /// <summary>写回获取模型或改选模型后的配置与报告（报告可为空），并把状态置为未测试；不存在时提示重新加载。</summary>
-    private async Task ResetToUntested(long id, string optionsJson, string? reportJson)
+    private async Task ResetToUntestedAsync(long id, string optionsJson, string? reportJson)
     {
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();
         (await candidates.GetByIdAsync(id) ?? throw Missing()).ResetToUntested(optionsJson, reportJson);
-        await Commit(candidates, Changed);
+        await CommitAsync(candidates, Changed);
     }
 
     /// <summary>按主键读取已保存上游的加密凭据（导出用）；不存在时提示重新加载。</summary>
-    private async Task<byte[]> ReadCredential(long id)
+    private async Task<byte[]> ReadCredentialAsync(long id)
     {
         await using var scope = scopes.CreateAsyncScope();
         return (await scope.Repository<UpstreamCandidate>().GetByIdAsync(id) ?? throw Missing()).Credential;
     }
 
     /// <summary>在一个写事务里给这些已保存上游记下导出搬走的时刻；已记过的保留最早那次，有一个不存在就整批不记。</summary>
-    private async Task MarkExported(IReadOnlyCollection<long> ids)
+    private async Task MarkExportedAsync(IReadOnlyCollection<long> ids)
     {
         await using var scope = scopes.CreateAsyncScope();
         var candidates = scope.Repository<UpstreamCandidate>();
@@ -569,7 +569,7 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     }
 
     /// <summary>读活动上游行、它来自的那一家（停用的也读得到，只为取名称、对外编号与是否已导出）并解析配置；行缺失时抛出 <see cref="InvalidOperationException"/>。</summary>
-    private async Task<(ActiveUpstream Row, UpstreamCandidate? Source, UpstreamOptions Options)> Active()
+    private async Task<(ActiveUpstream Row, UpstreamCandidate? Source, UpstreamOptions Options)> ActiveAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
         var row = await scope.Repository<ActiveUpstream>().GetByIdAsync(ActiveUpstream.SingletonId) ?? throw new InvalidOperationException("上游配置缺失。");
@@ -578,25 +578,25 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     }
 
     /// <summary>此刻活动上游来自的已保存上游主键；没有时为空。</summary>
-    private async Task<long?> ActiveCandidateId()
+    private async Task<long?> ActiveCandidateIdAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
-        return await ActiveCandidateId(scope);
+        return await ActiveCandidateIdAsync(scope);
     }
 
     /// <summary>在给定作用域里读活动上游来自的已保存上游主键。</summary>
-    private static async Task<long?> ActiveCandidateId(AsyncServiceScope scope) =>
+    private static async Task<long?> ActiveCandidateIdAsync(AsyncServiceScope scope) =>
         (await scope.Repository<ActiveUpstream>().GetByIdAsync(ActiveUpstream.SingletonId))?.UpstreamCandidateId;
 
     /// <summary>此刻的活动版本；活动行缺失时为空。</summary>
-    private async Task<long?> ActiveVersion()
+    private async Task<long?> ActiveVersionAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
         return (await scope.Repository<ActiveUpstream>().GetByIdAsync(ActiveUpstream.SingletonId))?.Version;
     }
 
     /// <summary>提交一次不带条件的改写；同一行在读出与提交之间被另一页面或命令改过（行版本对不上）时读出 <paramref name="message"/>。</summary>
-    private static async Task Commit<TEntity>(IRepository<TEntity> repository, string message) where TEntity : BaseEntity
+    private static async Task CommitAsync<TEntity>(IRepository<TEntity> repository, string message) where TEntity : BaseEntity
     {
         try { await repository.SaveChangesAsync(); }
         // 并发令牌对不上说明有人刚改过这一行：不覆盖别人的改动，读出原因让管理员重新加载。
@@ -636,9 +636,9 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     }
 
     /// <summary>按主键读出要拿来获取模型、测试、切换或导出的那一家；配置已损坏时抛出 <see cref="InvalidOperationException"/> 读出下一步，不拿占位配置去做事。</summary>
-    private async Task<UpstreamCandidateView> ReadUsable(long id)
+    private async Task<UpstreamCandidateView> ReadUsableAsync(long id)
     {
-        var candidate = await ReadCandidate(id);
+        var candidate = await ReadCandidateAsync(id);
         return candidate.Damaged ? throw DamagedRefusal(candidate.Name) : candidate;
     }
 
@@ -659,14 +659,14 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     /// 官方登录上游在标记检测开始之前先读它配置目录里的最新令牌，取不到时抛出 <see cref="InvalidOperationException"/> 提示重新登录，上游状态不变；
     /// 已导出搬走的不读令牌（读令牌可能触发续期，把新电脑上那份挤掉），直接拒绝。其余上游返回 null，由调用方解密库中凭据。
     /// </summary>
-    private async Task<(string? Token, string? AccountUuid)> LoginToken(UpstreamCandidateView candidate, CancellationToken cancellation)
+    private async Task<(string? Token, string? AccountUuid)> LoginTokenAsync(UpstreamCandidateView candidate, CancellationToken cancellation)
     {
         if (!candidate.Options.OfficialLogin) return (null, null);
         if (candidate.ExportedAt is not null) throw new InvalidOperationException($"「{candidate.Name}」已经导出搬走，本机不再用它，也不再获取模型或测试。不再需要它时可以删除。");
         var token = officialAccounts.ReadAccessToken(candidate.Uid) ?? throw new InvalidOperationException("这个官方账户的登录凭据已经不在了，请重新按「登录官方账户」。");
         // 每次获取模型和测试都照原生登录向官方取一次账户资料并存进账户目录：导入的账户（只有凭据、没有 oauthAccount）由此补上编号，换了账户由此同步；
         // 取不到就抛出，这次不获取、不测试，转发也因没有编号继续本地阻断。导入后必须测试通过才能切换，所以每个在用的官方账户都经过这一步。
-        var profile = await probe.Profile(new(candidate.ExpectedVersion, candidate.Options, token), cancellation);
+        var profile = await probe.ProfileAsync(new(candidate.ExpectedVersion, candidate.Options, token), cancellation);
         officialAccounts.RecordAccount(candidate.Uid, profile);
         return (token, profile.AccountUuid);
     }

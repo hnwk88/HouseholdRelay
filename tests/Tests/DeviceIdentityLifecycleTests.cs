@@ -21,21 +21,21 @@ static class DeviceIdentityLifecycleTests
         var opened = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
         {
             using var services = Services(home.Path, generator);
-            return await services.SiteIdentityStore().Read();
+            return await services.SiteIdentityStore().ReadAsync();
         })));
         Check(generator.Count == 1 && opened.Select(item => item.DeviceId).Distinct().Count() == 1, "Concurrent creation generates exactly once");
         Check(opened.All(item => item.Version == 1 && !item.Pending && item.OperationId is null));
         using var process = Services(home.Path, generator);
         var settings = process.GetRequiredService<IConfigurationService>();
-        for (var index = 0; index < 8; index++) Check((await settings.Read()).Value.DeviceId == opened[0].DeviceId);
-        var saved = await settings.Read(); saved.Value.MaxConcurrent = 3; await settings.Save(saved.Version, saved.Value);
+        for (var index = 0; index < 8; index++) Check((await settings.ReadAsync()).Value.DeviceId == opened[0].DeviceId);
+        var saved = await settings.ReadAsync(); saved.Value.MaxConcurrent = 3; await settings.SaveAsync(saved.Version, saved.Value);
         using var restarted = Services(home.Path, generator);
-        Check(await restarted.SiteIdentityStore().Read() == opened[0] && generator.Count == 1);
+        Check(await restarted.SiteIdentityStore().ReadAsync() == opened[0] && generator.Count == 1);
         using var restored = new TestHome(); Directory.CreateDirectory(Path.Combine(restored.Path, ".state"));
         File.Copy(Path.Combine(home.Path, ".relay-instance"), Path.Combine(restored.Path, ".relay-instance"));
         File.Copy(process.GetRequiredService<RelayDatabase>().Path, Path.Combine(restored.Path, ".state", "relay.db"));
         using var recovered = Services(restored.Path, generator);
-        Check(await recovered.SiteIdentityStore().Read() == opened[0] && generator.Count == 1, "Paired backup preserves canonical identity");
+        Check(await recovered.SiteIdentityStore().ReadAsync() == opened[0] && generator.Count == 1, "Paired backup preserves canonical identity");
     }
 
     /// <summary>缺失、null、空、空白、短值、非法字符和坏 JSON 均不能补号或重开初始化。</summary>
@@ -51,16 +51,16 @@ static class DeviceIdentityLifecycleTests
                 "Damaged legacy identity must not create a new station");
             using var home = new TestHome(); using var services = Services(home.Path, generator);
             var database = services.GetRequiredService<RelayDatabase>();
-            var old = await services.GetRequiredService<IConfigurationService>().Read();
+            var old = await services.GetRequiredService<IConfigurationService>().ReadAsync();
             broken = Corrupt(JsonSerializer.Serialize(old.Value, ConfigurationFiles.Json), replacement);
             database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "UPDATE settings SET json=$json WHERE id=1", ("$json", broken)));
-            await Refused(() => services.GetRequiredService<IConfigurationService>().Read());
+            await Refused(() => services.GetRequiredService<IConfigurationService>().ReadAsync());
             using var reopened = Services(home.Path, generator); Refused(() => reopened.GetRequiredService<RelayDatabase>());
             Check(generator.Count == 1 && File.Exists(Path.Combine(home.Path, ".relay-instance")), "Corrupt existing station never regenerates");
         }
         using var valid = new TestHome(); var initial = valid.WriteLegacy(); var kept = new CountingGenerator();
         using var imported = Services(valid.Path, kept);
-        Check((await imported.SiteIdentityStore().Read()).DeviceId == initial.DeviceId && kept.Count == 0, "Legacy import generates no replacement");
+        Check((await imported.SiteIdentityStore().ReadAsync()).DeviceId == initial.DeviceId && kept.Count == 0, "Legacy import generates no replacement");
         foreach (var asset in new[] { "official-accounts", "owned-claude-processes", "keys", "legacy-backups", "relay.db-wal", "relay.db-shm", "serving.lock" })
         {
             using var orphan = new TestHome(); var generator = new CountingGenerator();
@@ -76,9 +76,9 @@ static class DeviceIdentityLifecycleTests
     public static async Task SaveProtection()
     {
         using var home = new TestHome(); using var services = Services(home.Path, new CountingGenerator());
-        var settings = services.GetRequiredService<IConfigurationService>(); var before = await settings.Read();
-        var edited = await settings.Read(); edited.Value.DeviceId = new string('e', 64);
-        await Refused(() => settings.Save(edited.Version, edited.Value));
+        var settings = services.GetRequiredService<IConfigurationService>(); var before = await settings.ReadAsync();
+        var edited = await settings.ReadAsync(); edited.Value.DeviceId = new string('e', 64);
+        await Refused(() => settings.SaveAsync(edited.Version, edited.Value));
         var certificates = (CertificateService)services.GetRequiredService<ICertificateService>();
         // 证书仓储已删除：导入与私有两条证书保存现在都从库里读设置、经 RelaySettings.Replace 在同一事务写回，调用方再也传不进改过设备编号的设置。
         // 所以先直接核对两条路径共用的这道写入边界拒绝改号，再从两条真实入口各提交一次失败的保存，核对失败事务不写证书、不递增设置版本。
@@ -86,50 +86,50 @@ static class DeviceIdentityLifecycleTests
         using var generated = TestProcess.CertificateFactory.CreateCertificate("localhost", out var pem); using var authority = X509Certificate2.CreateFromPem(pem);
         var bundle = new X509Certificate2Collection(generated); bundle.Add(authority);
         var pfx = bundle.Export(X509ContentType.Pkcs12, "fixture-pfx-password")!;
-        await Refused(() => certificates.Import(edited.Version + 1, "https://localhost", 8787, pfx, "fixture-pfx-password", new X509Certificate2Collection(authority)));
-        await Refused(() => certificates.CreatePrivate(edited.Version + 1, "https://localhost:8787", 8787));
-        Check((await settings.Read()).Version == before.Version && (await settings.Read()).Value.DeviceId == before.Value.DeviceId && !await settings.HasCertificate());
+        await Refused(() => certificates.ImportAsync(edited.Version + 1, "https://localhost", 8787, pfx, "fixture-pfx-password", new X509Certificate2Collection(authority)));
+        await Refused(() => certificates.CreatePrivateAsync(edited.Version + 1, "https://localhost:8787", 8787));
+        Check((await settings.ReadAsync()).Version == before.Version && (await settings.ReadAsync()).Value.DeviceId == before.Value.DeviceId && !await settings.HasCertificateAsync());
     }
 
     /// <summary>同操作八次并发只生成一次，pending 重启保留，历史完成重试不改变后续编号或个人令牌。</summary>
     public static async Task Maintenance()
     {
         using var home = new TestHome(); var generator = new CountingGenerator(); using var services = Services(home.Path, generator);
-        var repository = services.SiteIdentityStore(); var first = await repository.Read();
+        var repository = services.SiteIdentityStore(); var first = await repository.ReadAsync();
         var identities = services.GetRequiredService<IIdentityService>();
         // 签发改成异步后逐个等完，保持原来按顺序签发四个令牌的做法。
         var issued = new IssuedToken[4];
-        for (var index = 0; index < issued.Length; index++) issued[index] = await identities.Create("独立电脑" + index);
+        for (var index = 0; index < issued.Length; index++) issued[index] = await identities.CreateAsync("独立电脑" + index);
         var beforeTokens = TokenRows(services.GetRequiredService<RelayDatabase>());
         var operation = Guid.NewGuid().ToString("N");
         // 仓储事务内的版本检查必须使同一操作的所有竞争者观察到同一持久结果。
-        var attempts = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => repository.Begin(operation, first.Version))));
+        var attempts = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => repository.BeginAsync(operation, first.Version))));
         Check(generator.Count == 2 && attempts.All(item => item.Pending && item.Version == 2 && item.Current == attempts[0].Current));
         Check(attempts[0].Current.DeviceId != first.DeviceId);
         using var reopened = Services(home.Path, generator); var restart = reopened.SiteIdentityStore();
-        Check(await restart.Read() == attempts[0].Current && (await restart.Begin(operation, 1)).Current == attempts[0].Current && generator.Count == 2);
-        await Refused(() => repository.Begin(Guid.NewGuid().ToString("N"), 1));
-        var completed = await restart.Complete(operation); Check(!completed.Pending && !(await repository.Read()).Pending);
-        Check((await repository.Begin(operation, 1)).Version == 2 && generator.Count == 2);
-        var nextOperation = Guid.NewGuid().ToString("N"); var second = await repository.Begin(nextOperation, 2);
-        var historical = await repository.Begin(operation, 1);
+        Check(await restart.ReadAsync() == attempts[0].Current && (await restart.BeginAsync(operation, 1)).Current == attempts[0].Current && generator.Count == 2);
+        await Refused(() => repository.BeginAsync(Guid.NewGuid().ToString("N"), 1));
+        var completed = await restart.CompleteAsync(operation); Check(!completed.Pending && !(await repository.ReadAsync()).Pending);
+        Check((await repository.BeginAsync(operation, 1)).Version == 2 && generator.Count == 2);
+        var nextOperation = Guid.NewGuid().ToString("N"); var second = await repository.BeginAsync(nextOperation, 2);
+        var historical = await repository.BeginAsync(operation, 1);
         Check(historical.Version == 2 && !historical.Pending && historical.Current == second.Current && generator.Count == 3);
-        await repository.Complete(operation); Check(await repository.Read() == second.Current, "An old completion cannot clear newer pending state");
-        await repository.Complete(nextOperation);
-        await Refused(() => repository.Begin(Guid.NewGuid().ToString("N"), 2));
-        Check(generator.Count == 3 && (await repository.Read()).Version == 3, "An old page cannot start another replacement after a newer operation is ready");
+        await repository.CompleteAsync(operation); Check(await repository.ReadAsync() == second.Current, "An old completion cannot clear newer pending state");
+        await repository.CompleteAsync(nextOperation);
+        await Refused(() => repository.BeginAsync(Guid.NewGuid().ToString("N"), 2));
+        Check(generator.Count == 3 && (await repository.ReadAsync()).Version == 3, "An old page cannot start another replacement after a newer operation is ready");
         // 两个不同操作争用同一旧代次，写锁必须只让其中一个提交，另一个不能生成。
         var beforeRace = generator.Count;
         var competition = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => Task.Run(async () =>
         {
-            try { return await repository.Begin(Guid.NewGuid().ToString("N"), 3); }
+            try { return await repository.BeginAsync(Guid.NewGuid().ToString("N"), 3); }
             // 另一操作已提交 pending，败方的明确拒绝是预期竞争结果。
             catch (InvalidOperationException) { return (SiteIdentityOperationResult?)null; }
         })));
         Check(competition.Count(item => item is not null) == 1 && generator.Count == beforeRace + 1);
-        await repository.Complete(competition.Single(item => item is not null)!.OperationId);
+        await repository.CompleteAsync(competition.Single(item => item is not null)!.OperationId);
         var stillValid = true;
-        foreach (var item in issued) stillValid &= (await identities.Clients.Authenticate(item.Token))?.UserId == item.UserId;
+        foreach (var item in issued) stillValid &= (await identities.Clients.AuthenticateAsync(item.Token))?.UserId == item.UserId;
         Check(TokenRows(services.GetRequiredService<RelayDatabase>()) == beforeTokens && stillValid);
     }
 
@@ -138,20 +138,20 @@ static class DeviceIdentityLifecycleTests
     {
         using var home = new TestHome(); var generator = new CountingGenerator(); using var services = Services(home.Path, generator);
         var database = services.GetRequiredService<RelayDatabase>(); var repository = services.SiteIdentityStore();
-        var before = await repository.Read(); var operation = Guid.NewGuid().ToString("N");
+        var before = await repository.ReadAsync(); var operation = Guid.NewGuid().ToString("N");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction,
             "CREATE TRIGGER reject_identity_commit BEFORE INSERT ON site_identity_operations BEGIN SELECT RAISE(ABORT,'fixture interrupted commit'); END"));
         var failed = false;
-        try { await repository.Begin(operation, 1); }
+        try { await repository.BeginAsync(operation, 1); }
         // 模拟 SQLite 写事务提交之前失败（经 EF 写库时 SQLite 错误包在 DbUpdateException 里），随后检查 canonical 和 pending 都没有部分提交。
         catch (Exception error) when ((error as Microsoft.Data.Sqlite.SqliteException ?? error.InnerException as Microsoft.Data.Sqlite.SqliteException) is { SqliteErrorCode: 19 }) { failed = true; }
-        Check(failed && await repository.Read() == before);
+        Check(failed && await repository.ReadAsync() == before);
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TRIGGER reject_identity_commit"));
-        var pending = await repository.Begin(operation, 1); var generated = generator.Count;
+        var pending = await repository.BeginAsync(operation, 1); var generated = generator.Count;
         using var reopened = Services(home.Path, generator); var resumed = reopened.SiteIdentityStore();
-        Check(await resumed.Read() == pending.Current && (await resumed.Begin(operation, 1)).Current == pending.Current && generator.Count == generated);
-        await resumed.Complete(operation); using var ready = Services(home.Path, generator);
-        Check(await ready.SiteIdentityStore().Read() == pending.Current with { Pending = false } && generator.Count == generated);
+        Check(await resumed.ReadAsync() == pending.Current && (await resumed.BeginAsync(operation, 1)).Current == pending.Current && generator.Count == generated);
+        await resumed.CompleteAsync(operation); using var ready = Services(home.Path, generator);
+        Check(await ready.SiteIdentityStore().ReadAsync() == pending.Current with { Pending = false } && generator.Count == generated);
         // 站点身份升级（v7 → v8）中断：起点是程序从真实 v3 旧库自己升到的版本 7，还没有站点身份表；不再把新库删表改版本号。
         using (var legacy = DatabaseUpgradeTests.LegacyAt("v3", 7))
         {
@@ -168,29 +168,29 @@ static class DeviceIdentityLifecycleTests
             using (var connection = DatabaseUpgradeTests.Connect(DatabaseUpgradeTests.Database(legacy.Path)))
                 Check(failed && Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == 7);
             using var legacyRetry = Services(legacy.Path, generator);
-            Check((await legacyRetry.SiteIdentityStore().Read()).DeviceId == legacyDevice && generator.Count == generated, "The retried migration keeps the settings device id");
+            Check((await legacyRetry.SiteIdentityStore().ReadAsync()).DeviceId == legacyDevice && generator.Count == generated, "The retried migration keeps the settings device id");
         }
         using var migrationRetry = Services(home.Path, generator);
-        Check((await migrationRetry.SiteIdentityStore().Read()).DeviceId == pending.Current.DeviceId && generator.Count == generated);
+        Check((await migrationRetry.SiteIdentityStore().ReadAsync()).DeviceId == pending.Current.DeviceId && generator.Count == generated);
         var recoveredRepository = migrationRetry.SiteIdentityStore();
-        var recoveredIdentity = await recoveredRepository.Read();
+        var recoveredIdentity = await recoveredRepository.ReadAsync();
         using (var blockingConnection = database.Open())
         using (var blockingTransaction = blockingConnection.BeginTransaction())
         {
             var elapsed = System.Diagnostics.Stopwatch.StartNew(); var refused = false;
-            try { await recoveredRepository.Begin(Guid.NewGuid().ToString("N"), recoveredIdentity.Version); }
+            try { await recoveredRepository.BeginAsync(Guid.NewGuid().ToString("N"), recoveredIdentity.Version); }
             // 真实写锁仍被另一连接持有时必须立即固定拒绝，不能等provider隐式重试后才继续。
             catch (InvalidOperationException error) { refused = error.Message == "站点配置正由另一项操作保存，设备编号未更换。请稍后继续原操作。"; }
             elapsed.Stop();
-            Check(refused && elapsed.Elapsed < TimeSpan.FromSeconds(3) && await recoveredRepository.Read() == recoveredIdentity && generator.Count == generated,
+            Check(refused && elapsed.Elapsed < TimeSpan.FromSeconds(3) && await recoveredRepository.ReadAsync() == recoveredIdentity && generator.Count == generated,
                 "Busy SQLite must refuse within three seconds without generating or committing");
             blockingTransaction.Rollback();
         }
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel(); var cancellationObserved = false;
-        try { await Task.Run(() => recoveredRepository.Begin(Guid.NewGuid().ToString("N"), recoveredIdentity.Version, cancelled.Token)); }
+        try { await Task.Run(() => recoveredRepository.BeginAsync(Guid.NewGuid().ToString("N"), recoveredIdentity.Version, cancelled.Token)); }
         // 取消独立于数据库忙处理，仓储排队前就停止，不能借已释放的写锁再生成。
         catch (OperationCanceledException) { cancellationObserved = true; }
-        Check(cancellationObserved && await recoveredRepository.Read() == recoveredIdentity && generator.Count == generated, "A cancelled maintenance cannot generate or commit after the writer is free");
+        Check(cancellationObserved && await recoveredRepository.ReadAsync() == recoveredIdentity && generator.Count == generated, "A cancelled maintenance cannot generate or commit after the writer is free");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DELETE FROM site_identity"));
         using var missingState = Services(home.Path, generator); Refused(() => missingState.GetRequiredService<RelayDatabase>());
         Check(generator.Count == generated, "An upgraded database with missing identity state must not repair itself to ready");
@@ -247,10 +247,10 @@ static class DeviceIdentityLifecycleTests
     /// <summary>只用于测试的唯一生成器，计数可证明竞争和重启没有额外生成。</summary>
     private sealed class CountingGenerator : IDeviceIdGenerator
     {
-        private int count;
+        private int _count;
         /// <summary>已执行的生成次数。</summary>
-        public int Count => Volatile.Read(ref count);
+        public int Count => Volatile.Read(ref _count);
         /// <summary>线程安全地产生格式合法且逐次不同的假编号。</summary>
-        public string Generate() => Interlocked.Increment(ref count).ToString("x64");
+        public string Generate() => Interlocked.Increment(ref _count).ToString("x64");
     }
 }

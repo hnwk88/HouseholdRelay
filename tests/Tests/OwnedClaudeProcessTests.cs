@@ -51,18 +51,18 @@ static class OwnedClaudeProcessTests
             owner.Kill(entireProcessTree: false); await owner.WaitForExitAsync();
             Check(!child.HasExited, "The child must survive its owner crash");
             var restarted = new TestProcess(home.Path); Refused(() => restarted.Get<IOwnedClaudeProcesses>().EnsureExited());
-            await restarted.Get<ISiteIdentityService>().Prepare(default);
+            await restarted.Get<ISiteIdentityService>().PrepareAsync(default);
             Check(!restarted.Get<ISiteIdentityService>().Available, "A new service cannot prepare files while the old child remains alive");
             Check(restarted.Get<ISiteIdentityService>().Status.Contains("Claude", StringComparison.Ordinal), "Startup must preserve the safe reason that the previous CLI has not exited");
-            var identity = await restarted.SiteIdentityStore.Read(); var rejected = false;
-            try { await restarted.Get<ISiteIdentityService>().Refresh(Guid.NewGuid().ToString("N"), identity.Version, default); }
+            var identity = await restarted.SiteIdentityStore.ReadAsync(); var rejected = false;
+            try { await restarted.Get<ISiteIdentityService>().RefreshAsync(Guid.NewGuid().ToString("N"), identity.Version, default); }
             // 跨进程旧CLI也属于提交前排空，不能先换号再在文件准备阶段发现它。
             catch (ClaudeConfigurationUnavailableException) { rejected = true; }
-            Check(rejected && await restarted.SiteIdentityStore.Read() == identity, "A surviving old CLI must prevent the new identity transaction");
+            Check(rejected && await restarted.SiteIdentityStore.ReadAsync() == identity, "A surviving old CLI must prevent the new identity transaction");
             // PID与启动时刻已核对，清理的仅是本用例启动的那个无网络假进程。
             child.Kill(entireProcessTree: true); await child.WaitForExitAsync();
             restarted.Get<IOwnedClaudeProcesses>().EnsureExited();
-            await restarted.Get<ISiteIdentityService>().Prepare(default); Check(restarted.Get<ISiteIdentityService>().Available);
+            await restarted.Get<ISiteIdentityService>().PrepareAsync(default); Check(restarted.Get<ISiteIdentityService>().Available);
             registry.EnsureExited();
             Check(Directory.GetFiles(Path.Combine(home.Path, ".state", "owned-claude-processes")).Length == 0);
         }

@@ -18,8 +18,8 @@ static partial class FoundationTests
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database;
         var settings = process.Settings; var identities = process.Identities; var administrators = process.Administrators;
-        Check((await identities.List()).Count == 0 && !await settings.HasCredential() && !await settings.HasCertificate());
-        (await settings.Read()).Value.Validate();
+        Check((await identities.ListAsync()).Count == 0 && !await settings.HasCredentialAsync() && !await settings.HasCertificateAsync());
+        (await settings.ReadAsync()).Value.Validate();
         using (var connection = database.Open())
         {
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA user_version")) == RelayDatabase.CurrentVersion);
@@ -27,24 +27,24 @@ static partial class FoundationTests
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA synchronous")) == 2);
             Check(Convert.ToInt32(RelayDatabase.Scalar(connection, null, "PRAGMA foreign_keys")) == 1);
         }
-        await administrators.Initialize((await administrators.BootstrapCode())!, WebFixture.Password);
-        Check(await administrators.BootstrapCode() is null);
-        var session = (await administrators.Login(WebFixture.Password))!; Check(await administrators.IsSessionValid(session));
-        var a = await identities.Create("甲"); var b = await identities.Create("乙");
-        await identities.SetEnabled(b.UserId, false); var disabled = await identities.Rotate(b.UserId);
-        Check(await identities.Clients.Authenticate(disabled.Token) is null, "Rotation must preserve disabled state");
-        await identities.Rename(a.UserId, "甲的显示名"); var rotated = await identities.Rotate(a.UserId);
-        Check(await identities.Clients.Authenticate(a.Token) is null);
-        var snapshot = await settings.Read(); snapshot.Value.ListenPort = 9001; await settings.Save(snapshot.Version, snapshot.Value);
+        await administrators.InitializeAsync((await administrators.BootstrapCodeAsync())!, WebFixture.Password);
+        Check(await administrators.BootstrapCodeAsync() is null);
+        var session = (await administrators.LoginAsync(WebFixture.Password))!; Check(await administrators.IsSessionValidAsync(session));
+        var a = await identities.CreateAsync("甲"); var b = await identities.CreateAsync("乙");
+        await identities.SetEnabledAsync(b.UserId, false); var disabled = await identities.RotateAsync(b.UserId);
+        Check(await identities.Clients.AuthenticateAsync(disabled.Token) is null, "Rotation must preserve disabled state");
+        await identities.RenameAsync(a.UserId, "甲的显示名"); var rotated = await identities.RotateAsync(a.UserId);
+        Check(await identities.Clients.AuthenticateAsync(a.Token) is null);
+        var snapshot = await settings.ReadAsync(); snapshot.Value.ListenPort = 9001; await settings.SaveAsync(snapshot.Version, snapshot.Value);
         var staleRejected = false;
-        try { await settings.Save(snapshot.Version, snapshot.Value); } catch (InvalidOperationException) { /* 用已提交过的旧版本号保存必须被拒绝；捕获到即记为拒绝成功，未抛出则下一行断言判失败。 */ staleRejected = true; }
+        try { await settings.SaveAsync(snapshot.Version, snapshot.Value); } catch (InvalidOperationException) { /* 用已提交过的旧版本号保存必须被拒绝；捕获到即记为拒绝成功，未抛出则下一行断言判失败。 */ staleRejected = true; }
         Check(staleRejected, "A stale form must not overwrite a committed configuration");
         var restarted = new TestProcess(home.Path); var restored = restarted.Identities;
-        Check((await restored.Clients.Authenticate(rotated.Token))?.UserId == a.UserId);
-        Check((await restored.List()).Single(user => user.Id == a.UserId).DisplayName == "甲的显示名");
-        Check((await restarted.Settings.Read()).Value.ListenPort == 9001);
-        Check(await restarted.Administrators.IsSessionValid(session)); await administrators.Logout(session);
-        Check(!await restarted.Administrators.IsSessionValid(session));
+        Check((await restored.Clients.AuthenticateAsync(rotated.Token))?.UserId == a.UserId);
+        Check((await restored.ListAsync()).Single(user => user.Id == a.UserId).DisplayName == "甲的显示名");
+        Check((await restarted.Settings.ReadAsync()).Value.ListenPort == 9001);
+        Check(await restarted.Administrators.IsSessionValidAsync(session)); await administrators.LogoutAsync(session);
+        Check(!await restarted.Administrators.IsSessionValidAsync(session));
         var allBytes = Encoding.UTF8.GetString(File.ReadAllBytes(database.Path));
         Check(!allBytes.Contains(a.Token) && !allBytes.Contains(rotated.Token) && !allBytes.Contains(WebFixture.Password));
     }
@@ -57,18 +57,18 @@ static partial class FoundationTests
     {
         using var home = new TestHome(); var legacy = home.WriteLegacy();
         var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities; var settings = process.Settings;
-        var first = await identities.Clients.Authenticate("legacy-study-token"); Check(first is not null && first.UserId is not null);
-        Check(await identities.Clients.Authenticate("legacy-office-token") is null);
-        Check((await settings.Read()).Value.DeviceId == legacy.DeviceId && (await settings.Read()).Value.UpstreamUserAgent == legacy.UpstreamUserAgent);
+        var first = await identities.Clients.AuthenticateAsync("legacy-study-token"); Check(first is not null && first.UserId is not null);
+        Check(await identities.Clients.AuthenticateAsync("legacy-office-token") is null);
+        Check((await settings.ReadAsync()).Value.DeviceId == legacy.DeviceId && (await settings.ReadAsync()).Value.UpstreamUserAgent == legacy.UpstreamUserAgent);
         Check(process.ActiveCredential() == "fixture-legacy-upstream-secret");
-        using (var certificate = TestProcess.CertificateFactory.LoadServerCertificate((await settings.LoadCertificate())!)) Check(certificate.HasPrivateKey);
+        using (var certificate = TestProcess.CertificateFactory.LoadServerCertificate((await settings.LoadCertificateAsync())!)) Check(certificate.HasPrivateKey);
         var backup = Directory.GetDirectories(System.IO.Path.Combine(database.State, "legacy-backups")).Single();
         foreach (var name in new[] { "server.json", "account.dpapi", "tls.dpapi", "relay-ca.pem" })
             Check(File.ReadAllBytes(System.IO.Path.Combine(backup, name)).SequenceEqual(File.ReadAllBytes(System.IO.Path.Combine(database.State, name))));
         File.WriteAllText(System.IO.Path.Combine(database.State, "server.json"), "untrusted obsolete JSON");
         var reopened = new TestProcess(home.Path).Identities;
-        Check((await reopened.Clients.Authenticate("legacy-study-token"))?.Id == first!.Id);
-        Check((await reopened.List()).Count == 2, "Repeated startup must not reimport");
+        Check((await reopened.Clients.AuthenticateAsync("legacy-study-token"))?.Id == first!.Id);
+        Check((await reopened.ListAsync()).Count == 2, "Repeated startup must not reimport");
     }
 
     /// <summary>
@@ -85,8 +85,8 @@ static partial class FoundationTests
         catch (IOException) { failed = true; }
         Check(failed && File.ReadAllBytes(source).SequenceEqual(before));
         var process = new TestProcess(home.Path); var database = process.Database;
-        Check((await process.Identities.List()).Count == 2, "Retry after rollback must import exactly once");
-        var administrators = process.Administrators; await administrators.Initialize((await administrators.BootstrapCode())!, WebFixture.Password);
+        Check((await process.Identities.ListAsync()).Count == 2, "Retry after rollback must import exactly once");
+        var administrators = process.Administrators; await administrators.InitializeAsync((await administrators.BootstrapCodeAsync())!, WebFixture.Password);
         // 故意删除已完成初始化的数据库，模拟数据库文件丢失。
         File.Delete(database.Path);
         var lostRejected = false;
@@ -102,24 +102,24 @@ static partial class FoundationTests
     public static async Task ConcurrentWrites()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var db = process.Database;
-        var service = process.Identities; var user = await service.Create("甲");
+        var service = process.Identities; var user = await service.CreateAsync("甲");
         var other = new TestProcess(home.Path).Identities;
         // 两个服务独立连接同时写不同列，事务不能回写整份过期名单。
-        await Task.WhenAll(Task.Run(() => service.Rename(user.UserId, "改名后的甲")), Task.Run(() => other.SetEnabled(user.UserId, false)));
-        Check((await service.List()).Single().DisplayName == "改名后的甲" && !(await service.List()).Single().Enabled);
-        Check(await service.Clients.Authenticate(user.Token) is null, "Other service commits must revoke immediately");
+        await Task.WhenAll(Task.Run(() => service.RenameAsync(user.UserId, "改名后的甲")), Task.Run(() => other.SetEnabledAsync(user.UserId, false)));
+        Check((await service.ListAsync()).Single().DisplayName == "改名后的甲" && !(await service.ListAsync()).Single().Enabled);
+        Check(await service.Clients.AuthenticateAsync(user.Token) is null, "Other service commits must revoke immediately");
         var races = Enumerable.Range(0, 10).Select(index => Task.Run(async () =>
         {
-            try { await new TestProcess(home.Path).Identities.Create("使用者" + index); return true; } catch (InvalidOperationException) { /* 超出成员上限的创建会被拒绝，记为失败以便统计成功数。 */ return false; }
+            try { await new TestProcess(home.Path).Identities.CreateAsync("使用者" + index); return true; } catch (InvalidOperationException) { /* 超出成员上限的创建会被拒绝，记为失败以便统计成功数。 */ return false; }
         }));
         // 等待全部并发创建结束；成功数必须恰好为 7，说明上限检查和插入在同一事务里，不会被并发突破。
-        var results = await Task.WhenAll(races); Check(results.Count(success => success) == 7 && (await service.List()).Count == 8);
+        var results = await Task.WhenAll(races); Check(results.Count(success => success) == 7 && (await service.ListAsync()).Count == 8);
         // 满 8 人后再建，读出的必须是给人看的那句上限提示（领域规则 User.EnsureRoomFor），不是名单校验兜底的「客户端配置错误」。
         var refusal = "";
-        try { await service.Create("第九人"); } catch (InvalidOperationException error) { /* 第 9 人必须被拒；记下读句，下面核对它是上限提示而不是兜底校验的话。 */ refusal = error.Message; }
+        try { await service.CreateAsync("第九人"); } catch (InvalidOperationException error) { /* 第 9 人必须被拒；记下读句，下面核对它是上限提示而不是兜底校验的话。 */ refusal = error.Message; }
         Check(refusal == "最多支持 8 名使用者；轮换令牌不会占用新的名额。", "The ninth user must read the limit sentence: " + refusal);
-        for (var index = 0; index < 10; index++) await service.Rotate(user.UserId);
-        Check((await service.List()).Count == 8 && (await service.List()).Single(item => item.Id == user.UserId).TokenVersion == 11);
+        for (var index = 0; index < 10; index++) await service.RotateAsync(user.UserId);
+        Check((await service.ListAsync()).Count == 8 && (await service.ListAsync()).Single(item => item.Id == user.UserId).TokenVersion == 11);
     }
 
     /// <summary>
@@ -129,16 +129,16 @@ static partial class FoundationTests
     public static async Task PermissionFailure()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var database = process.Database; var identities = process.Identities;
-        var issued = await identities.Create("故障验证用户");
+        var issued = await identities.CreateAsync("故障验证用户");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction,
             "CREATE TRIGGER reject_token_insert BEFORE INSERT ON tokens BEGIN SELECT RAISE(ABORT,'fixture failure'); END"));
         var failed = false;
-        try { await identities.Rotate(issued.UserId); } catch (Exception error) when ((error as Microsoft.Data.Sqlite.SqliteException ?? error.InnerException as Microsoft.Data.Sqlite.SqliteException) is { SqliteErrorCode: 19 }) { /* 触发器让写入中止，轮换必须以 SQLite 异常整体回滚（经 EF 写库时包在 DbUpdateException 里），随后核对旧令牌未被吊销。 */ failed = true; }
-        Check(failed && (await identities.Clients.Authenticate(issued.Token))?.UserId == issued.UserId);
-        Check((await identities.List()).Single().TokenVersion == 1, "Failed rotation must roll back old-token revocation");
+        try { await identities.RotateAsync(issued.UserId); } catch (Exception error) when ((error as Microsoft.Data.Sqlite.SqliteException ?? error.InnerException as Microsoft.Data.Sqlite.SqliteException) is { SqliteErrorCode: 19 }) { /* 触发器让写入中止，轮换必须以 SQLite 异常整体回滚（经 EF 写库时包在 DbUpdateException 里），随后核对旧令牌未被吊销。 */ failed = true; }
+        Check(failed && (await identities.Clients.AuthenticateAsync(issued.Token))?.UserId == issued.UserId);
+        Check((await identities.ListAsync()).Single().TokenVersion == 1, "Failed rotation must roll back old-token revocation");
         database.Write((connection, transaction) => RelayDatabase.Execute(connection, transaction, "DROP TRIGGER reject_token_insert"));
-        var replacement = await identities.Rotate(issued.UserId);
-        Check(await identities.Clients.Authenticate(issued.Token) is null && (await identities.Clients.Authenticate(replacement.Token))?.UserId == issued.UserId);
+        var replacement = await identities.RotateAsync(issued.UserId);
+        Check(await identities.Clients.AuthenticateAsync(issued.Token) is null && (await identities.Clients.AuthenticateAsync(replacement.Token))?.UserId == issued.UserId);
     }
 
     /// <summary>
@@ -149,7 +149,7 @@ static partial class FoundationTests
     public static async Task Revocation()
     {
         using var home = new TestHome(); var process = new TestProcess(home.Path); var identities = process.Identities;
-        var a = await identities.Create("甲"); var b = await identities.Create("乙");
+        var a = await identities.CreateAsync("甲"); var b = await identities.CreateAsync("乙");
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var fixture = await Fixture.Create(async context =>
@@ -162,7 +162,7 @@ static partial class FoundationTests
         var first = Send(a.Token); await entered.Task;
         var second = Send(b.Token); await Until(() => fixture.Admission.Active == 2);
         var queued = Send(a.Token); await Until(() => fixture.Admission.Queued == 1);
-        var external = new TestProcess(home.Path).Identities; var rotated = await external.Rotate(a.UserId);
+        var external = new TestProcess(home.Path).Identities; var rotated = await external.RotateAsync(a.UserId);
         release.TrySetResult();
         using var r1 = await first; using var r2 = await second; using var rq = await queued;
         Check(r1.IsSuccessStatusCode && r2.IsSuccessStatusCode && rq.StatusCode == HttpStatusCode.Unauthorized && fixture.Calls.Count == 2);
@@ -172,11 +172,11 @@ static partial class FoundationTests
         uploadRequest.Content = upload; uploadRequest.Headers.Authorization = new("Bearer", b.Token);
         var response = fixture.Http.SendAsync(uploadRequest); await upload.Started.Task;
         await Until(() => fixture.Admission.Active == 1);
-        await external.SetEnabled(b.UserId, false); upload.Continue.TrySetResult();
+        await external.SetEnabledAsync(b.UserId, false); upload.Continue.TrySetResult();
         using var rejected = await response; Check(rejected.StatusCode == HttpStatusCode.Unauthorized && fixture.Calls.Count == 3);
         // 改名后仍共享同一人的并发槽；不能通过新显示名绕过排队。
-        Check((await identities.Clients.Authenticate(rotated.Token))?.UserId == a.UserId);
-        await external.Rename(a.UserId, "重命名的甲");
-        Check((await identities.Clients.Authenticate(rotated.Token))?.UserId == a.UserId);
+        Check((await identities.Clients.AuthenticateAsync(rotated.Token))?.UserId == a.UserId);
+        await external.RenameAsync(a.UserId, "重命名的甲");
+        Check((await identities.Clients.AuthenticateAsync(rotated.Token))?.UserId == a.UserId);
     }
 }

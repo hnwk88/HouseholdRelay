@@ -53,11 +53,11 @@ static class ProxySettingsTests
         await using (var web = await WebFixture.Create(overrides: services => services.AddSingleton<IUpstreamProxy>(
             new SystemUpstreamProxy(() => switchable, new FakeProxy("http://127.0.0.1:7897") { Bypass = true }))))
         {
-            await target.Activate(web.Upstreams); var calls = target.Calls.Count; var person = await web.Identities.Create("代理用量");
+            await target.Activate(web.Upstreams); var calls = target.Calls.Count; var person = await web.Identities.CreateAsync("代理用量");
             switchable.ProxyMode = Core.Configuration.ProxyMode.Auto;
             using (var refused = await UpstreamFixture.RelayRequest(web, person.Token)) Check((int)refused.StatusCode == 502 && target.Calls.Count == calls);
             var usage = web.App.Services.GetRequiredService<IUsageService>(); UsageRow? row = null;
-            await Until(async () => (row = (await usage.Query(new())).Rows.SingleOrDefault()) is { Outcome: not Core.Usage.UsageOutcome.Started });
+            await Until(async () => (row = (await usage.QueryAsync(new())).Rows.SingleOrDefault()) is { Outcome: not Core.Usage.UsageOutcome.Started });
             Check(row is { Outcome: Core.Usage.UsageOutcome.Failed, Dispatched: false, UpstreamStatus: null, StatusCode: 502 } && row.Money.Source == Core.Usage.MoneySource.NotApplicable, JsonSerializer.Serialize(row));
         }
 
@@ -68,7 +68,7 @@ static class ProxySettingsTests
         Check((int)response.StatusCode == 502 && body.Contains("proxy is enabled but unavailable") && fixture.Calls.IsEmpty, body);
         await using var mock = await UpstreamFixture.Create();
         var probe = new UpstreamProbe(new AbsentClaudeCode(), unavailable, new AbsentIdentity(), new FixedSiteIdentity(new string('e', 64)));
-        var catalog = await probe.Discover(new UpstreamSnapshot(1, mock.Options() with { AuthenticationManual = false }, "fixture-proxy-secret"), CancellationToken.None);
+        var catalog = await probe.DiscoverAsync(new UpstreamSnapshot(1, mock.Options() with { AuthenticationManual = false }, "fixture-proxy-secret"), CancellationToken.None);
         Check(catalog.Status == Core.Upstream.CatalogStatus.Failed && catalog.Message.Contains("已选择自动检测系统代理") && mock.Calls.IsEmpty, catalog.Message);
     }
 
@@ -136,16 +136,16 @@ static class ProxySettingsTests
         /// <summary>始终报告没有安装。</summary>
         public bool IsAvailable => false;
         /// <summary>不应被调用；被调用即抛出。</summary>
-        public Task<Application.Contracts.Upstream.ProbeReply> Run(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) => throw new InvalidOperationException("未安装");
+        public Task<Application.Contracts.Upstream.ProbeReply> RunAsync(IUpstreamLease transport, ClaudeCodeIdentity? identity, CancellationToken cancellation) => throw new InvalidOperationException("未安装");
         /// <summary>不应被调用；被调用即抛出。</summary>
-        public Task<IReadOnlyList<KeyValuePair<string, string>>> Capture(string entrypoint, CancellationToken cancellation) => throw new InvalidOperationException("未安装");
+        public Task<IReadOnlyList<KeyValuePair<string, string>>> CaptureAsync(string entrypoint, CancellationToken cancellation) => throw new InvalidOperationException("未安装");
     }
 
     /// <summary>本机没装 Claude Code 时的统一身份来源：API 上游用不到，被问到就读「找不到」。</summary>
     internal sealed class AbsentIdentity : Application.Interfaces.ClaudeCode.IClaudeCodeIdentitySource
     {
         /// <summary>始终按找不到 Claude Code 抛出。</summary>
-        public Task<ClaudeCodeIdentity> Current(string entrypoint, CancellationToken cancellation) => throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.NotFound);
+        public Task<ClaudeCodeIdentity> CurrentAsync(string entrypoint, CancellationToken cancellation) => throw new ClaudeCodeIdentityUnavailableException(ClaudeCodeIdentity.NotFound);
         /// <summary>读「找不到」。</summary>
         public string Describe() => ClaudeCodeIdentity.NotFound;
     }

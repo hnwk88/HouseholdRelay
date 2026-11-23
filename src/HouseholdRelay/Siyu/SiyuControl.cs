@@ -40,7 +40,7 @@ public sealed class SiyuControl
     }
 
     /// <summary>处理前缀下的一个请求（<see cref="HttpRequest.Path"/> 已去掉前缀）：按方法与剩余路径分派，拒绝一律回固定 JSON 错误体。</summary>
-    public async Task Handle(HttpContext context)
+    public async Task HandleAsync(HttpContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
         context.Response.Headers.CacheControl = "no-store";
@@ -52,42 +52,42 @@ public sealed class SiyuControl
             switch (segments)
             {
                 case ["accounts"] when HttpMethods.IsGet(method):
-                    var accounts = await _sessions.ListAccounts(token);
-                    await Write(context, StatusCodes.Status200OK, writer => WriteAccounts(writer, accounts)); return;
+                    var accounts = await _sessions.ListAccountsAsync(token);
+                    await WriteAsync(context, StatusCodes.Status200OK, writer => WriteAccounts(writer, accounts)); return;
                 case ["sessions"] when HttpMethods.IsPost(method):
                     // 先鉴权再读请求体：没带或带错令牌的请求不读体，直接 401。
-                    await _sessions.Authorize(token);
-                    var request = await ReadJson<SiyuCreateRequest>(context);
-                    var created = await _sessions.Create(token, request, context.RequestAborted);
-                    await Write(context, StatusCodes.Status201Created, writer => WriteCreated(writer, created)); return;
+                    await _sessions.AuthorizeAsync(token);
+                    var request = await ReadJsonAsync<SiyuCreateRequest>(context);
+                    var created = await _sessions.CreateAsync(token, request, context.RequestAborted);
+                    await WriteAsync(context, StatusCodes.Status201Created, writer => WriteCreated(writer, created)); return;
                 case ["sessions", var id] when HttpMethods.IsGet(method):
-                    var read = await _sessions.Read(token, id);
-                    await Write(context, StatusCodes.Status200OK, writer => WriteView(writer, read)); return;
+                    var read = await _sessions.ReadAsync(token, id);
+                    await WriteAsync(context, StatusCodes.Status200OK, writer => WriteView(writer, read)); return;
                 case ["sessions", var id, "lease"] when HttpMethods.IsPut(method):
-                    await _sessions.Authorize(token);
-                    var lease = await ReadJson<SiyuLeaseRequest>(context);
-                    var renewed = await _sessions.Renew(token, id, lease.LeaseSequence);
-                    await Write(context, StatusCodes.Status200OK, writer => WriteView(writer, renewed)); return;
+                    await _sessions.AuthorizeAsync(token);
+                    var lease = await ReadJsonAsync<SiyuLeaseRequest>(context);
+                    var renewed = await _sessions.RenewAsync(token, id, lease.LeaseSequence);
+                    await WriteAsync(context, StatusCodes.Status200OK, writer => WriteView(writer, renewed)); return;
                 case ["sessions", var id] when HttpMethods.IsDelete(method):
-                    var closed = await _sessions.Close(token, id);
+                    var closed = await _sessions.CloseAsync(token, id);
                     if (closed.State == SiyuSessionState.Closed) { context.Response.StatusCode = StatusCodes.Status204NoContent; return; }
-                    await Write(context, StatusCodes.Status202Accepted, writer => WriteView(writer, closed)); return;
+                    await WriteAsync(context, StatusCodes.Status202Accepted, writer => WriteView(writer, closed)); return;
                 default:
                     throw new SiyuRefusal(404, "not-found", "思域控制面没有这个地址。请升级 MyCoAI 后再试。");
             }
         }
         // 业务拒绝：状态码、原因码与读句都来自会话服务；身份代次过时另带当前代次，供 MyCoAI 重新准备。
-        catch (SiyuRefusal refusal) { await WriteRefusal(context, refusal); }
+        catch (SiyuRefusal refusal) { await WriteRefusalAsync(context, refusal); }
         // 客户端断开：回应已经没人收，不再写。
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
     }
 
     /// <summary>思域没开（项目设置里的上线开关关着）时前缀下的每个请求都回 503，读出怎么打开；不碰会话服务。</summary>
-    public static Task Disabled(HttpContext context)
+    public static Task DisabledAsync(HttpContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
         context.Response.Headers.CacheControl = "no-store";
-        return WriteRefusal(context, new SiyuRefusal(503, "siyu-disabled", "这台中转还没有打开思域。请管理员在中转的项目设置里勾选「接受新的思域会话」，然后重启中转服务。"));
+        return WriteRefusalAsync(context, new SiyuRefusal(503, "siyu-disabled", "这台中转还没有打开思域。请管理员在中转的项目设置里勾选「接受新的思域会话」，然后重启中转服务。"));
     }
 
     /// <summary>取唯一的 <c>Authorization: Bearer</c> 值；没有、多个或不是 Bearer 时为 null（会话服务回 401）。</summary>
@@ -100,7 +100,7 @@ public sealed class SiyuControl
     }
 
     /// <summary>按严格 JSON 合同读请求体：必须是 application/json、有界、字段一个不多一个不少。</summary>
-    private static async Task<T> ReadJson<T>(HttpContext context) where T : class
+    private static async Task<T> ReadJsonAsync<T>(HttpContext context) where T : class
     {
         var request = context.Request;
         if (request.ContentType is not { } type || !type.StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
@@ -126,7 +126,7 @@ public sealed class SiyuControl
     private static SiyuRefusal Malformed() => new(400, "request-malformed", "思域控制面看不懂这次请求的内容。请升级 MyCoAI 后再试。");
 
     /// <summary>写一个 JSON 回应。</summary>
-    private static async Task Write(HttpContext context, int status, Action<Utf8JsonWriter> body)
+    private static async Task WriteAsync(HttpContext context, int status, Action<Utf8JsonWriter> body)
     {
         context.Response.StatusCode = status;
         context.Response.ContentType = "application/json; charset=utf-8";
@@ -136,10 +136,10 @@ public sealed class SiyuControl
     }
 
     /// <summary>拒绝的错误体，与代理入口本地拒绝同一形状；401 另带 <c>WWW-Authenticate: Bearer</c>。</summary>
-    private static Task WriteRefusal(HttpContext context, SiyuRefusal refusal)
+    private static Task WriteRefusalAsync(HttpContext context, SiyuRefusal refusal)
     {
         if (refusal.Status == StatusCodes.Status401Unauthorized) context.Response.Headers.WWWAuthenticate = "Bearer realm=\"siyu\"";
-        return Write(context, refusal.Status, writer =>
+        return WriteAsync(context, refusal.Status, writer =>
         {
             writer.WriteStartObject();
             writer.WriteString("type", "error");

@@ -33,7 +33,7 @@ public static class DeviceMetadataTests
             var manual = DeviceMetadata.ForOfficial("/v1/messages", input, _canonical, false, null);
             Check(manual.SequenceEqual(Encoding.UTF8.GetBytes(Fill(template, _canonical, account))), "Without an account directory the account segment stays exactly as the client sent it.");
             using var request = transport.Request("/v1/messages", "?beta=true", input, "POST", "unused", headers: null, identity: identity, deviceId: _canonical);
-            using var response = await transport.Send(request, CancellationToken.None);
+            using var response = await transport.SendAsync(request, CancellationToken.None);
             Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(expected), "The common outbound boundary must apply the same byte-preserving rule.");
         }
         Check(mock.Calls.Count == Supported().Count(), "Each allowed sample must send exactly once.");
@@ -86,7 +86,7 @@ public static class DeviceMetadataTests
             try
             {
                 using var request = transport.Request("/v1/messages", "", Encoding.UTF8.GetBytes(body), "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical);
-                using var response = await transport.Send(request, CancellationToken.None);
+                using var response = await transport.SendAsync(request, CancellationToken.None);
                 Check(false, "Unsupported metadata must fail locally before dispatch.");
             }
             // 只接受固定的本地协议拒绝，网络、解析器或其他异常都必须让测试失败。
@@ -124,9 +124,9 @@ public static class DeviceMetadataTests
         using var official = Connection(mock);
         var count = Encoding.UTF8.GetBytes("{ \"model\":\"fixture-model\", \"messages\":[], \"tools\":[], \"extension\":{\"metadata\":\"nested-business-data\"} }");
         using (var models = official.Request("/v1/models", "", [], "GET", "unused", headers: null, identity: Identity(), deviceId: _canonical))
-        using (var response = await official.Send(models, CancellationToken.None)) Check(response.IsSuccessStatusCode);
+        using (var response = await official.SendAsync(models, CancellationToken.None)) Check(response.IsSuccessStatusCode);
         using (var request = official.Request("/v1/messages/count_tokens", "", count, "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical))
-        using (var response = await official.Send(request, CancellationToken.None))
+        using (var response = await official.SendAsync(request, CancellationToken.None))
             Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(count), "Count requests without top-level metadata remain byte-identical.");
         Reject(() => official.Request("/v1/models", "", "{}"u8.ToArray(), "GET", "unused", headers: null, identity: Identity(), deviceId: _canonical), 400);
         Reject(() => official.Request("/v1/messages/count_tokens", "", "{\"metadata\":null}"u8.ToArray(), "POST", "unused", headers: null, identity: Identity(), deviceId: _canonical), 400);
@@ -142,7 +142,7 @@ public static class DeviceMetadataTests
             {
                 var bytes = Encoding.UTF8.GetBytes(body);
                 using var request = other.Request("/v1/messages", "", bytes, "POST", "fixture-agent", headers: null, identity: null, deviceId: "ignored");
-                using var response = await other.Send(request, CancellationToken.None);
+                using var response = await other.SendAsync(request, CancellationToken.None);
                 Check(response.IsSuccessStatusCode && Encoding.UTF8.GetBytes(mock.Calls.Last().Body).SequenceEqual(bytes), "Independent API and compatible OAuth bypass the official metadata policy.");
             }
         }
@@ -200,7 +200,7 @@ public static class DeviceMetadataTests
             Check(request.Version == System.Net.HttpVersion.Version11 && request.VersionPolicy == System.Net.Http.HttpVersionPolicy.RequestVersionExact, "Official requests use HTTP/1.1 like the native client");
             Check(request.Headers.Connection.Contains("keep-alive"), "Official requests carry Connection: keep-alive like the native client");
             Check(string.Join(',', request.Headers.GetValues("anthropic-beta")) == "oauth-2025-04-20,zeta-2026-01-01,alpha-2026-02-02", "The OAuth beta goes first like a native OAuth client: " + string.Join(',', request.Headers.GetValues("anthropic-beta")));
-            using var response = await official.Send(request, CancellationToken.None);
+            using var response = await official.SendAsync(request, CancellationToken.None);
             Check(response.IsSuccessStatusCode && mock.Calls.Last().Headers.TryGetValue("Connection", out var connection) && connection.Contains("keep-alive", StringComparison.OrdinalIgnoreCase), "The mock official upstream receives keep-alive over HTTP/1.1");
         }
         using var api = new UpstreamConnection(new(1, mock.Options(), "fixture-secret"), Proxy());

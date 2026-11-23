@@ -17,18 +17,18 @@ internal sealed class UpstreamConnection : IUpstreamLease
     /// <summary>官方操作是否允许新准入；维护只改变可用性判断，不清除原有认证暂停或冷却。</summary>
     private readonly Func<bool> _officialAvailable;
     /// <summary>最近一次凭据读取因维护或私有身份配置失败而关闭；独立于认证暂停和限流，成功重读才清除。</summary>
-    private int identityReadBlocked;
-    /// <summary>最近一次私有身份配置拒绝的读句（固定说明）；null 时用通用读句。与 <see cref="identityReadBlocked"/> 一起更新。</summary>
-    private string? identityBlockedReason;
-    private long cooldownUntil;
-    private int paused, references = 1;
-    private UpstreamAvoidance? avoidance;
+    private int _identityReadBlocked;
+    /// <summary>最近一次私有身份配置拒绝的读句（固定说明）；null 时用通用读句。与 <see cref="_identityReadBlocked"/> 一起更新。</summary>
+    private string? _identityBlockedReason;
+    private long _cooldownUntil;
+    private int _paused, _references = 1;
+    private UpstreamAvoidance? _avoidance;
     /// <summary>创建本连接时读到的上游版本快照（地址、凭据、模式等）；整个连接生命周期内不变，因此旧租约在版本切换后仍按原配置发请求。</summary>
     public UpstreamSnapshot Snapshot { get; }
     /// <summary>上游曾返回 401 或 403 时置为真，表示凭据已失效需在本机管理页重新测试激活；用易失读取，多线程下立即可见。</summary>
-    public bool Paused => Volatile.Read(ref paused) != 0;
+    public bool Paused => Volatile.Read(ref _paused) != 0;
     /// <summary>距离上游 429 冷却结束还剩多少秒（向上取整，最小为 0）；按原子读取的截止毫秒数与当前时间计算。</summary>
-    public int CooldownSeconds => (int)Math.Max(0, Math.Ceiling((Interlocked.Read(ref cooldownUntil) - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) / 1000d));
+    public int CooldownSeconds => (int)Math.Max(0, Math.Ceiling((Interlocked.Read(ref _cooldownUntil) - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) / 1000d));
 
     /// <summary>为一个上游版本建立专用 HTTP 客户端：不跟随重定向、不用 Cookie、不自动解压，限制每服务器连接数；处理器自身不用系统代理，建连交给 <see cref="UpstreamDialer"/> 按全局代理设置与地址规则完成；客户端总超时关闭，由调用方的取消令牌控制请求时长。初始引用计数为 1，归连接池持有。</summary>
     public UpstreamConnection(UpstreamSnapshot snapshot, IUpstreamProxy proxy) : this(snapshot, proxy, 2) { }
@@ -42,13 +42,13 @@ internal sealed class UpstreamConnection : IUpstreamLease
         ArgumentNullException.ThrowIfNull(snapshot); ArgumentNullException.ThrowIfNull(proxy); ArgumentNullException.ThrowIfNull(officialAvailable);
         Snapshot = snapshot;
         this._officialAvailable = officialAvailable;
-        identityReadBlocked = snapshot.BlockedByIdentity ? 1 : 0;
-        identityBlockedReason = snapshot.BlockedReason;
+        _identityReadBlocked = snapshot.BlockedByIdentity ? 1 : 0;
+        _identityBlockedReason = snapshot.BlockedReason;
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false, AutomaticDecompression = DecompressionMethods.None,
             MaxConnectionsPerServer = maxConnections, PooledConnectionLifetime = TimeSpan.FromMinutes(2), ConnectTimeout = TimeSpan.FromSeconds(15),
-            ConnectCallback = (context, cancellation) => UpstreamDialer.Connect(context, snapshot.Options, proxy, cancellation),
+            ConnectCallback = (context, cancellation) => UpstreamDialer.ConnectAsync(context, snapshot.Options, proxy, cancellation),
             // 不往上游请求里加跟踪头（traceparent、tracestate）：宿主开着日志就会给每个请求建跟踪活动，HttpClient 默认会把它传给上游，
             // 那样发往官方与 API 上游的字节就和客户端原生直连不一样了。发出去的头只由转发规则决定。
             ActivityHeadersPropagator = null
@@ -56,7 +56,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
         _http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }
     /// <summary>原子地增加一次引用并返回自身，供连接池在锁内发放租约；每个租约对应一次 <see cref="Dispose"/>。</summary>
-    internal UpstreamConnection Retain() { Interlocked.Increment(ref references); return this; }
+    internal UpstreamConnection Retain() { Interlocked.Increment(ref _references); return this; }
     /// <summary>发请求前检查上游是否可用：未配置或认证已暂停时抛 503，冷却期内抛 429 并带剩余秒数，让中转直接拒绝而不去消耗上游额度。</summary>
     public void CheckState() { if (Refusal() is { } refusal) throw refusal; }
 
@@ -67,7 +67,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
     private RelayFailure? Refusal()
     {
         // 私有配置拒绝（如还没有账户编号）把具体原因直接告诉下游；站点维护等没有具体原因的用通用读句。
-        if (Snapshot.Options.OfficialAccount && IdentityReadBlocked && Volatile.Read(ref identityBlockedReason) is { } reason)
+        if (Snapshot.Options.OfficialAccount && IdentityReadBlocked && Volatile.Read(ref _identityBlockedReason) is { } reason)
             return new RelayFailure(503, reason);
         if (Snapshot.Options.OfficialAccount && (IdentityReadBlocked || !_officialAvailable()))
             return new RelayFailure(503, "官方账户的设备身份暂不可用。请在本机管理页查看设备维护状态或修复本站私有配置；独立 API 上游仍可使用。");
@@ -123,7 +123,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
         if (!options.OfficialAccount) request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
         else if (!string.IsNullOrWhiteSpace(acceptEncoding)) request.Headers.TryAddWithoutValidation("Accept-Encoding", acceptEncoding);
         if (!request.Headers.Contains("anthropic-version")) request.Headers.Add("anthropic-version", "2023-06-01");
-        // 按客户端这一次发来的 anthropic-beta 原序透传：官方账户要对齐原生直连，顺序和内容都由客户端这次自己决定，中转不重排、不补造（D-013）。
+        // 按客户端这一次发来的 anthropic-beta 原序透传：官方账户要对齐原生直连，顺序和内容都由客户端这次自己决定，中转不重排、不补造（发往官方的每个值都取自真实 Claude Code，不许编造）。
         // 仅 API 密钥模式或未开 oauth beta 的兼容上游去掉 oauth- 项（这类上游不认它）；oauth 模式下客户端没带 oauth beta 时补一个到末尾，保证 OAuth 请求合法（令牌模式的家人客户端不是 OAuth 登录，不会自带）。
         var allowOauth = options.Mode == UpstreamMode.OAuth && options.OAuthBeta;
         var clientBetas = (headers is null ? "" : Header(headers, "anthropic-beta").ToString()).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -155,7 +155,7 @@ internal sealed class UpstreamConnection : IUpstreamLease
         return request;
     }
     /// <summary>发送请求，读到响应头即返回以便流式转发；上游返回 3xx 时释放响应并抛 502，拒绝被重定向到未校验的地址。返回的响应由调用方释放。</summary>
-    public async Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken cancellation)
+    public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellation)
     {
         var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation);
         if ((int)response.StatusCode is >= 300 and < 400) { response.Dispose(); throw new RelayFailure(502, "Upstream redirect rejected."); }
@@ -164,20 +164,20 @@ internal sealed class UpstreamConnection : IUpstreamLease
     /// <summary>根据上游响应更新本版本状态：401、403 标记认证暂停；429 按 Retry-After 设置冷却（缺省 30 秒，限 1 到 3600 秒），用比较交换循环只把截止时间往后推，多个并发响应互不覆盖。</summary>
     public void Observe(HttpResponseMessage response)
     {
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) Interlocked.Exchange(ref paused, 1);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) Interlocked.Exchange(ref _paused, 1);
         if (response.StatusCode != HttpStatusCode.TooManyRequests) return;
         var retry = response.Headers.RetryAfter;
         var seconds = retry?.Delta?.TotalSeconds ?? (retry?.Date - DateTimeOffset.UtcNow)?.TotalSeconds ?? 30;
         var until = DateTimeOffset.UtcNow.AddSeconds(Math.Clamp(seconds, 1, 3600)).ToUnixTimeMilliseconds();
         long previous;
-        do { previous = Interlocked.Read(ref cooldownUntil); if (previous >= until) return; }
-        while (Interlocked.CompareExchange(ref cooldownUntil, until, previous) != previous);
+        do { previous = Interlocked.Read(ref _cooldownUntil); if (previous >= until) return; }
+        while (Interlocked.CompareExchange(ref _cooldownUntil, until, previous) != previous);
     }
     /// <summary>自动切换把这家换掉时记下暂避：到期时刻与最后一次失败的读法；后记的覆盖先记的。</summary>
-    internal void Avoid(UpstreamAvoidance value) => Volatile.Write(ref avoidance, value);
+    internal void Avoid(UpstreamAvoidance value) => Volatile.Write(ref _avoidance, value);
 
     /// <summary>在 <paramref name="now"/> 这一刻是否还在暂避中。</summary>
-    internal bool Avoided(DateTimeOffset now) => Volatile.Read(ref avoidance) is { Until: { } until } && until > now;
+    internal bool Avoided(DateTimeOffset now) => Volatile.Read(ref _avoidance) is { Until: { } until } && until > now;
 
     /// <summary>
     /// 这家此刻为什么排不到前面，供页面读出：认证暂停优先，其次 429 冷却，再次暂避；都没有时为 null。
@@ -186,26 +186,26 @@ internal sealed class UpstreamConnection : IUpstreamLease
     internal UpstreamAvoidance? Held(DateTimeOffset now)
     {
         if (Paused) return new(Snapshot.UpstreamCandidateId, AvoidanceKind.Paused, null, null, null, null);
-        if (CooldownSeconds > 0) return new(Snapshot.UpstreamCandidateId, AvoidanceKind.Cooldown, DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref cooldownUntil)), 429, null, null);
-        return Avoided(now) ? Volatile.Read(ref avoidance) : null;
+        if (CooldownSeconds > 0) return new(Snapshot.UpstreamCandidateId, AvoidanceKind.Cooldown, DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _cooldownUntil)), 429, null, null);
+        return Avoided(now) ? Volatile.Read(ref _avoidance) : null;
     }
 
     /// <summary>这家现在能不能接请求：有凭据、没有认证暂停、不在 429 冷却中；暂避不算，暂避的只是排到最后。</summary>
     internal bool Usable => Refusal() is null;
 
     /// <summary>最近一次明确的身份读取拒绝，供连接池测试和可用性检查读取。</summary>
-    internal bool IdentityReadBlocked => Volatile.Read(ref identityReadBlocked) != 0;
+    internal bool IdentityReadBlocked => Volatile.Read(ref _identityReadBlocked) != 0;
 
     /// <summary>连接池按读取顺序更新本地身份可用性，不改写连接快照、凭据、认证暂停或冷却。</summary>
     internal void SetIdentityReadBlocked(bool blocked, string? reason = null)
     {
         // 先写原因再写标志：并发的 CheckState 看到阻断时读到的是这一次的原因。
-        Volatile.Write(ref identityBlockedReason, blocked ? reason : null);
-        Volatile.Write(ref identityReadBlocked, blocked ? 1 : 0);
+        Volatile.Write(ref _identityBlockedReason, blocked ? reason : null);
+        Volatile.Write(ref _identityReadBlocked, blocked ? 1 : 0);
     }
 
     /// <summary>归还一次引用；最后一个持有者（连接池或在途请求的租约）归还时才销毁 HTTP 客户端，保证版本切换不会打断仍在进行的请求。</summary>
-    public void Dispose() { if (Interlocked.Decrement(ref references) == 0) _http.Dispose(); }
+    public void Dispose() { if (Interlocked.Decrement(ref _references) == 0) _http.Dispose(); }
 
     /// <summary>从请求头字典（Kestrel 的请求头集合）按名称大小写不敏感查找；缺失时与空值等同。</summary>
     private static StringValues Header(IDictionary<string, StringValues> headers, string name) =>

@@ -13,7 +13,7 @@ public sealed class FakeOfficialConnector : IOfficialConnector
     public List<(OfficialHost Host, ScriptedStream Stream)> Opened { get; } = [];
 
     /// <summary>给一条新的假连接。</summary>
-    public Task<Stream> Open(OfficialHost host, CancellationToken cancellation)
+    public Task<Stream> OpenAsync(OfficialHost host, CancellationToken cancellation)
     {
         var stream = new ScriptedStream(Replies(host));
         // 并发连接可能同时打开，记录表加锁。

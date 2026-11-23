@@ -42,18 +42,18 @@ static class UpstreamMigrationTests
             Check(Encoding.UTF8.GetString(tools.Get<ISecretProtector>().Unprotect(credential)) == "fixture-legacy-upstream-secret");
             RelayDatabase.Execute(connection, null, "DROP TABLE upstream_candidates");
         }
-        var upgraded = new TestProcess(home.Path); var upstream = await upgraded.Upstreams.ReadActive();
+        var upgraded = new TestProcess(home.Path); var upstream = await upgraded.Upstreams.ReadActiveAsync();
         // 纯迁移不准备官方目录或触发续期；直接检查已保存密文解密后仍是旧夹具凭据。
         Check(upstream.Options.Mode == Core.Upstream.UpstreamMode.OAuth && upgraded.ActiveCredential() == "fixture-legacy-upstream-secret" && upstream.Report is null);
-        Check(await upgraded.Administrators.IsInitialized() && await upgraded.Administrators.Login(WebFixture.Password) is not null);
+        Check(await upgraded.Administrators.IsInitializedAsync() && await upgraded.Administrators.LoginAsync(WebFixture.Password) is not null);
         using (var connection = upgraded.Database.Open())
         {
             var mapped = Convert.ToInt64(RelayDatabase.Scalar(connection, null,
                 "SELECT json_extract(row_json,'$.new_id') FROM migration_archive WHERE source_table='users' AND reason='replaced-id' AND json_extract(row_json,'$.id')=$old", ("$old", originalId)));
-            Check((await upgraded.Identities.Clients.Authenticate("legacy-study-token"))!.UserId == mapped, "The imported member keeps its identity through the key change");
+            Check((await upgraded.Identities.Clients.AuthenticateAsync("legacy-study-token"))!.UserId == mapped, "The imported member keeps its identity through the key change");
         }
-        Check(await upgraded.Identities.Clients.Authenticate("legacy-office-token") is null);
+        Check(await upgraded.Identities.Clients.AuthenticateAsync("legacy-office-token") is null);
         var repeated = new TestProcess(home.Path);
-        Check((await repeated.Upstreams.ReadActive()).ActiveVersion == upstream.ActiveVersion);
+        Check((await repeated.Upstreams.ReadActiveAsync()).ActiveVersion == upstream.ActiveVersion);
     }
 }

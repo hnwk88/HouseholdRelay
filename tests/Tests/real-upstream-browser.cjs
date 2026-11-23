@@ -160,7 +160,8 @@ async function configureTls(page, url, port) {
 (async () => {
     let input = ''; for await (const chunk of process.stdin) input += chunk.toString(); material = JSON.parse(input); input = '';
     await fs.mkdir(output, { recursive: true }); instance = await fs.mkdtemp(path.join(os.tmpdir(), 'HouseholdRelay-rework-browser-'));
-    evidence.temporary_instance = instance;
+    // 证据要进仓库：用户目录换成占位符，不把本机用户名写进去。
+    evidence.temporary_instance = instance.split(os.homedir()).join('%USERPROFILE%');
     const port = await freePort(); let { url, code } = await start(port);
     browser = await chromium.launch({ channel: 'msedge', headless: true }); evidence.browser = await browser.version();
     let page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });

@@ -18,7 +18,7 @@ static class CleanClientTests
     {
         await using var mock = await UpstreamFixture.Create(); await using var web = await WebFixture.Create();
         var upstreams = web.Upstreams; await mock.Activate(upstreams);
-        var user = await web.Identities.Create("干净客户端");
+        var user = await web.Identities.CreateAsync("干净客户端");
         using var temporary = new TestHome(); var inputPath = Path.Combine(temporary.Path, "fixture.txt");
         await File.WriteAllTextAsync(inputPath, "CLEAN_CLIENT_FILE_MARKER");
         mock.Handler = async context =>
@@ -62,7 +62,7 @@ static class CleanClientTests
             Check(child.ExitCode == 0 && (await stdout).Contains("CLEAN_TOOL_OK"), "Isolated client failed its tool conversation: " + await stderr);
             Check(mock.Calls.Any(call => call.Body.Contains("tool_result") && call.Body.Contains("CLEAN_CLIENT_FILE_MARKER")));
             Check(mock.Calls.All(call => call.Headers.Values.All(value => !value.Contains(user.Token))));
-            Console.WriteLine("Clean native client: " + await TestProcess.IsolatedClientLauncher.DetectUserAgent() + "; local HTTP, no CA file or legacy client bundle.");
+            Console.WriteLine("Clean native client: " + await TestProcess.IsolatedClientLauncher.DetectUserAgentAsync() + "; local HTTP, no CA file or legacy client bundle.");
         }
         // 超时或断言失败时客户端可能仍在运行，必须连同进程树一起结束，防止残留 Claude Code 进程占用临时目录。
         finally { if (!child.HasExited) { child.Kill(true); await child.WaitForExitAsync(); } }

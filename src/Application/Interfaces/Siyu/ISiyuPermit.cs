@@ -31,7 +31,7 @@ public interface ISiyuPermit : IAsyncDisposable
     /// 真正写给官方之前调用一次：先只读核对 Messages 正文的设备段与账户段（不一致抛 <see cref="Core.Siyu.SiyuRefusal"/> 403，不发），再把用量记录标记为已发出（模型名取请求体顶层的 model）。记不下就抛 503，这次请求不发
     /// （与旧接法同一规则：不产生无法计量的官方调用）。没有用量记录的用途什么也不做。
     /// </summary>
-    Task Dispatching(ReadOnlyMemory<byte> body, CancellationToken cancellation);
+    Task DispatchingAsync(ReadOnlyMemory<byte> body, CancellationToken cancellation);
 
     /// <summary>回应转发结束时报告一次：客户端实际收到的状态码，以及回应体是否完整转发。释放许可时据此写用量结束记录。</summary>
     void Completed(int clientStatus, bool complete);

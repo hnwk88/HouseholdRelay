@@ -19,7 +19,7 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
     private readonly IntPtr _console, _attributes, _environment, _processHandle, _threadHandle;
     private readonly FileStream _input, _output;
     private readonly StringBuilder _screen = new();
-    private int disposed;
+    private int _disposed;
 
     /// <summary>伪控制台里那个进程；结束、等待退出与读退出码都用它。</summary>
     public Process Process { get; }
@@ -56,7 +56,7 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
             // 伪控制台已持有自己那一端，本进程的这两端关掉，进程退出后读端才会读到头。
             inputRead.Dispose(); outputWrite.Dispose();
             _input = new FileStream(inputWrite, FileAccess.Write, 1); _output = new FileStream(outputRead, FileAccess.Read, 4096);
-            Drained = Task.Run(() => Read(answers));
+            Drained = Task.Run(() => ReadAsync(answers));
         }
         // 建到一半失败：关掉已建的管道、伪控制台与内存，再把原因交给调用方。
         catch (Exception error)
@@ -74,7 +74,7 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
     /// <summary>结束整棵进程树、关掉伪控制台与管道，释放句柄与内存；可重复调用。</summary>
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref disposed, 1) != 0) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { if (!Process.HasExited) Process.Kill(true); }
         // 进程恰好在这一刻自己退出了：没有要结束的。
         catch (InvalidOperationException) { }
@@ -87,7 +87,7 @@ internal sealed partial class PseudoConsoleProcess : IDisposable
     }
 
     /// <summary>后台读屏幕：去掉终端控制序列后找提示，每种提示按一次键；只留最后 16 KB 屏幕文字，进程退出后读到头即结束。</summary>
-    private async Task Read(IReadOnlyDictionary<string, string> answers)
+    private async Task ReadAsync(IReadOnlyDictionary<string, string> answers)
     {
         var buffer = new byte[4096]; var pressed = new HashSet<string>(StringComparer.Ordinal);
         try

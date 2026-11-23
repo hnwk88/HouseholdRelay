@@ -19,7 +19,7 @@ internal static class IdentityCommandPipe
         "HouseholdRelay-identity-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(stateDirectory).ToUpperInvariant())))[..32];
 
     /// <summary>写一行 JSON 并刷出。</summary>
-    public static async Task WriteLine<T>(Stream stream, T value, CancellationToken cancellation)
+    public static async Task WriteLineAsync<T>(Stream stream, T value, CancellationToken cancellation)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(value, Json);
         await stream.WriteAsync(bytes, cancellation);
@@ -28,7 +28,7 @@ internal static class IdentityCommandPipe
     }
 
     /// <summary>读到换行为止的一行并解析；超长、提前断开或不是合法 JSON 时返回 default。</summary>
-    public static async Task<T?> ReadLine<T>(Stream stream, CancellationToken cancellation)
+    public static async Task<T?> ReadLineAsync<T>(Stream stream, CancellationToken cancellation)
     {
         var buffer = new byte[MaxLineBytes];
         var length = 0;

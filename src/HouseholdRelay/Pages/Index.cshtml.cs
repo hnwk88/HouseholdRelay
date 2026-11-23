@@ -30,9 +30,9 @@ public sealed class IndexModel(IConfigurationService settings, IIdentityService 
     /// <summary>打开管理首页（需已登录）：汇总使用者数、上游池运行状态和证书状态，只读。</summary>
     public async Task OnGetAsync()
     {
-        UserCount = (await identities.List()).Count; CredentialConfigured = await settings.HasCredential();
-        CertificateConfigured = await settings.HasCertificate(); PublicUrl = (await settings.Read()).Value.PublicUrl;
-        var active = await upstreams.ReadOverview(); var state = upstreamPool.Status(active.Version); var saved = await upstreams.ListCandidates();
+        UserCount = (await identities.ListAsync()).Count; CredentialConfigured = await settings.HasCredentialAsync();
+        CertificateConfigured = await settings.HasCertificateAsync(); PublicUrl = (await settings.ReadAsync()).Value.PublicUrl;
+        var active = await upstreams.ReadOverviewAsync(); var state = upstreamPool.Status(active.Version); var saved = await upstreams.ListCandidatesAsync();
         // 在用的那家已导出搬走：照上游页同一句读出请求此刻怎么走和下一步，不读成「尚未配置」。
         var moved = saved.FirstOrDefault(item => item.Id == active.UpstreamCandidateId) is { ExportedAt: not null } current ? current : null;
         UpstreamName = moved?.Name ?? (!active.Configured ? "尚未选择" : active.Name ?? "未命名");
@@ -42,8 +42,8 @@ public sealed class IndexModel(IConfigurationService settings, IIdentityService 
             : active.Configured ? UpstreamModel.RoutingSentence(upstreamPool, active, saved) : "";
         UpgradeText = instance.LastUpgrade is { } upgrade ? $"{upgrade.At.ToLocalTime():yyyy-MM-dd HH:mm}：{upgrade.Sentence()}" : "";
         // 30 天内到期时读到期提示（与 HTTPS 页、连接说明同一句，见 CertificateInfo.ExpiryWarning），其余照旧。
-        var certificate = await certificates.ReadInfo(); var now = DateTimeOffset.UtcNow;
+        var certificate = await certificates.ReadInfoAsync(); var now = DateTimeOffset.UtcNow;
         CertificateStatus = certificate is null ? "尚未配置 HTTPS" : certificate.Expired(now) ? "证书已过期"
-            : certificate.ExpiryWarning(now, await certificates.CanReissue()) ?? (certificate.Mode == "private" ? "私有 CA · 客户端安装一次信任" : "已导入可信证书");
+            : certificate.ExpiryWarning(now, await certificates.CanReissueAsync()) ?? (certificate.Mode == "private" ? "私有 CA · 客户端安装一次信任" : "已导入可信证书");
     }
 }

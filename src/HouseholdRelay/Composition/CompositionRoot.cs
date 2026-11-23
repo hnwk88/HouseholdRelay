@@ -27,7 +27,7 @@ public static class CompositionRoot
         services.AddInfrastructure(configureData);
         // 启动时读一次设置作为本进程的中转配置；监听端口和转发限制改动在重启服务后生效。
         // 依赖注入的工厂是同步合同，只能在这里同步等待一次；Microsoft.Data.Sqlite 的异步读在内部同步完成，没有同步上下文，不会死锁。
-        services.AddSingleton(provider => provider.GetRequiredService<IConfigurationService>().Read().GetAwaiter().GetResult().Value);
+        services.AddSingleton(provider => provider.GetRequiredService<IConfigurationService>().ReadAsync().GetAwaiter().GetResult().Value);
         // 提供思域代理对外公布的地址（选 Singleton 的原因：启动时定一次）：主机取对外地址，端口取思域代理端口（对外与监听同号），只在开了思域、真要建会话服务时才算。
         services.AddSingleton(provider => SiyuEndpoint(provider.GetRequiredService<RelayConfiguration>()));
         services.AddRelayServer();
@@ -37,9 +37,11 @@ public static class CompositionRoot
         services.AddSingleton<Siyu.SiyuControl>();
         services.AddSingleton(provider => new Siyu.SiyuProxyHost(provider.GetRequiredService<RelayConfiguration>(),
             provider.GetRequiredService<Infrastructure.ExternalSources.Siyu.SiyuProxyConnectionHandler>(), provider.GetRequiredService<ILoggerFactory>()));
+        // 下面三个 Lazy 是 serve 用的延后取法：没开思域就不构造会话服务与代理宿主；Lazy 只是包装，选 Singleton 与被包的对象一致。
         services.AddSingleton(provider => new Lazy<Siyu.SiyuControl>(provider.GetRequiredService<Siyu.SiyuControl>));
         services.AddSingleton(provider => new Lazy<Application.Interfaces.Siyu.ISiyuSessionService>(provider.GetRequiredService<Application.Interfaces.Siyu.ISiyuSessionService>));
         services.AddSingleton(provider => new Lazy<Siyu.SiyuProxyHost>(provider.GetRequiredService<Siyu.SiyuProxyHost>));
+        // 命令行子命令与 serve；选 Singleton 的原因：一个进程只跑一条命令，依赖都是单例。
         services.AddSingleton<ManagementCommands>();
         services.AddSingleton<ServeCommand>();
         return services;
@@ -56,6 +58,7 @@ public static class CompositionRoot
     /// <summary>正式服务的中转：转发服务的十二个依赖全部由容器交进来，漏登记任何一个在构建容器时就报；启动配置、鉴权名单、上游连接池和事件日志由其他登记提供。</summary>
     public static IServiceCollection AddRelayServer(this IServiceCollection services)
     {
+        // 负责把每个中转请求编排到上游并记用量；选 Singleton 的原因：无状态，状态都在它依赖的单例里。
         services.AddSingleton<IRelayForwarder, RelayForwarder>();
         return services.AddRelayHost();
     }
@@ -65,7 +68,9 @@ public static class CompositionRoot
     {
         // 中转宿主共用所在容器的日志工厂；正式服务里基础设施已挂上文件日志，独立中转没有数据目录，这里只保证工厂在（重复登记不叠加）。
         services.AddLogging();
+        // 准入控制（并发与排队名额）；选 Singleton 的原因：名额全进程共享一份。
         services.AddSingleton<Admission>();
+        // 对外 HTTPS 的中转宿主；选 Singleton 的原因：一个进程只绑一次端口。管理页按接口取的是同一个实例。
         services.AddSingleton<RelayServer>();
         services.AddSingleton<IHttpsListener>(provider => provider.GetRequiredService<RelayServer>());
         return services;
@@ -75,6 +80,7 @@ public static class CompositionRoot
     public static IServiceCollection AddStandaloneRelay(this IServiceCollection services, RelayConfiguration config, string? credential,
         Uri? testUpstream = null, ClientRegistry? clients = null)
     {
+        // 独立中转的启动配置、鉴权名单与固定上游都由调用方给定，进程内不变，所以都是单例；事件日志用 TryAdd，调用方先登记的不被覆盖。
         services.AddSingleton(config);
         services.AddSingleton(clients ?? new ClientRegistry(config.Clients));
         services.AddSingleton<IActiveUpstreamSource>(FixedUpstreamSource.ForLegacy(config, credential, testUpstream));

@@ -9,12 +9,12 @@ public sealed class Admission(RelayConfiguration config)
     private readonly SemaphoreSlim _global = new(config.MaxConcurrent);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new();
     private readonly ConcurrentDictionary<string, (long Minute, int Count)> _rates = new();
-    private int queued, active;
+    private int _queued, _active;
     /// <summary>当前正在排队等待名额的请求数（含刚进入、尚未拿到名额的）；无锁读取的瞬时值，仅供状态展示。</summary>
-    public int Queued => Volatile.Read(ref queued);
+    public int Queued => Volatile.Read(ref _queued);
 
     /// <summary>当前已拿到全局名额、正在执行的请求数；无锁读取的瞬时值，仅供状态展示。</summary>
-    public int Active => Volatile.Read(ref active);
+    public int Active => Volatile.Read(ref _active);
 
     /// <summary>按客户端名做每分钟计数（按 UTC 整分钟划窗，新分钟从 1 重新计）；超过 <see cref="RelayConfiguration.RequestsPerMinute"/> 时抛出 429 的 <see cref="RelayFailure"/>，并附上到下一分钟的剩余秒数作为重试间隔。可被多个请求线程并发调用。</summary>
     public void CheckRate(string name)
@@ -29,10 +29,10 @@ public sealed class Admission(RelayConfiguration config)
     /// 队列已满或排队超过 <see cref="RelayConfiguration.QueueTimeoutSeconds"/> 时抛出 429 的 <see cref="RelayFailure"/>；
     /// 调用方自身取消时原样抛出 <see cref="OperationCanceledException"/>。返回的对象释放后归还两级名额，重复释放无副作用。
     /// </summary>
-    public async Task<IDisposable> Enter(string name, CancellationToken cancellation)
+    public async Task<IDisposable> EnterAsync(string name, CancellationToken cancellation)
     {
-        if (Interlocked.Increment(ref queued) > config.MaxQueued)
-        { Interlocked.Decrement(ref queued); throw new RelayFailure(429, "Relay queue is full.", 5); }
+        if (Interlocked.Increment(ref _queued) > config.MaxQueued)
+        { Interlocked.Decrement(ref _queued); throw new RelayFailure(429, "Relay queue is full.", 5); }
         // 每个客户端一个信号量，按名称懒创建且从不移除；GetOrAdd 在并发下可能多建一个但只有一个会被存下并共用。
         var gate = _gates.GetOrAdd(name, _ => new SemaphoreSlim(config.MaxPerClient));
         var gotClient = false; var gotGlobal = false;
@@ -43,8 +43,8 @@ public sealed class Admission(RelayConfiguration config)
         try
         {
             await gate.WaitAsync(timeout.Token); gotClient = true;
-            await _global.WaitAsync(timeout.Token); gotGlobal = true; Interlocked.Increment(ref active);
-            return new Release(() => { Interlocked.Decrement(ref active); _global.Release(); gate.Release(); });
+            await _global.WaitAsync(timeout.Token); gotGlobal = true; Interlocked.Increment(ref _active);
+            return new Release(() => { Interlocked.Decrement(ref _active); _global.Release(); gate.Release(); });
         }
         // 只有排队超时才转成 429；调用方自己取消（如客户端断开）时不拦截，让取消按原异常向上传播。
         catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
@@ -52,7 +52,7 @@ public sealed class Admission(RelayConfiguration config)
         // 不论成功、超时还是取消都要退出排队计数；若已拿到本人名额却没拿到全局名额，必须在此归还，否则该客户端名额会永久泄漏。
         finally
         {
-            Interlocked.Decrement(ref queued);
+            Interlocked.Decrement(ref _queued);
             if (gotClient && !gotGlobal) gate.Release();
         }
     }
@@ -60,9 +60,9 @@ public sealed class Admission(RelayConfiguration config)
     /// <summary>名额归还句柄：首次释放时执行归还回调，之后的释放为空操作，防止重复归还导致信号量计数超额。</summary>
     private sealed class Release(Action release) : IDisposable
     {
-        private Action? callback = release;
+        private Action? _callback = release;
 
         /// <summary>原子地取出并清空回调后执行，保证并发或重复调用时归还动作只发生一次。</summary>
-        public void Dispose() => Interlocked.Exchange(ref callback, null)?.Invoke();
+        public void Dispose() => Interlocked.Exchange(ref _callback, null)?.Invoke();
     }
 }

@@ -10,7 +10,7 @@ namespace Application.Services.Usage;
 public sealed class UsagePricingService(IServiceScopeFactory scopes) : IUsagePricingService
 {
     /// <summary>列出指定已保存上游下的全部模型单价，按模型名排序。</summary>
-    public async Task<IReadOnlyList<UsagePrice>> List(long upstreamCandidateId)
+    public async Task<IReadOnlyList<UsagePrice>> ListAsync(long upstreamCandidateId)
     {
         await using var scope = scopes.CreateAsyncScope();
         var rows = await scope.Repository<UsagePriceRecord>().FindAsync(item => item.UpstreamCandidateId == upstreamCandidateId);
@@ -22,7 +22,7 @@ public sealed class UsagePricingService(IServiceScopeFactory scopes) : IUsagePri
     /// 各项单价须在 0–1000000 之间且至少填一项，未知单价留空（null）。同一上游同一模型再存一次就覆盖费率（主键不变）。
     /// 那一家已不在（停用或不存在）时拒绝；核对与写入在同一个事务里。不合法时抛出 <see cref="InvalidOperationException"/>。
     /// </summary>
-    public async Task Save(long upstreamCandidateId, string model, string currency, decimal? input, decimal? output, decimal? read, decimal? write)
+    public async Task SaveAsync(long upstreamCandidateId, string model, string currency, decimal? input, decimal? output, decimal? read, decimal? write)
     {
         model = model.Trim(); currency = currency.Trim().ToUpperInvariant();
         if (!ModelName.IsValid(model)

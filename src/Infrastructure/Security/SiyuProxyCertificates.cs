@@ -31,7 +31,7 @@ internal sealed class SiyuProxyCertificates : ISiyuProxyCertificates, IDisposabl
     private readonly Dictionary<OfficialHost, X509Certificate2> _leaves = [];
     private readonly List<X509Certificate2> _retired = [];
 
-    /// <summary>由 <see cref="Load"/> 构造；<paramref name="authority"/> 必须带私钥，所有权交给本实例。</summary>
+    /// <summary>由 <see cref="LoadAsync"/> 构造；<paramref name="authority"/> 必须带私钥，所有权交给本实例。</summary>
     private SiyuProxyCertificates(X509Certificate2 authority, ICertificateFactory factory, TimeProvider clock)
     {
         _authority = authority; _factory = factory; _clock = clock;
@@ -45,7 +45,7 @@ internal sealed class SiyuProxyCertificates : ISiyuProxyCertificates, IDisposabl
     /// 读出存着的代理 CA；没有、解不开、不是带私钥的 CA，或剩余有效期不足 <see cref="AuthorityRenewBefore"/> 时新建一张并覆盖存下。
     /// 解密出的 PFX 明文用完即清零。
     /// </summary>
-    public static async Task<SiyuProxyCertificates> Load(IServiceScopeFactory scopes, ISecretProtector protector, ICertificateFactory factory, TimeProvider clock)
+    public static async Task<SiyuProxyCertificates> LoadAsync(IServiceScopeFactory scopes, ISecretProtector protector, ICertificateFactory factory, TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(scopes); ArgumentNullException.ThrowIfNull(protector); ArgumentNullException.ThrowIfNull(factory); ArgumentNullException.ThrowIfNull(clock);
         await using var scope = scopes.CreateAsyncScope();

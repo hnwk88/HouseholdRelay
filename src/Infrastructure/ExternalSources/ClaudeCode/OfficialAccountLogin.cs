@@ -63,7 +63,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     /// 定位 claude.exe、按全局设置解析代理（启用却取不到时抛出 <see cref="UpstreamProxyUnavailableException"/>），建好受保护的配置目录后运行 <c>claude auth login</c> 等它结束；
     /// 成功且目录里有凭据时用 <c>auth status --json</c> 取邮箱。任何失败都删掉这个目录再抛出读给管理员的原因。
     /// </summary>
-    public async Task<string?> Login(string accountId, CancellationToken cancellation)
+    public async Task<string?> LoginAsync(string accountId, CancellationToken cancellation)
     {
         using var operation = _siteIdentity.Enter();
         string executable;
@@ -103,7 +103,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
             if (exit != 0) throw new InvalidOperationException($"登录没有完成（Claude Code 登录以退出码 {exit} 结束），可能是在浏览器里取消了。需要时再按「登录官方账户」重试。");
             if (Read(directory) is null)
                 throw new InvalidOperationException("登录命令结束了，但没有拿到官方账户凭据。请再按一次「登录官方账户」；仍然不行时可以改用下面的「贴账户访问令牌」。");
-            return await Email(executable, directory, route, cancellation);
+            return await EmailAsync(executable, directory, route, cancellation);
         }
         // 登录没成功就不留半截目录；异常原样交给调用方读出。
         catch { RemoveDirectory(directory); throw; }
@@ -113,7 +113,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     /// 先在内存里校验登录文件（不超过 <see cref="Application.Contracts.Uploads.UploadLimits.OfficialCredentialBytes"/>、是 JSON、有访问令牌和刷新令牌），再定位 claude.exe、解析代理，
     /// 合格才建受保护的账户目录、把文件原样写进去，用 <c>auth status --json</c> 取邮箱返回。任何失败都删掉目录；读给管理员的原因不含文件内容。
     /// </summary>
-    public async Task<string?> Import(string accountId, byte[] content, CancellationToken cancellation)
+    public async Task<string?> ImportAsync(string accountId, byte[] content, CancellationToken cancellation)
     {
         using var operation = _siteIdentity.Enter();
         ValidateImport(content);
@@ -127,7 +127,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
         try
         {
             File.WriteAllBytes(Path.Combine(directory, OfficialCredential.FileName), content);
-            return await Email(executable, directory, route, cancellation);
+            return await EmailAsync(executable, directory, route, cancellation);
         }
         // 写文件或取邮箱途中被取消等失败：不留半截目录，异常原样交给调用方读出。
         catch { RemoveDirectory(directory); throw; }
@@ -146,17 +146,17 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
         var directory = Directory(accountId);
         var credential = Read(directory);
         if (credential?.ExpiresAt is not { } expires || expires - _clock.GetUtcNow() > _refreshMargin) return credential?.AccessToken;
-        var refresh = Refresh(accountId, directory);
+        var refresh = RefreshAsync(accountId, directory);
         if (expires > _clock.GetUtcNow()) return credential.AccessToken;
         refresh.Wait(_refreshWait);
         return Read(directory)?.AccessToken ?? credential.AccessToken;
     }
 
     /// <summary>
-    /// 思域发送用的有效凭据：离到期远就用当前令牌；快到期时起后台续期（同 <see cref="Refresh"/> 的单飞）并用仍有效的当前令牌；
+    /// 思域发送用的有效凭据：离到期远就用当前令牌；快到期时起后台续期（同 <see cref="RefreshAsync"/> 的单飞）并用仍有效的当前令牌；
     /// 已过期就等那次续期（最多 <see cref="_refreshWait"/>，按调用方令牌可单独放弃等待）再重读，仍过期一律拒发。等待期间不占站点维护许可。
     /// </summary>
-    public async Task<OfficialCredentialLease> AcquireCredential(string accountId, CancellationToken cancellation)
+    public async Task<OfficialCredentialLease> AcquireCredentialAsync(string accountId, CancellationToken cancellation)
     {
         ThrowIfGone(accountId);
         var directory = Directory(accountId);
@@ -165,7 +165,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
         if (credential.ExpiresAt is not { } expires)
             throw new SiyuRefusal(503, "official-expiry-unknown", "这个官方账户的凭据没有写到期时间，思域不能确认它仍有效。请在中转机管理页重新登录该账户，再启动思域。");
         if (expires - _clock.GetUtcNow() > _refreshMargin) return Lease(accountId, credential.AccessToken, expires);
-        var refresh = Guarded(() => Refresh(accountId, directory));
+        var refresh = Guarded(() => RefreshAsync(accountId, directory));
         if (expires > _clock.GetUtcNow()) return Lease(accountId, credential.AccessToken, expires);
         try { await refresh.WaitAsync(_refreshWait, _clock, cancellation); }
         // 等到上限还没续完：不再等，按重读结果判断；调用方自己的取消不在这里接，原样抛出。
@@ -287,7 +287,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     /// 换之前不再起刷新，并等正在跑的刷新自己结束（最多 <see cref="_moveWait"/>，不取消，免得 CLI 死在改写凭据文件的半途）；先写同目录的临时文件再整份替换，读的一方不会读到半截。
     /// 已删除或搬走的账户、等不完刷新时拒绝，原凭据不动。临时目录由调用方删除。
     /// </summary>
-    public async Task Adopt(string accountId, string fromAccountId)
+    public async Task AdoptAsync(string accountId, string fromAccountId)
     {
         var directory = Directory(accountId); var source = Path.Combine(Directory(fromAccountId), OfficialCredential.FileName);
         Task? running;
@@ -318,7 +318,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     /// 再按顺序读出各自的凭据文件原文交给 <paramref name="commit"/>（加密打包并在库里记为已导出）。读不到凭据、等不完刷新或 <paramref name="commit"/> 抛出时，
     /// 本次新记的账户恢复续期，异常原样抛出；读出的文件字节无论成败都清零。账户目录不删。
     /// </summary>
-    public async Task<T> Export<T>(IReadOnlyList<string> accountIds, Func<IReadOnlyList<byte[]>, Task<T>> commit)
+    public async Task<T> ExportAsync<T>(IReadOnlyList<string> accountIds, Func<IReadOnlyList<byte[]>, Task<T>> commit)
     {
         var directories = accountIds.Select(Directory).ToArray();
         var added = new List<string>(); var running = new List<Task>();
@@ -346,7 +346,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     }
 
     /// <summary>同一账户同时只跑一次刷新，且两次之间至少隔 <see cref="_refreshInterval"/>；否则返回上一次的任务。已删除或已搬走的账户不再刷新。</summary>
-    private Task Refresh(string accountId, string directory)
+    private Task RefreshAsync(string accountId, string directory)
     {
         // 并发请求同时发现令牌快到期：查上一次刷新与登记新刷新必须在同一把锁里，否则会各起一个 CLI 同时改写凭据文件。
         lock (_refreshes)
@@ -356,7 +356,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
             var operation = _siteIdentity.Enter();
             var stop = new CancellationTokenSource();
             // 后台任务独立占一个许可，调用方先返回也不会让维护漏掉仍在写凭据的 CLI。
-            var task = Task.Run(async () => { using (operation) await RunRefresh(accountId, directory, stop.Token); });
+            var task = Task.Run(async () => { using (operation) await RunRefreshAsync(accountId, directory, stop.Token); });
             _refreshes[accountId] = (task, _clock.GetUtcNow(), stop);
             return task;
         }
@@ -366,14 +366,14 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     /// 在账户目录里跑一次 <c>claude -p /usage</c>（MyCoAI 用的本地免费命令，不花模型额度）：CLI 发现令牌快到期会自己用刷新令牌换新并写回凭据文件。
     /// 失败或被删除取消只说明这次没刷新成，不抛出，转发继续用旧令牌；结束时所属上游已删除就再删一次目录。
     /// </summary>
-    private async Task RunRefresh(string accountId, string directory, CancellationToken stop)
+    private async Task RunRefreshAsync(string accountId, string directory, CancellationToken stop)
     {
         try
         {
             // 启动续期程序之前重读一次私有配置，不用本代缓存。
             _configuration.ValidateAccount(accountId, reread: true);
             var start = Start(_launcher.FindClaude(), directory, _proxy.Resolve(OfficialTarget), "-p", "/usage", "--output-format", "json", "--no-session-persistence");
-            var (exit, _) = await RunHidden(start, TimeSpan.FromSeconds(60), stop);
+            var (exit, _) = await RunHiddenAsync(start, TimeSpan.FromSeconds(60), stop);
             _diagnostics.Record(Guid.NewGuid().ToString("N"), "cli_completed", "cli", _siteIdentity.Current.Version, _siteIdentity.Current.DeviceId,
                 status: exit, error: exit == 0 ? null : "renewal_failed");
         }
@@ -403,11 +403,11 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     }
 
     /// <summary>跑 <c>auth status --json</c> 取 <c>email</c>；命令失败、超时或输出不是预期 JSON 时返回 null，不影响登录结果。</summary>
-    private async Task<string?> Email(string executable, string directory, ProxyRoute route, CancellationToken cancellation)
+    private async Task<string?> EmailAsync(string executable, string directory, ProxyRoute route, CancellationToken cancellation)
     {
         try
         {
-            var (exit, output) = await RunHidden(Start(executable, directory, route, "auth", "status", "--json"), TimeSpan.FromSeconds(30), cancellation);
+            var (exit, output) = await RunHiddenAsync(Start(executable, directory, route, "auth", "status", "--json"), TimeSpan.FromSeconds(30), cancellation);
             if (exit != 0) return null;
             using var document = JsonDocument.Parse(output);
             return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("email", out var email)
@@ -438,7 +438,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     }
 
     /// <summary>不建窗口运行子进程并读完标准输出，限时 <paramref name="limit"/>；超时或取消时结束进程树并抛出 <see cref="OperationCanceledException"/>。</summary>
-    private async Task<(int Exit, string Output)> RunHidden(ProcessStartInfo start, TimeSpan limit, CancellationToken cancellation)
+    private async Task<(int Exit, string Output)> RunHiddenAsync(ProcessStartInfo start, TimeSpan limit, CancellationToken cancellation)
     {
         start.CreateNoWindow = true; start.RedirectStandardInput = true; start.RedirectStandardOutput = true; start.RedirectStandardError = true;
         start.StandardOutputEncoding = new UTF8Encoding(false); start.StandardErrorEncoding = new UTF8Encoding(false);

@@ -10,7 +10,7 @@ public static class Http1BodyBuffer
     public const int MaxWireBytes = 1024 * 1024;
 
     /// <summary>按 <paramref name="head"/> 的定界读全回应体。</summary>
-    public static async Task<byte[]> Read(Http1Reader reader, Http1ResponseHead head, CancellationToken cancellation)
+    public static async Task<byte[]> ReadAsync(Http1Reader reader, Http1ResponseHead head, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(reader); ArgumentNullException.ThrowIfNull(head);
         var sink = new Bounded();

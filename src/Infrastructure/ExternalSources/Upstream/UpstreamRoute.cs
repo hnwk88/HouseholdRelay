@@ -12,19 +12,19 @@ internal sealed class UpstreamRoute(UpstreamPool pool, UpstreamConnection active
     /// <summary>本次请求持有引用的全部连接，释放时逐个归还。</summary>
     private readonly List<UpstreamConnection> _held = [active];
     private readonly HashSet<UpstreamConnection> _tried = [];
-    private IReadOnlyList<UpstreamConnection>? standby;
+    private IReadOnlyList<UpstreamConnection>? _standby;
 
     /// <summary>在用那一家的租约。</summary>
     public IUpstreamLease Active => active;
 
     /// <summary>开关关闭、或在用那家能接时就是它自己的检查；否则只要有一家备用能接就通过，都不能接时抛出在用那一家的拒绝。</summary>
-    public async Task CheckState()
+    public async Task CheckStateAsync()
     {
-        if (!failover || active.Usable || !(await Standby()).Any(connection => connection.Usable)) active.CheckState();
+        if (!failover || active.Usable || !(await StandbyAsync()).Any(connection => connection.Usable)) active.CheckState();
     }
 
     /// <summary>给出顺序里下一家还没试过的上游；第一次调用一定给出一家，一家都接不了时抛出在用那一家的拒绝。</summary>
-    public async Task<IUpstreamLease?> Next(string? model)
+    public async Task<IUpstreamLease?> NextAsync(string? model)
     {
         var now = clock.GetUtcNow(); UpstreamConnection? next;
         if (!failover) next = _tried.Count == 0 ? active : null;
@@ -32,7 +32,7 @@ internal sealed class UpstreamRoute(UpstreamPool pool, UpstreamConnection active
         else if (_tried.Count == 0 && active.Usable && !active.Avoided(now)) next = active;
         else
         {
-            var candidates = (await Standby()).Prepend(active).Where(connection => !_tried.Contains(connection) && connection.Usable && (connection == active || Offers(connection, model))).ToArray();
+            var candidates = (await StandbyAsync()).Prepend(active).Where(connection => !_tried.Contains(connection) && connection.Usable && (connection == active || Offers(connection, model))).ToArray();
             next = candidates.FirstOrDefault(connection => !connection.Avoided(now)) ?? candidates.FirstOrDefault();
         }
         // 第一家都给不出：在用那家要么本来就不能接（抛出它的拒绝），要么能接却被模型清单之类挡掉了备用，仍交给它。
@@ -51,11 +51,11 @@ internal sealed class UpstreamRoute(UpstreamPool pool, UpstreamConnection active
     public void Dispose() { foreach (var connection in _held) connection.Dispose(); _held.Clear(); }
 
     /// <summary>备用上游连接：第一次用到时向连接池读，去掉与在用那家同一主键的（读的间隙里刚好切换了在用上游时会出现）。</summary>
-    private async Task<IReadOnlyList<UpstreamConnection>> Standby()
+    private async Task<IReadOnlyList<UpstreamConnection>> StandbyAsync()
     {
-        if (standby is not null) return standby;
-        var leases = await pool.Standby(); _held.AddRange(leases);
-        return standby = leases.Where(connection => connection.Snapshot.UpstreamCandidateId != active.Snapshot.UpstreamCandidateId).ToArray();
+        if (_standby is not null) return _standby;
+        var leases = await pool.StandbyAsync(); _held.AddRange(leases);
+        return _standby = leases.Where(connection => connection.Snapshot.UpstreamCandidateId != active.Snapshot.UpstreamCandidateId).ToArray();
     }
 
     /// <summary>备用上游的模型清单里有没有本次模型：请求没带模型、清单未知或为空时照试。</summary>

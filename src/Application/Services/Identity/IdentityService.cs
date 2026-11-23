@@ -15,7 +15,7 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
     public ClientRegistry Clients { get; } = clients;
 
     /// <summary>按创建顺序（主键）列出有当前令牌的使用者及其令牌版本。</summary>
-    public async Task<IReadOnlyList<RelayUser>> List()
+    public async Task<IReadOnlyList<RelayUser>> ListAsync()
     {
         await using var scope = scopes.CreateAsyncScope();
         var users = await scope.Repository<User>().GetAllAsync();
@@ -25,20 +25,20 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
     }
 
     /// <summary>从库里读取已提交的鉴权名单（只含有效令牌的哈希），不经过内存快照。</summary>
-    public async Task<IReadOnlyList<ClientAccess>> ReadAccess() => await ReadCommitted(scopes);
+    public async Task<IReadOnlyList<ClientAccess>> ReadAccessAsync() => await ReadCommittedAsync(scopes);
 
     /// <summary>
     /// 新建使用者并签发第一版个人令牌：显示名去首尾空白后须为 1–64 个字符且不含控制字符；
     /// 未指定 <paramref name="legacyName"/> 时自动生成 <c>u_</c> 加 24 位随机小写十六进制的内部名称（与主键无关），旧客户端迁移时可沿用原名称但同样须合法。
     /// 人数上限与重名在写入的同一事务里判断。返回结果中的明文令牌只出现这一次，库里只存其哈希；使用者主键由库生成。
     /// </summary>
-    public async Task<IssuedToken> Create(string displayName, string? legacyName = null)
+    public async Task<IssuedToken> CreateAsync(string displayName, string? legacyName = null)
     {
         displayName = ValidateDisplayName(displayName);
         var name = legacyName ?? "u_" + RandomNumberGenerator.GetHexString(24, lowercase: true);
         if (!RelayConfiguration.IsClientName(name)) throw new InvalidOperationException("客户端名称只能是小写字母、数字、短横线或下划线，最多 32 字符。");
         var token = ConfigurationFiles.NewToken();
-        return await Change(async scope =>
+        return await ChangeAsync(async scope =>
         {
             var users = scope.Repository<User>(); var tokens = scope.Repository<Token>();
             User.EnsureRoomFor(await users.CountAsync());
@@ -54,10 +54,10 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
     }
 
     /// <summary>修改显示名（同样做长度与控制字符校验），令牌不变；使用者不存在时拒绝。</summary>
-    public async Task Rename(long userId, string displayName)
+    public async Task RenameAsync(long userId, string displayName)
     {
         displayName = ValidateDisplayName(displayName);
-        await Change(async scope =>
+        await ChangeAsync(async scope =>
         {
             var users = scope.Repository<User>();
             (await users.GetByIdAsync(userId) ?? throw MissingUser()).DisplayName = displayName;
@@ -66,7 +66,7 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
     }
 
     /// <summary>启用或停用使用者；提交后立即发布新名单，本进程的鉴权马上生效。使用者不存在时拒绝。</summary>
-    public async Task SetEnabled(long userId, bool enabled) => await Change(async scope =>
+    public async Task SetEnabledAsync(long userId, bool enabled) => await ChangeAsync(async scope =>
     {
         var users = scope.Repository<User>();
         (await users.GetByIdAsync(userId) ?? throw MissingUser()).Enabled = enabled;
@@ -74,10 +74,10 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
     });
 
     /// <summary>轮换个人令牌：撤销当前版、写入下一版的哈希，旧令牌随之失效；返回的明文新令牌只出现这一次。使用者不存在时拒绝。</summary>
-    public async Task<IssuedToken> Rotate(long userId)
+    public async Task<IssuedToken> RotateAsync(long userId)
     {
         var token = ConfigurationFiles.NewToken();
-        return await Change(async scope =>
+        return await ChangeAsync(async scope =>
         {
             var user = await scope.Repository<User>().GetByIdAsync(userId) ?? throw MissingUser();
             var tokens = scope.Repository<Token>();
@@ -96,14 +96,14 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
     /// 读已提交的鉴权名单：每名使用者配上他当前未撤销的那一版令牌，按使用者主键排序。鉴权名单的依赖注入工厂也用它，名单只有这一种读法。
     /// </summary>
     /// <param name="scopes">作用域工厂。</param>
-    public static async Task<IReadOnlyList<ClientAccess>> ReadCommitted(IServiceScopeFactory scopes)
+    public static async Task<IReadOnlyList<ClientAccess>> ReadCommittedAsync(IServiceScopeFactory scopes)
     {
         await using var scope = scopes.CreateAsyncScope();
-        return await ReadAccess(scope);
+        return await ReadAccessAsync(scope);
     }
 
     /// <summary>在给定作用域里（写入时就是同一个事务里）读当前有效令牌的鉴权名单。</summary>
-    private static async Task<IReadOnlyList<ClientAccess>> ReadAccess(AsyncServiceScope scope)
+    private static async Task<IReadOnlyList<ClientAccess>> ReadAccessAsync(AsyncServiceScope scope)
     {
         var users = (await scope.Repository<User>().GetAllAsync()).ToDictionary(item => item.Id);
         var tokens = await scope.Repository<Token>().FindAsync(item => item.RevokedAt == null);
@@ -115,7 +115,7 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
     /// 串行执行一次写入：在一个事务里做改动、读回名单并校验，合格才提交，再用这份已提交名单替换鉴权快照，最后返回写入结果；
     /// 写入或名单校验失败时整个事务回滚、异常上抛，不发布新名单。
     /// </summary>
-    private async Task<T> Change<T>(Func<AsyncServiceScope, Task<T>> change)
+    private async Task<T> ChangeAsync<T>(Func<AsyncServiceScope, Task<T>> change)
     {
         // 同一服务提交后立即发布已验证快照；失败时不发布，跨进程鉴权还会重新读库。
         await _writes.WaitAsync();
@@ -125,7 +125,7 @@ public sealed class IdentityService(IServiceScopeFactory scopes, ClientRegistry 
             var (value, access) = await scope.Repository<User>().ExecuteInTransactionAsync(async () =>
             {
                 var value = await change(scope);
-                var access = await ReadAccess(scope);
+                var access = await ReadAccessAsync(scope);
                 RelayConfiguration.ValidateClients(access);
                 return (value, access);
             });

@@ -6,5 +6,5 @@ namespace Application.Interfaces.Siyu;
 public interface IOfficialConnector
 {
     /// <summary>连到 <paramref name="host"/>:443 并完成 TLS 握手。</summary>
-    Task<Stream> Open(OfficialHost host, CancellationToken cancellation);
+    Task<Stream> OpenAsync(OfficialHost host, CancellationToken cancellation);
 }

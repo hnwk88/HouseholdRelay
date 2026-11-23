@@ -13,7 +13,7 @@ public interface IClaudeCodeUpdater
     void Observe(string? clientVersion, string relayVersion, long? clientId);
 
     /// <summary>管理员按「升级中转的 Claude Code」：不论间隔立即升一次（已在升级时等那一次），返回读给管理员的结果句。</summary>
-    Task<string> Update(CancellationToken cancellation);
+    Task<string> UpdateAsync(CancellationToken cancellation);
 
     /// <summary>中转版本、最近一次看到的客户端版本、两边谁新、上次升级的时间与结果，读成一段话；<paramref name="displayName"/> 按使用者主键给出显示名。不启动 Claude Code。</summary>
     string Describe(Func<long?, string> displayName);

@@ -20,7 +20,7 @@ public sealed class UpstreamReadiness : IHealthCheck
     {
         try
         {
-            return (await _upstreams.ReadOverview()).Configured ? HealthCheckResult.Healthy("在用的上游已配置。")
+            return (await _upstreams.ReadOverviewAsync()).Configured ? HealthCheckResult.Healthy("在用的上游已配置。")
                 : HealthCheckResult.Unhealthy("还没有可用的上游，请在本机管理页「上游接入」里添加并切换。");
         }
         // 读不出上游概览（库打不开、配置损坏）：如实报未就绪，读句不带细节。

@@ -5,8 +5,8 @@ namespace Core.Usage;
 /// <summary>只保留计数和终止状态；SSE 解析使用响应层已经划分好的有界事件。</summary>
 public sealed class UsageAccumulator(UsageKind kind)
 {
-    private long? input, output, cacheRead, cacheWrite;
-    private bool started, finalDelta, stopped, stream, jsonComplete;
+    private long? _input, _output, _cacheRead, _cacheWrite;
+    private bool _started, _finalDelta, _stopped, _stream, _jsonComplete;
     /// <summary>上游是否返回了错误：JSON 响应的 type 为 error，或流中出现 error 事件；一旦置为 true 就影响完整性判断。</summary>
     public bool Error { get; private set; }
 
@@ -17,16 +17,16 @@ public sealed class UsageAccumulator(UsageKind kind)
     public string? ErrorMessage { get; private set; }
 
     /// <summary>是否按 SSE 流处理过响应；只要收到过任何流事件即为 true。</summary>
-    public bool IsStream => stream;
+    public bool IsStream => _stream;
 
     /// <summary>
     /// 响应在协议层面是否完整结束：流式要求依次见到 message_start、带 stop_reason 的 message_delta 和 message_stop；
     /// 非流式要求整份 JSON 已解析。两者都要求没有出现错误。
     /// </summary>
-    public bool ProtocolComplete => stream ? started && finalDelta && stopped && !Error : jsonComplete && !Error;
+    public bool ProtocolComplete => _stream ? _started && _finalDelta && _stopped && !Error : _jsonComplete && !Error;
 
     /// <summary>目前累计到的各项计数快照；上游未报告的项为 null，而不是 0。</summary>
-    public UsageTokens Tokens => new(input, output, cacheRead, cacheWrite);
+    public UsageTokens Tokens => new(_input, _output, _cacheRead, _cacheWrite);
 
     /// <summary>上游在 usage 中明确报告的金额（带币种）；未报告时为 null，后到的报告覆盖先到的。</summary>
     public UsageMoney? ReportedMoney { get; private set; }
@@ -42,9 +42,9 @@ public sealed class UsageAccumulator(UsageKind kind)
         if (root.ValueKind != JsonValueKind.Object) return;
         Error = Text(root, "type") == "error";
         ReadError(root);
-        if (kind == UsageKind.Estimate) input = Number(root, "input_tokens") ?? input;
+        if (kind == UsageKind.Estimate) _input = Number(root, "input_tokens") ?? _input;
         else if (kind == UsageKind.Inference && root.TryGetProperty("usage", out var usage)) Update(usage);
-        jsonComplete = true;
+        _jsonComplete = true;
     }
 
     /// <summary>
@@ -53,7 +53,7 @@ public sealed class UsageAccumulator(UsageKind kind)
     /// </summary>
     public void Event(string eventName, string data, bool terminated)
     {
-        stream = true;
+        _stream = true;
         if (eventName == "error") Error = true;
         if (!terminated || data.Length == 0) return;
         try
@@ -65,15 +65,15 @@ public sealed class UsageAccumulator(UsageKind kind)
             if (type == "error") { Error = true; ReadError(root); }
             if (type == "message_start" && root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object)
             {
-                started = true;
+                _started = true;
                 if (message.TryGetProperty("usage", out var initial)) Update(initial);
             }
             if (type == "message_delta")
             {
                 if (root.TryGetProperty("usage", out var usage)) Update(usage);
-                if (root.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object && Text(delta, "stop_reason") is not null) finalDelta = true;
+                if (root.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object && Text(delta, "stop_reason") is not null) _finalDelta = true;
             }
-            if (type == "message_stop") stopped = true;
+            if (type == "message_stop") _stopped = true;
         }
         catch (JsonException) { /* 未知或非 JSON 扩展事件不影响转发，也不能补出用量。 */ }
     }
@@ -85,8 +85,8 @@ public sealed class UsageAccumulator(UsageKind kind)
     public UsageCompleteness Completeness(bool dispatched, bool succeeded)
     {
         if (!dispatched || kind == UsageKind.Models) return UsageCompleteness.NotApplicable;
-        var any = input.HasValue || output.HasValue || cacheRead.HasValue || cacheWrite.HasValue;
-        if (succeeded && ProtocolComplete && input.HasValue && (kind == UsageKind.Estimate || output.HasValue)) return UsageCompleteness.Complete;
+        var any = _input.HasValue || _output.HasValue || _cacheRead.HasValue || _cacheWrite.HasValue;
+        if (succeeded && ProtocolComplete && _input.HasValue && (kind == UsageKind.Estimate || _output.HasValue)) return UsageCompleteness.Complete;
         if (any || !succeeded || !ProtocolComplete) return UsageCompleteness.Partial;
         return UsageCompleteness.NotProvided;
     }
@@ -105,10 +105,10 @@ public sealed class UsageAccumulator(UsageKind kind)
     private void Update(JsonElement usage)
     {
         if (kind != UsageKind.Inference || usage.ValueKind != JsonValueKind.Object) return;
-        input = Number(usage, "input_tokens") ?? input;
-        output = Number(usage, "output_tokens") ?? output;
-        cacheRead = Number(usage, "cache_read_input_tokens") ?? cacheRead;
-        cacheWrite = Number(usage, "cache_creation_input_tokens") ?? cacheWrite;
+        _input = Number(usage, "input_tokens") ?? _input;
+        _output = Number(usage, "output_tokens") ?? _output;
+        _cacheRead = Number(usage, "cache_read_input_tokens") ?? _cacheRead;
+        _cacheWrite = Number(usage, "cache_creation_input_tokens") ?? _cacheWrite;
         ReportedMoney = UsageMoneyRules.ReadReported(usage) ?? ReportedMoney;
     }
     /// <summary>读取非负整数属性；属性缺失、不是数字、超出 64 位整数或为负数时返回 null。</summary>

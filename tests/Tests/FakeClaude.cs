@@ -192,11 +192,11 @@ static class FakeClaude
 sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
 {
     private readonly string _directory = Directory.CreateTempSubdirectory("hr-fake-claude-").FullName;
-    private string version = "1.0.0";
+    private string _version = "1.0.0";
 
     /// <summary>假 Claude Code 此刻的身份版本；<see cref="Reinstall"/> 或假升级改它（假升级直接改写 claude.cmd 的版本行）。</summary>
     public string Version => File.Exists(Path.Combine(_directory, "claude.cmd"))
-        && System.Text.RegularExpressions.Regex.Match(File.ReadAllText(Path.Combine(_directory, "claude.cmd")), FakeClaude.VersionVariable + @"=(\S+)") is { Success: true } found ? found.Groups[1].Value : version;
+        && System.Text.RegularExpressions.Regex.Match(File.ReadAllText(Path.Combine(_directory, "claude.cmd")), FakeClaude.VersionVariable + @"=(\S+)") is { Success: true } found ? found.Groups[1].Value : _version;
 
     /// <summary>假 <c>claude update</c> 要升到的版本；为空时假升级不改版本。要在第一次定位之前设好（写进 claude.cmd）。</summary>
     public string UpdateTo { get; set; } = "";
@@ -216,7 +216,7 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
     /// </summary>
     public void Reinstall(string newScenario, string newVersion)
     {
-        scenario = newScenario; version = newVersion;
+        scenario = newScenario; _version = newVersion;
         // 只删本定位器自己临时目录里的那个小脚本，下次定位时按新场景和版本重写。
         File.Delete(Path.Combine(_directory, "claude.cmd"));
     }
@@ -238,20 +238,20 @@ sealed class FakeClaudeLauncher(string scenario) : IClientLauncher, IDisposable
             var host = Environment.ProcessPath!;
             var command = Path.GetFileNameWithoutExtension(host).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
                 ? $"\"{host}\" \"{typeof(FakeClaude).Assembly.Location}\"" : $"\"{host}\"";
-            File.WriteAllText(path, $"@set {FakeClaude.VersionVariable}={version}\r\n@set {FakeClaude.SelfVariable}=%~f0\r\n@set {FakeClaude.UpdateToVariable}={UpdateTo}\r\n@set {FakeClaude.SeenVariable}={SeenPath}\r\n@{command} --fake-claude {scenario} %*\r\n");
+            File.WriteAllText(path, $"@set {FakeClaude.VersionVariable}={_version}\r\n@set {FakeClaude.SelfVariable}=%~f0\r\n@set {FakeClaude.UpdateToVariable}={UpdateTo}\r\n@set {FakeClaude.SeenVariable}={SeenPath}\r\n@{command} --fake-claude {scenario} %*\r\n");
         }
         return path;
     }
 
     /// <summary>照真定位器读 <c>claude --version</c> 的结果组成请求特征：版本取 claude.cmd 里此刻写着的那个；场景为 missing 时照真定位器抛未安装。</summary>
-    public Task<string> DetectUserAgent() => scenario == "missing" ? throw new InvalidOperationException("未找到 Claude Code 原生 claude.exe，请先安装官方客户端。")
+    public Task<string> DetectUserAgentAsync() => scenario == "missing" ? throw new InvalidOperationException("未找到 Claude Code 原生 claude.exe，请先安装官方客户端。")
         : Task.FromResult($"claude-cli/{Version} (external, cli)");
 
     /// <summary>登录测试用不到。</summary>
     public ProcessStartInfo Prepare(string bundleDirectory, IEnumerable<string> arguments) => throw new NotSupportedException();
 
     /// <summary>登录测试用不到。</summary>
-    public Task<int> Run(string directory, string[] arguments) => throw new NotSupportedException();
+    public Task<int> RunAsync(string directory, string[] arguments) => throw new NotSupportedException();
 
     /// <summary>删除临时的 claude.cmd 所在目录。</summary>
     public void Dispose()

@@ -38,7 +38,7 @@ public sealed class PricingModel(IUsagePricingService pricing, IUpstreamService 
     /// <summary>打开费率页（需已登录）：选定上游（缺省为在用的那一家），选定模型后若已有单价则回填到表单，只读。</summary>
     public async Task OnGetAsync()
     {
-        await Load();
+        await LoadAsync();
         if (string.IsNullOrEmpty(ModelName)) ModelName = Selected?.Options.Model;
         if (Prices.SingleOrDefault(item => item.Model == ModelName) is not { } price) return;
         Currency = price.Currency; InputPrice = price.InputPerMillion; OutputPrice = price.OutputPerMillion;
@@ -50,22 +50,22 @@ public sealed class PricingModel(IUsagePricingService pricing, IUpstreamService 
     {
         if (ModelState.IsValid)
         {
-            try { await pricing.Save(UpstreamCandidateId ?? 0, ModelName ?? "", Currency ?? "", InputPrice, OutputPrice, CacheReadPrice, CacheWritePrice); Notice = "费率已保存，只影响之后发送的请求。历史金额保持不变。"; }
+            try { await pricing.SaveAsync(UpstreamCandidateId ?? 0, ModelName ?? "", Currency ?? "", InputPrice, OutputPrice, CacheReadPrice, CacheWritePrice); Notice = "费率已保存，只影响之后发送的请求。历史金额保持不变。"; }
             // 模型名、币种或单价不合法、所选上游已被删除时都抛 InvalidOperationException，作为表单错误提示管理员刷新或改正，不写入任何单价。
             catch (InvalidOperationException error) { ModelState.AddModelError("", error.Message); }
         }
-        await Load();
+        await LoadAsync();
     }
 
     /// <summary>一项单价的读法：「3 美元」；没填（未知）读「未知」。</summary>
     public static string PriceText(decimal? value, string currency) => value is { } known ? UsageLabels.Amount(known, currency) : "未知";
 
     /// <summary>读取已保存上游列表与在用那一家，确定所选上游，再读它的单价列表；GET 与 POST 渲染前都会调用。</summary>
-    private async Task Load()
+    private async Task LoadAsync()
     {
-        Saved = await upstreams.ListCandidates(); ActiveId = (await upstreams.ReadOverview()).UpstreamCandidateId;
+        Saved = await upstreams.ListCandidatesAsync(); ActiveId = (await upstreams.ReadOverviewAsync()).UpstreamCandidateId;
         UpstreamCandidateId ??= ActiveId;
         Selected = Saved.FirstOrDefault(item => item.Id == UpstreamCandidateId);
-        Prices = Selected is null ? [] : await pricing.List(Selected.Id);
+        Prices = Selected is null ? [] : await pricing.ListAsync(Selected.Id);
     }
 }
