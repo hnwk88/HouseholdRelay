@@ -1,0 +1,7 @@
+﻿@model string?
+@* 操作结果的提示：读屏状态区，同时交给布局写进页面标题（P-029）；回发后没有别的焦点落点时，站点脚本把焦点放到这里。 *@
+@if (Model is not null)
+{
+    Context.Items[Notices.ResultKey] = Model;
+    <p class="notice" role="status" id="notice" tabindex="-1">@Model</p>
+}

@@ -20,7 +20,8 @@ public sealed class SetupModel(IAdministratorService administrators) : PageModel
     public async Task<IActionResult> OnPostAsync()
     {
         if (await administrators.IsInitialized()) return NotFound();
-        if (Password != Confirmation) ModelState.AddModelError("", "两次输入的管理密码不一致。");
+        var mismatch = Password != Confirmation;
+        if (mismatch) ModelState.AddModelError(nameof(Confirmation), "两次输入的管理密码不一致。");
         if (ModelState.IsValid)
         {
             try { await administrators.Initialize(Code, Password); return RedirectToPage("/Login", new { setup = true }); }
@@ -29,6 +30,8 @@ public sealed class SetupModel(IAdministratorService administrators) : PageModel
         }
         Password = Confirmation = Code = "";
         ModelState.Remove(nameof(Password)); ModelState.Remove(nameof(Confirmation)); ModelState.Remove(nameof(Code));
+        // 清空输入时连带清掉了「再次输入密码」上的错误：两次不一致时挂回去，读屏聚焦它时读出原因。
+        if (mismatch) ModelState.AddModelError(nameof(Confirmation), "两次输入的管理密码不一致。");
         return Page();
     }
 }

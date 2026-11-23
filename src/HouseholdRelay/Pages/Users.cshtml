@@ -3,36 +3,45 @@
 @{ ViewData["Title"] = "使用者与令牌"; }
 <p class="eyebrow">个人身份</p><h1>使用者与令牌</h1>
 <p>每人一个有效令牌，最多 8 人。改显示名和轮换令牌都会保留原来的使用者身份。</p>
-<div asp-validation-summary="All" role="alert"></div>
-@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<div asp-validation-summary="All" role="alert" tabindex="-1"></div>
+<partial name="_Notice" model="Model.Notice" />
+@if (Model.FocusId is not null) { <span hidden data-focus-id="@Model.FocusId"></span> }
 @if (Model.Issued is not null)
 {
     <section class="card issued" aria-labelledby="token-heading">
-        <h2 id="token-heading">@Model.Issued.DisplayName 的新令牌</h2>
+        <h2 id="token-heading" tabindex="-1">@Model.Issued.DisplayName 的新令牌</h2>
         <p>仅本次显示。请现在复制并交给本人；离开后无法再次查看，可重新轮换。</p>
         <code id="issued-token" data-sensitive>@Model.Issued.Token</code>
         <button type="button" data-copy="issued-token">复制令牌</button><span class="copy-status" role="status"></span><p><a asp-page="/Connection">查看根地址、推荐模型和连接示例</a></p>
     </section>
 }
-<section class="card"><h2>添加使用者</h2>
+<section class="card" aria-labelledby="add-user-heading"><h2 id="add-user-heading">添加使用者</h2>
+    @{ var createError = ViewData.ModelState.FieldError(UsersModel.CreateKey); }
     <form method="post" asp-page-handler="Create" class="inline">
-        <label for="new-name">显示名</label><input id="new-name" name="displayName" maxlength="64" required placeholder="例如：小王" />
+        <label for="new-name">新使用者的显示名</label><input id="new-name" name="displayName" maxlength="64" required placeholder="例如：小王" aria-invalid="@(createError is null ? null : "true")" aria-describedby="@(createError is null ? null : "new-name-error")" />
+        @if (createError is not null) { <p id="new-name-error" class="field-error">@createError</p> }
         <button type="submit">创建并生成令牌</button>
     </form>
 </section>
+@if (Model.Users.Count == 0)
+{
+    <p class="status">还没有使用者。请在上面「添加使用者」里填显示名，按「创建并生成令牌」，再把令牌交给本人。</p>
+}
 <div class="users">
 @foreach (var user in Model.Users)
 {
-    <section class="card user" data-user-id="@user.Id">
-        <div class="row"><h2>@user.DisplayName</h2><span class="badge">@(user.Enabled ? "已启用" : "已停用") · 令牌第 @user.TokenVersion 版</span></div>
+    var renameError = ViewData.ModelState.FieldError(UsersModel.RenameKey(user.Id));
+    <section class="card user" data-user-id="@user.Id" aria-labelledby="user-@user.Id-heading">
+        <div class="row"><h2 id="user-@user.Id-heading">@user.DisplayName</h2><span class="badge">@(user.Enabled ? "已启用" : "已停用") · 令牌第 @user.TokenVersion 版</span></div>
         <form method="post" asp-page-handler="Rename" class="inline">
             <input type="hidden" name="userId" value="@user.Id" />
-            <label for="name-@user.Id">显示名</label><input id="name-@user.Id" name="displayName" value="@user.DisplayName" maxlength="64" required />
-            <button type="submit" class="secondary">保存显示名</button>
+            <label for="name-@user.Id">「@user.DisplayName」的显示名</label><input id="name-@user.Id" name="displayName" value="@user.DisplayName" maxlength="64" required aria-invalid="@(renameError is null ? null : "true")" aria-describedby="@(renameError is null ? null : $"name-{user.Id}-error")" />
+            @if (renameError is not null) { <p id="name-@user.Id-error" class="field-error">@renameError</p> }
+            <button type="submit" class="secondary" id="rename-@user.Id">保存「@user.DisplayName」的显示名</button>
         </form>
         <div class="actions">
-            <form method="post" asp-page-handler="Enable"><input type="hidden" name="userId" value="@user.Id" /><input type="hidden" name="enabled" value="@((!user.Enabled).ToString().ToLowerInvariant())" /><button type="submit" class="secondary">@(user.Enabled ? "停用（他的个人令牌立即不能用）" : "启用")</button></form>
-            <form method="post" asp-page-handler="Rotate"><input type="hidden" name="userId" value="@user.Id" /><button type="submit" class="secondary">轮换令牌（旧令牌立即失效）</button></form>
+            <form method="post" asp-page-handler="Enable"><input type="hidden" name="userId" value="@user.Id" /><input type="hidden" name="enabled" value="@((!user.Enabled).ToString().ToLowerInvariant())" /><button type="submit" class="secondary" id="enable-@user.Id">@(user.Enabled ? $"停用「{user.DisplayName}」（他的个人令牌立即不能用）" : $"启用「{user.DisplayName}」")</button></form>
+            <form method="post" asp-page-handler="Rotate"><input type="hidden" name="userId" value="@user.Id" /><button type="submit" class="secondary" id="rotate-@user.Id">轮换「@user.DisplayName」的令牌（旧令牌立即失效）</button></form>
         </div>
         <small>轮换后旧令牌立即失效。已停用的使用者轮换后仍保持停用。</small>
     </section>

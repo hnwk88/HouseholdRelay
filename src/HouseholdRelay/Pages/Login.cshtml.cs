@@ -31,7 +31,8 @@ public sealed class LoginModel(IAdministratorService administrators) : PageModel
             await HttpContext.SignInAsync(ManagementWeb.Scheme, principal, new AuthenticationProperties { IsPersistent = false });
             return RedirectToPage("/Index");
         }
-        Password = ""; ModelState.Remove(nameof(Password)); ModelState.AddModelError("", "管理密码不正确。");
+        // 错误挂到密码框上（读屏聚焦密码框时同时读出原因）；输入值清空，不回填。
+        Password = ""; ModelState.Remove(nameof(Password)); ModelState.AddModelError(nameof(Password), "管理密码不正确。");
         return Page();
     }
 }

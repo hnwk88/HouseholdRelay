@@ -160,7 +160,7 @@ static class UpstreamTransferTests
             // 预期的拒绝：读出「已经导出搬走」，不读令牌、不起续期。
             catch (InvalidOperationException error) { Check(error.Message.Contains("已经导出搬走"), error.Message); }
         }
-        var expected = "在用的「官方」已经导出搬走，本机不再用它转发、不再续期。自动切换开着：请求按「已保存的上游」的顺序交给其他测试通过的上游。";
+        var expected = "在用的「官方」已经导出搬走，本机不再用它转发、不再续期。自动切换开着：请求按「上游列表」的顺序交给其他测试通过的上游。";
         foreach (var path in new[] { "/Upstream", "/" })
         {
             var html = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + path));

@@ -6,9 +6,11 @@
     @if (Model.Setup) { <p class="notice" role="status">首次设置已完成，请使用刚设置的密码登录。</p> }
     <p>使用者调用中转时，只需自己的个人令牌。</p>
     <form method="post">
-        <div asp-validation-summary="All" role="alert"></div>
+        <div asp-validation-summary="All" role="alert" tabindex="-1"></div>
         <label asp-for="Password">管理密码</label>
-        <input asp-for="Password" type="password" autocomplete="current-password" required maxlength="128" />
+        @{ var passwordError = ViewData.ModelState.FieldError(nameof(LoginModel.Password)); }
+        <input asp-for="Password" type="password" autocomplete="current-password" required maxlength="128" aria-invalid="@(passwordError is null ? null : "true")" aria-describedby="@(passwordError is null ? null : "password-error")" />
+        @if (passwordError is not null) { <p id="password-error" class="field-error">@passwordError</p> }
         <button type="submit">登录</button>
     </form>
 </section>

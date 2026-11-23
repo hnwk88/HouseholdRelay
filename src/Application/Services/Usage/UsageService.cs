@@ -169,7 +169,7 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
         var from = (filter.From is { } since && since > cutoff ? since : cutoff).UtcTicks; var until = filter.Until?.UtcTicks; var end = now.UtcTicks;
         var kind = filter.Kind;
         var model = string.IsNullOrEmpty(filter.Model) ? null : filter.Model;
-        var outcome = filter.Outcome;
+        var outcome = filter.Outcome; var upstream = filter.UpstreamCandidateId;
         // 只读查询不开写事务：SQLite 下写事务是立即写锁，会挡住转发路径上的用量写入；汇总、分段、金额与明细出自下面同一次读取，天然对得上。
         await using var scope = scopes.CreateAsyncScope();
         var requests = scope.Repository<UsageRequest>();
@@ -177,7 +177,8 @@ public sealed class UsageService(IServiceScopeFactory scopes, TimeProvider timeP
         {
             var rows = await requests.FindAsync(item => item.RequestStartedAt >= from && item.RequestStartedAt <= end
                 && (until == null || item.RequestStartedAt < until) && (filter.UserId == null || item.UserId == filter.UserId)
-                && (kind == null || item.Kind == kind) && (model == null || item.Model == model) && (outcome == null || item.Outcome == outcome));
+                && (kind == null || item.Kind == kind) && (model == null || item.Model == model) && (outcome == null || item.Outcome == outcome)
+                && (upstream == null || item.UpstreamCandidateId == upstream));
             var names = (await scope.Repository<User>().GetAllAsync()).ToDictionary(item => item.Id, item => item.DisplayName);
             var page = UsageReportBuilder.Page(rows, names, filter);
             var pageIds = page.Select(item => item.Id).ToArray();

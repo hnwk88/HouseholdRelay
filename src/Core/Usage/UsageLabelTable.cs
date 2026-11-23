@@ -26,6 +26,9 @@ public sealed class UsageLabelTable
     /// <summary>金额来源的显示名。</summary>
     public IReadOnlyDictionary<string, string> MoneySources { get; } = Table<MoneySource>(UsageLabels.MoneySource);
 
+    /// <summary>币种代码的中文名（与 <see cref="UsageLabels.Currency"/> 同一份）；脚本查不到的代码原样读出。</summary>
+    public IReadOnlyDictionary<string, string> Currencies { get; } = UsageLabels.CurrencyNames;
+
     /// <summary>按声明顺序把每个取值的线上名对到它的显示名。</summary>
     private static IReadOnlyDictionary<string, string> Table<TEnum>(Func<TEnum, string> label) where TEnum : struct, Enum =>
         Wire<TEnum>.Values.ToDictionary(Wire<TEnum>.Name, label, StringComparer.Ordinal);

@@ -20,6 +20,12 @@ public interface IOfficialAccountLogin
     /// </summary>
     Task<string?> Import(string accountId, byte[] content, CancellationToken cancellation);
 
+    /// <summary>
+    /// 重新登录换凭据：把 <paramref name="fromAccountId"/>（刚用 <see cref="Login"/> 在临时目录里登录得到的）的凭据文件换进 <paramref name="accountId"/> 的账户目录；
+    /// 私有配置（设备编号、账户资料）不动。换的时候不起刷新、先等正在跑的刷新结束；已删除或搬走、等不完刷新时抛出 <see cref="InvalidOperationException"/>，原凭据不动。
+    /// </summary>
+    Task Adopt(string accountId, string fromAccountId);
+
     /// <summary><paramref name="accountId"/> 目录里有可用的凭据；只读文件，不刷新、不等待。</summary>
     bool HasCredential(string accountId);
 

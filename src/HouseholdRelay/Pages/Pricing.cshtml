@@ -5,8 +5,8 @@
 <p>金额优先采用上游明确返回的费用。没有返回费用时，可按这里的单价估算四类 Token 金额；没有配置则显示未知。</p>
 <p>估算不等于实际账单，不包括工具等其他收费。请按供应商的实际定价填写；缓存价格随缓存时长或方案不同时，应填写适用于当前调用的费率。</p>
 <p>费率按上游分别设置：自动切换换到哪一家，那次请求就按那一家的费率估算。历史记录保存发送时的费率。</p>
-<div asp-validation-summary="All" role="alert"></div>
-@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<div asp-validation-summary="All" role="alert" tabindex="-1"></div>
+<partial name="_Notice" model="Model.Notice" />
 @if (Model.Saved.Count == 0)
 {
     <p class="status">还没有已保存的上游。请先到 <a asp-page="/Upstream">上游接入</a> 接入一家，再回来填写费率。</p>
@@ -29,16 +29,16 @@
     <input asp-for="UpstreamCandidateId" type="hidden" />
     <div><label asp-for="ModelName">模型（精确匹配）</label><input asp-for="ModelName" maxlength="@ModelName.MaxLength" required /></div>
     <div><label asp-for="Currency">币种代码</label><input asp-for="Currency" maxlength="3" required placeholder="例如 USD 或 CNY" /></div>
-    <div><label asp-for="InputPrice">输入单价 / 百万 Token</label><input asp-for="InputPrice" type="number" min="0" max="1000000" step="any" /></div>
-    <div><label asp-for="OutputPrice">输出单价 / 百万 Token</label><input asp-for="OutputPrice" type="number" min="0" max="1000000" step="any" /></div>
-    <div><label asp-for="CacheReadPrice">缓存读取单价 / 百万 Token</label><input asp-for="CacheReadPrice" type="number" min="0" max="1000000" step="any" /></div>
-    <div><label asp-for="CacheWritePrice">缓存写入单价 / 百万 Token</label><input asp-for="CacheWritePrice" type="number" min="0" max="1000000" step="any" /></div>
+    <div><label asp-for="InputPrice">输入单价（每百万 token）</label><input asp-for="InputPrice" type="number" min="0" max="1000000" step="any" /></div>
+    <div><label asp-for="OutputPrice">输出单价（每百万 token）</label><input asp-for="OutputPrice" type="number" min="0" max="1000000" step="any" /></div>
+    <div><label asp-for="CacheReadPrice">缓存读取单价（每百万 token）</label><input asp-for="CacheReadPrice" type="number" min="0" max="1000000" step="any" /></div>
+    <div><label asp-for="CacheWritePrice">缓存写入单价（每百万 token）</label><input asp-for="CacheWritePrice" type="number" min="0" max="1000000" step="any" /></div>
     <div class="full"><p>未知单价留空，明确免费才填 0。缺少用量或单价时，已有部分金额会标记为不完整。</p><button type="submit">保存估算费率</button> <a asp-page="/Usage">返回用量</a></div>
 </form>
 @foreach (var price in Model.Prices)
 {
-    <section class="card"><h2>@price.Model · @price.Currency</h2>
-        <p>每百万 Token：输入 @(price.InputPerMillion?.ToString() ?? "未知") · 输出 @(price.OutputPerMillion?.ToString() ?? "未知") · 缓存读 @(price.CacheReadPerMillion?.ToString() ?? "未知") · 缓存写 @(price.CacheWritePerMillion?.ToString() ?? "未知")</p>
-        <a asp-page="/Pricing" asp-route-upstreamCandidateId="@Model.Selected.Id" asp-route-modelName="@price.Model">调整此模型费率</a>
+    <section class="card" aria-labelledby="price-@(Model.Prices.ToList().IndexOf(price))"><h2 id="price-@(Model.Prices.ToList().IndexOf(price))">@price.Model，@UsageLabels.Currency(price.Currency)</h2>
+        <p>每百万 token 的单价：输入 @PricingModel.PriceText(price.InputPerMillion, price.Currency)，输出 @PricingModel.PriceText(price.OutputPerMillion, price.Currency)，缓存读取 @PricingModel.PriceText(price.CacheReadPerMillion, price.Currency)，缓存写入 @PricingModel.PriceText(price.CacheWritePerMillion, price.Currency)</p>
+        <a asp-page="/Pricing" asp-route-upstreamCandidateId="@Model.Selected.Id" asp-route-modelName="@price.Model">调整「@price.Model」的费率</a>
     </section>
 }

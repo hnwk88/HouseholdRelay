@@ -57,6 +57,9 @@ public sealed class PricingModel(IUsagePricingService pricing, IUpstreamService 
         await Load();
     }
 
+    /// <summary>一项单价的读法：「3 美元」；没填（未知）读「未知」。</summary>
+    public static string PriceText(decimal? value, string currency) => value is { } known ? UsageLabels.Amount(known, currency) : "未知";
+
     /// <summary>读取已保存上游列表与在用那一家，确定所选上游，再读它的单价列表；GET 与 POST 渲染前都会调用。</summary>
     private async Task Load()
     {

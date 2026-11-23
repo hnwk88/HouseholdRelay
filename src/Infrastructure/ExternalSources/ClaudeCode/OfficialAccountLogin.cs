@@ -52,6 +52,8 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     private readonly HashSet<string> _removed = new(StringComparer.Ordinal);
     /// <summary>已导出搬走的账户主键；与 <see cref="_refreshes"/> 同一把锁，搬走后不再起刷新，账户目录留着等管理员删除。</summary>
     private readonly HashSet<string> _moved = new(StringComparer.Ordinal);
+    /// <summary>正在换上重新登录得到的凭据的账户主键；与 <see cref="_refreshes"/> 同一把锁，换的这一小会儿不起刷新，免得 CLI 与换文件同时改写凭据。</summary>
+    private readonly HashSet<string> _adopting = new(StringComparer.Ordinal);
     /// <summary>搬走时最多等正在跑的刷新结束这么久：刷新本身限时 60 秒，多留一点余量。</summary>
     private static readonly TimeSpan _moveWait = TimeSpan.FromSeconds(70);
     /// <summary>每个账户最近见到的访问令牌哈希与凭据代次；只在内存，服务重启从 1 重新开始（会话也随重启失效）。</summary>
@@ -281,6 +283,37 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
     }
 
     /// <summary>
+    /// 重新登录换凭据：把 <paramref name="fromAccountId"/>（刚在临时目录里登录得到的）的凭据文件换进 <paramref name="accountId"/> 的账户目录，账户目录里的私有配置（设备编号、账户资料）原样不动。
+    /// 换之前不再起刷新，并等正在跑的刷新自己结束（最多 <see cref="_moveWait"/>，不取消，免得 CLI 死在改写凭据文件的半途）；先写同目录的临时文件再整份替换，读的一方不会读到半截。
+    /// 已删除或搬走的账户、等不完刷新时拒绝，原凭据不动。临时目录由调用方删除。
+    /// </summary>
+    public async Task Adopt(string accountId, string fromAccountId)
+    {
+        var directory = Directory(accountId); var source = Path.Combine(Directory(fromAccountId), OfficialCredential.FileName);
+        Task? running;
+        // 判断已删除或搬走、登记「正在换」与取出正在跑的刷新在同一把锁里：否则刷新可能在两步之间登记，与换文件同时改写凭据。
+        lock (_refreshes)
+        {
+            if (_removed.Contains(accountId) || _moved.Contains(accountId)) throw new InvalidOperationException("这个官方账户已经删除或搬走，本机不再用它，不能重新登录。");
+            if (!_adopting.Add(accountId)) throw new InvalidOperationException("这个官方账户正在换上新的登录，请等这一次结束再看结果。");
+            running = _refreshes.TryGetValue(accountId, out var last) && !last.Task.IsCompleted ? last.Task : null;
+        }
+        try
+        {
+            // 有刷新正在跑：等它自己结束（不取消，CLI 可能正在改写凭据文件），等不到就不换，免得两边同时写同一个文件。
+            if (running is not null && await Task.WhenAny(running, Task.Delay(_moveWait)) != running)
+                throw new InvalidOperationException("这个官方账户正在续期，等了一会儿还没结束，没有换上新的登录。请稍后再按「重新登录」。");
+            var temporary = Path.Combine(directory, OfficialCredential.FileName + ".relogin");
+            File.Copy(source, temporary, true);
+            File.Move(temporary, Path.Combine(directory, OfficialCredential.FileName), true);
+            // 换上的是新凭据：清掉上一次刷新的登记，快到期时不必再等刷新间隔。
+            lock (_refreshes) _refreshes.Remove(accountId);
+        }
+        // 无论换成没换成都撤掉「正在换」的登记，这个账户照常续期；换失败时原凭据文件没被动过。
+        finally { lock (_refreshes) _adopting.Remove(accountId); }
+    }
+
+    /// <summary>
     /// 导出即搬走：先记为已搬走（此后不再起刷新），等这些账户正在跑的刷新自己结束（最多 <see cref="_moveWait"/>，不取消，免得 CLI 死在改写凭据文件的半途），
     /// 再按顺序读出各自的凭据文件原文交给 <paramref name="commit"/>（加密打包并在库里记为已导出）。读不到凭据、等不完刷新或 <paramref name="commit"/> 抛出时，
     /// 本次新记的账户恢复续期，异常原样抛出；读出的文件字节无论成败都清零。账户目录不删。
@@ -318,7 +351,7 @@ internal sealed class OfficialAccountLogin : IOfficialAccountLogin
         // 并发请求同时发现令牌快到期：查上一次刷新与登记新刷新必须在同一把锁里，否则会各起一个 CLI 同时改写凭据文件。
         lock (_refreshes)
         {
-            if (_removed.Contains(accountId) || _moved.Contains(accountId)) return Task.CompletedTask;
+            if (_removed.Contains(accountId) || _moved.Contains(accountId) || _adopting.Contains(accountId)) return Task.CompletedTask;
             if (_refreshes.TryGetValue(accountId, out var last) && (!last.Task.IsCompleted || _clock.GetUtcNow() - last.StartedAt < _refreshInterval)) return last.Task;
             var operation = _siteIdentity.Enter();
             var stop = new CancellationTokenSource();

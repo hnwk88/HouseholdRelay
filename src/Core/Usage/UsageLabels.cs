@@ -20,8 +20,29 @@ public static class UsageLabels
         UsageCompleteness.NotProvided => "上游未提供", UsageCompleteness.NotApplicable => "不适用"
     };
 
-    /// <summary>按当前区域格式显示带千分位的计数；null 显示为「未知」而不是 0。</summary>
+    /// <summary>按当前区域格式显示带千分位的计数，不带单位（单位写在表头或读句里）；null 显示为「未知」而不是 0。</summary>
     public static string Count(long? value) => value?.ToString("N0") ?? "未知";
+
+    /// <summary>token 计数的读法：「12,345 个 token」；null 读「未知」，不读成 0 个。</summary>
+    public static string Tokens(long? value) => value is null ? "未知" : Count(value) + " 个 token";
+
+    /// <summary>请求次数的读法：「30 次」。</summary>
+    public static string Times(long value) => Count(value) + " 次";
+
+    /// <summary>
+    /// 币种代码到中文名的唯一一份映射，C# 页面经 <see cref="Currency"/> 读，页面脚本经 <see cref="UsageLabelTable.Currencies"/> 读。
+    /// 只收常见的几种；认不出的代码原样读出，不猜。
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, string> CurrencyNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["USD"] = "美元", ["CNY"] = "人民币", ["EUR"] = "欧元", ["GBP"] = "英镑", ["JPY"] = "日元", ["HKD"] = "港元",
+    };
+
+    /// <summary>币种的中文名，例如 USD 读「美元」；认不出的代码原样读出。</summary>
+    public static string Currency(string code) => CurrencyNames.GetValueOrDefault(code, code);
+
+    /// <summary>金额数加中文币种名：「0.53 美元」，最多 9 位小数。</summary>
+    public static string Amount(decimal amount, string currency) => amount.ToString("0.#########") + " " + Currency(currency);
 
     /// <summary>金额来源的中文名；来源未知（没有报告也没有单价）读「未知」。</summary>
     public static string MoneySource(MoneySource value) => value switch
@@ -74,7 +95,7 @@ public static class UsageLabels
         }));
     }
 
-    /// <summary>把一笔金额格式化为「数值 币种 · 来源」，最多 9 位小数，部分完整时追加「（部分）」；不适用和金额未知分别显示对应文字。</summary>
+    /// <summary>把一笔金额格式化为「数值 中文币种名 · 来源」，最多 9 位小数，部分完整时追加「（部分）」；不适用和金额未知分别显示对应文字。</summary>
     public static string Money(UsageMoney value) => value.Source == Usage.MoneySource.NotApplicable ? "不适用" : value.Amount is null ? "未知"
-        : value.Amount.Value.ToString("0.#########") + " " + value.Currency + " · " + MoneySource(value.Source) + (value.Completeness == MoneyCompleteness.Partial ? "（部分）" : "");
+        : Amount(value.Amount.Value, value.Currency ?? "") + " · " + MoneySource(value.Source) + (value.Completeness == MoneyCompleteness.Partial ? "（部分）" : "");
 }

@@ -3,8 +3,8 @@
 @{ ViewData["Title"] = "思域"; }
 <p class="eyebrow">官方账户</p><h1>思域</h1>
 <p>思域是 MyCoAI 里经中转使用官方账户的启动方式。这里列出正在用思域的会话：谁在用、用哪个官方账户、还开着几条连接。</p>
-<div asp-validation-summary="All" role="alert"></div>
-@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<div asp-validation-summary="All" role="alert" tabindex="-1"></div>
+<partial name="_Notice" model="Model.Notice" />
 <section class="card" aria-labelledby="siyu-state">
     <h2 id="siyu-state">状态</h2>
     @if (!Model.Enabled)

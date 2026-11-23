@@ -3,7 +3,9 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>@ViewData["Title"] · Household Relay</title>
+    @* 标题在页面正文之后才生成：回发的结果（操作提示或第一条错误）由正文写进本次请求，读屏打开页面先听到结果（P-029）。 *@
+    @{ var result = HouseholdRelay.Pages.Notices.TitleResult(ViewData.ModelState, Context.Items[HouseholdRelay.Pages.Notices.ResultKey]); }
+    <title>@(result is null ? "" : result + " · ")@ViewData["Title"] · Household Relay</title>
     <link rel="stylesheet" href="~/site.css" asp-append-version="true" />
 </head>
 <body>

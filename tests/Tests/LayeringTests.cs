@@ -260,7 +260,7 @@ static class LayeringTests
         Check(RelayRoutes.Exposed.Count == 3 && RelayRoutes.Kind(RelayRoutes.Models) == UsageKind.Models && UpstreamAddress.Endpoint(new UpstreamOptions { BaseUrl = "https://api.example.test" }, RelayRoutes.CountTokens).AbsolutePath.EndsWith("/count_tokens", StringComparison.Ordinal));
     }
 
-    /// <summary>P-048/P-052/P-119：报告带显示名表与分页结论，个人页脚本与管理页只读它；静态个人页的下拉框与 Core 的取值和中文名一致。</summary>
+    /// <summary>P-048/P-052/P-119/P-038：报告带显示名表与分页结论，个人页脚本与管理页只读它；静态个人页的下拉框不再手抄，只留「全部」，其余选项由脚本按 /my-usage/labels（Core 那一份）填。</summary>
     public static Task ReportCarriesLabelsAndPaging()
     {
         UsageReport Report(int page, long total) => new(DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, page, UsageFilter.PageSize, total, [], [], 0);
@@ -272,11 +272,12 @@ static class LayeringTests
             && labels.GetProperty("outcomes").GetProperty("started").GetString() == "处理中 / 待写入"
             && json.IndexOf("\"periods\"", StringComparison.Ordinal) < json.IndexOf("\"labels\"", StringComparison.Ordinal), json);
         var page = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "wwwroot", "my-usage.html"));
-        Check(page.Contains("<option value=\"\">全部接口</option>" + string.Concat(Wire<UsageKind>.Values.Select(kind => $"<option value=\"{Wire<UsageKind>.Name(kind)}\">{UsageLabels.Kind(kind)}</option>")), StringComparison.Ordinal)
-            && page.Contains("<option value=\"\">全部结果</option>" + string.Concat(Wire<UsageOutcome>.Values.Select(outcome => $"<option value=\"{Wire<UsageOutcome>.Name(outcome)}\">{UsageLabels.Outcome(outcome)}</option>")), StringComparison.Ordinal),
-            "my-usage.html options must match the Core labels");
+        Check(page.Contains("<select id=\"kind\"><option value=\"\">全部接口</option></select>", StringComparison.Ordinal)
+            && page.Contains("<select id=\"outcome\"><option value=\"\">全部结果</option></select>", StringComparison.Ordinal),
+            "my-usage.html must not copy the option labels by hand");
         var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "wwwroot", "usage-personal.js"));
-        Check(!script.Contains("'推理'", StringComparison.Ordinal) && script.Contains("report.hasNext", StringComparison.Ordinal), "The personal script must read labels and paging from the report");
+        Check(!script.Contains("'推理'", StringComparison.Ordinal) && !script.Contains("'美元'", StringComparison.Ordinal) && script.Contains("report.hasNext", StringComparison.Ordinal)
+            && script.Contains("'/my-usage/labels'", StringComparison.Ordinal), "The personal script must read labels, currencies and paging from the server");
         return Task.CompletedTask;
     }
 

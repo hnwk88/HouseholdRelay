@@ -63,7 +63,7 @@ async function readingOrder(page, name) {
 async function candidate(page, url, upstreamUrl, mode, secret, name) {
     await page.goto(url + '/Upstream');
     const account = mode === 'oauth';
-    const form = page.locator('section', { has: page.getByRole('heading', { name: account ? '官方账户' : 'API 供应商', exact: true }) });
+    const form = page.getByRole('region', { name: account ? '官方账户' : 'API 供应商', exact: true });
     await form.getByLabel(account ? '账户名称' : '供应商名称', { exact: true }).fill(name);
     await form.getByLabel(account ? '贴令牌用的上游地址' : '上游地址', { exact: true }).fill(upstreamUrl + '/gateway/v1?tenant=browser');
     await form.getByLabel(account ? '账户访问令牌' : 'API 密钥', { exact: true }).fill(secret);
@@ -94,7 +94,7 @@ async function testAndSwitch(page, name, authentication, shot, secret, order) {
 async function officialLogin(page, url, upstreamUrl, scenario, name) {
     await fs.writeFile(scenarioFile, scenario, 'utf8');
     await page.goto(url + '/Upstream');
-    const form = page.locator('section', { has: page.getByRole('heading', { name: '官方账户', exact: true }) });
+    const form = page.getByRole('region', { name: '官方账户', exact: true });
     await form.getByLabel('账户名称（可不填，不填就用登录邮箱）', { exact: true }).fill(name);
     await form.getByText('登录的高级设置（一般不用改）', { exact: true }).click();
     await form.getByLabel('登录用的上游地址', { exact: true }).fill(upstreamUrl + '/gateway/v1?tenant=browser');
@@ -107,7 +107,7 @@ async function officialLogin(page, url, upstreamUrl, scenario, name) {
 // 按「导入登录文件」：选一份凭据文件（buffer），名称可空；返回页面读出的那句话（成功读状态，失败读错误）。
 async function importLogin(page, url, upstreamUrl, content, name) {
     await page.goto(url + '/Upstream');
-    const form = page.locator('section', { has: page.getByRole('heading', { name: '官方账户', exact: true }) });
+    const form = page.getByRole('region', { name: '官方账户', exact: true });
     await form.getByLabel('登录文件（.credentials.json）', { exact: true }).setInputFiles({ name: '.credentials.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(content)) });
     await form.getByLabel('导入的账户名称（可不填，不填就用登录邮箱）', { exact: true }).fill(name);
     await form.getByText('导入的高级设置（一般不用改）', { exact: true }).click();
@@ -122,7 +122,7 @@ async function importLogin(page, url, upstreamUrl, content, name) {
 async function duplicateNames(page) {
     await page.locator('details').evaluateAll(items => items.forEach(item => { item.open = true; }));
     const sections = await page.locator('main section').evaluateAll(items => items.map(section => ({
-        section: section.querySelector('h2')?.textContent.trim() ?? '',
+        section: section.querySelector('h2, h3')?.textContent.trim() ?? '',
         inputs: [...section.querySelectorAll('input:not([type=hidden]), select, textarea')]
             .map(input => (input.labels?.[0]?.textContent ?? input.getAttribute('aria-label') ?? '').trim()),
         summaries: [...section.querySelectorAll('summary')].map(summary => summary.textContent.trim())
@@ -133,15 +133,38 @@ async function duplicateNames(page) {
         duplicates: sections.flatMap(item => [...repeated(item.inputs), ...repeated(item.summaries)].map(name => item.section + '：' + name)), sections
     };
 }
-// 在上游页勾选或取消「自动切换」并保存；返回页面读出的那句提示。
+// 在上游页按「自动切换」开关（role=switch，一个按钮）；先核对它读出的开关状态，按下后核对状态翻转、焦点回到开关上；返回页面读出的那句提示。
 async function failover(page, url, enabled) {
     await page.goto(url + '/Upstream');
-    const box = page.getByLabel('在用的上游失败时自动换到其他上游', { exact: true });
-    assert.equal(await box.isChecked(), !enabled);
-    await box.setChecked(enabled);
-    await page.getByRole('button', { name: '保存自动切换设置', exact: true }).click();
+    const toggle = () => page.getByRole('switch', { name: '在用的上游失败时自动换到其他上游', exact: true });
+    assert.equal(await toggle().getAttribute('aria-checked'), String(!enabled));
+    await toggle().focus(); await page.keyboard.press('Space');
     const said = page.getByRole('status').filter({ hasText: enabled ? '自动切换已打开' : '自动切换已关闭' }); await said.waitFor();
+    assert.equal(await toggle().getAttribute('aria-checked'), String(enabled));
+    assert.equal(await focusedId(page), 'failover-switch', '按开关后焦点回到开关上');
     return (await said.textContent()).trim();
+}
+// 此刻焦点所在元素的编号。
+const focusedId = page => page.evaluate(() => document.activeElement?.id ?? '');
+const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// 上游列表里那一家的菜单按钮（名字以「上游名，」开头）与它的菜单（以按钮为名）。
+const upstreamButton = (page, name) => page.getByRole('button', { name: new RegExp('^' + escapeRegExp(name) + '，') }).first();
+const upstreamMenu = (page, name) => page.getByRole('menu', { name: new RegExp('^' + escapeRegExp(name) + '，') }).first();
+// 用键盘打开那一家的菜单（默认空格，负责人定的读屏最稳的那个键），核对焦点进了第一项。
+async function openMenu(page, name, key = 'Space') {
+    const button = upstreamButton(page, name); await button.focus(); await page.keyboard.press(key);
+    const menu = upstreamMenu(page, name); await menu.waitFor();
+    assert.equal(await button.getAttribute('aria-expanded'), 'true');
+    return { button, menu };
+}
+// 打开那一家的菜单，用下箭头走到 label 那一项，按回车执行（菜单项是链接或提交按钮）。
+async function menuAction(page, name, label) {
+    const { menu } = await openMenu(page, name);
+    const items = await menu.getByRole('menuitem').allTextContents(); const index = items.indexOf(label);
+    assert.ok(index >= 0, `「${name}」的菜单里没有「${label}」：${items.join('、')}`);
+    for (let step = 0; step < index; step++) await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), label);
+    await page.keyboard.press('Enter');
 }
 async function relay(url, token, stream = false) {
     return fetch(url + '/v1/messages?beta=true', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'content-type': 'application/json', 'anthropic-beta': 'future-beta' },
@@ -212,7 +235,7 @@ async function relay(url, token, stream = false) {
     const switchedOn = await failover(page, url, true);
     assert.equal((await relay(url, token)).status, 200);
     await page.goto(url + '/Upstream');
-    const routing = (await page.locator('section', { has: page.getByRole('heading', { name: '自动切换', exact: true }) }).locator('p.status').textContent()).trim();
+    const routing = (await page.locator('#routing').textContent()).trim();
     assert.ok(routing.startsWith('此刻走的是「浏览器 API」，') && routing.includes('「浏览器账户」认证失败已暂停，重新测试并切换后恢复。'), routing);
     assert.equal((await page.content()).includes(accountSecret), false);
     await readingOrder(page, '23-upstream-failover'); await screenshot(page, '23-upstream-failover'); rejectAccount = false;
@@ -220,9 +243,9 @@ async function relay(url, token, stream = false) {
     steps.push('打开自动切换时读出：' + switchedOn + ' 同一个请求由备用的「浏览器 API」接住（200），上游页读出：' + routing);
     await candidate(page, url, upstreamUrl, 'oauth', accountSecret, '浏览器账户（新令牌）'); assert.equal((await relay(url, token)).status, 200);
     // 上游回 503（地区屏蔽）：读句指向代理出口而不是地址；上游恢复后对已保存的上游按「重新获取模型」，不重贴密钥、不新增上游；再删掉它，已保存数量减 1。
-    const savedCount = async () => Number((await page.getByRole('heading', { name: /^已保存的上游（\d+ 个）$/ }).textContent()).match(/\d+/)[0]);
+    const savedCount = async () => Number((await page.getByRole('heading', { name: /^上游列表（\d+ 个）$/ }).textContent()).match(/\d+/)[0]);
     regionBlocked = true; await page.goto(url + '/Upstream');
-    const api = page.locator('section', { has: page.getByRole('heading', { name: 'API 供应商', exact: true }) });
+    const api = page.getByRole('region', { name: 'API 供应商', exact: true });
     await api.getByLabel('供应商名称', { exact: true }).fill('顺丰中转');
     await api.getByLabel('上游地址', { exact: true }).fill(upstreamUrl + '/gateway/v1?tenant=browser');
     await api.getByLabel('API 密钥', { exact: true }).fill(regionSecret);
@@ -235,14 +258,14 @@ async function relay(url, token, stream = false) {
     assert.equal(blockedText.includes('检查地址'), false); assert.equal((await page.content()).includes(regionSecret), false);
     await screenshot(page, '19-region-blocked'); const before = await savedCount();
     regionBlocked = false;
-    await page.getByRole('button', { name: '重新获取「顺丰中转」的模型（不花额度）', exact: true }).click();
+    await menuAction(page, '顺丰中转', '重新获取模型（不花额度）');
     const again = page.getByRole('status').filter({ hasText: '已重新获取「顺丰中转」的模型。' }); await again.waitFor();
     const againText = (await again.textContent()).trim();
     assert.ok(againText.startsWith('已重新获取「顺丰中转」的模型。已获取 1 个模型'), againText);
     assert.equal(await savedCount(), before, '重新获取模型不得新增上游');
     // 后台检测：上游一直不回目录时按「重新获取」，页面马上回来，状态区是礼貌朗读区、读得出「正在获取模型」；按「取消检测」后读出「检测未完成」，不按刷新。
     slowModels = true;
-    await page.getByRole('button', { name: '重新获取「顺丰中转」的模型（不花额度）', exact: true }).click();
+    await menuAction(page, '顺丰中转', '重新获取模型（不花额度）');
     const running = page.locator('#check-status'); await running.waitFor();
     assert.equal(await running.getAttribute('aria-live'), 'polite'); assert.equal(await running.getAttribute('role'), 'status');
     assert.equal((await running.textContent()).trim(), '正在获取模型，结果出来会自动读出。');
@@ -252,14 +275,46 @@ async function relay(url, token, stream = false) {
     const stoppedText = (await stopped.first().textContent()).trim(); slowModels = false;
     assert.equal(await page.getByRole('button', { name: '取消检测', exact: true }).count(), 0, '结束后不再有取消按钮');
     steps.push('后台检测：上游不回目录时按「重新获取」，页面马上回来，状态区（role=status，aria-live=polite）读「正在获取模型，结果出来会自动读出。」；按「取消检测」读出：' + stoppedText);
-    assert.equal(await page.getByRole('button', { name: '删除「浏览器账户（新令牌）」', exact: true }).count(), 0, '当前使用中的上游不能出删除按钮');
-    await page.getByLabel('确认删除「顺丰中转」（删除后不能恢复）', { exact: true }).check();
-    await page.getByRole('button', { name: '删除「顺丰中转」', exact: true }).click();
-    const deleted = page.getByRole('status').filter({ hasText: '已删除「顺丰中转」' }); await deleted.waitFor();
-    assert.equal((await deleted.textContent()).trim(), '已删除「顺丰中转」，没有用量或单价引用它，本机已清除它的密钥。');
-    assert.equal(await savedCount(), before - 1); assert.equal(await page.getByRole('heading', { name: '顺丰中转', exact: true }).count(), 0);
+    // 在用的那一家的菜单里没有「删除」；看完按 Esc 关菜单，焦点回到它的按钮上。
+    {
+        const { button, menu } = await openMenu(page, '浏览器账户（新令牌）');
+        assert.equal(await menu.getByRole('menuitem', { name: '删除', exact: true }).count(), 0, '当前使用中的上游菜单里不能有删除');
+        await page.keyboard.press('Escape'); assert.equal(await button.getAttribute('aria-expanded'), 'false');
+        assert.equal(await page.evaluate(() => document.activeElement.textContent.trim().startsWith('浏览器账户（新令牌），')), true, 'Esc 后焦点回到按钮');
+    }
+    // 改名：菜单「改名」进只管这一家的小表单，焦点在新名称输入框；先交空名读出挂在输入框上的错误，再改成「顺丰快线」，焦点回到这一家的按钮并读出结果。
+    await menuAction(page, '顺丰中转', '改名'); await page.waitForURL(/rename=/);
+    assert.equal(await focusedId(page), 'rename-name', '改名小表单打开后焦点在新名称输入框：' + page.url() + ' 脚本错误 ' + JSON.stringify(errors) + ' 点名 ' + await page.locator('[data-focus-id]').getAttribute('data-focus-id').catch(() => '无'));
+    await page.keyboard.press('Control+A'); await page.keyboard.press('Delete'); await page.keyboard.type(' ');
+    await page.getByRole('button', { name: '保存新名称', exact: true }).click(); await page.waitForLoadState('load');
+    assert.equal(await focusedId(page), 'rename-name', '改名出错后焦点回到出错的输入框');
+    assert.equal(await page.locator('#rename-name').getAttribute('aria-invalid'), 'true');
+    const renameError = (await page.locator('#rename-name-error').textContent()).trim();
+    assert.equal(await page.locator('#rename-name').getAttribute('aria-describedby'), 'rename-name-error');
+    await page.locator('#rename-name').fill('顺丰快线'); await page.getByRole('button', { name: '保存新名称', exact: true }).click();
+    const renamed = page.getByRole('status').filter({ hasText: '已改名为「顺丰快线」。' }); await renamed.waitFor();
+    assert.ok((await page.evaluate(() => document.activeElement.textContent.trim())).startsWith('顺丰快线，'), '改名后焦点回到这一家的按钮');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-describedby')), 'notice', '回到按钮时读出改名结果');
+    assert.ok((await page.title()).startsWith('已改名为「顺丰快线」。 · 上游接入'), '标题带结果：' + await page.title());
+    await readingOrder(page, '19c-upstream-renamed');
+    // 删除：菜单「删除」进确认小表单，焦点在确认勾选框；不勾就按，错误挂到勾选框上；勾上再按，焦点去列表里的下一家。
+    await menuAction(page, '顺丰快线', '删除'); await page.waitForURL(/delete=/);
+    assert.equal(await focusedId(page), 'delete-confirm', '删除小表单打开后焦点在确认勾选框');
+    await page.locator('#delete-confirm').evaluate(box => box.removeAttribute('required'));
+    await page.getByRole('button', { name: '删除「顺丰快线」', exact: true }).click(); await page.waitForLoadState('load');
+    assert.equal(await focusedId(page), 'delete-confirm', '没勾确认时焦点回到勾选框');
+    assert.equal(await page.locator('#delete-confirm').getAttribute('aria-invalid'), 'true');
+    await page.getByLabel('确认删除「顺丰快线」（删除后不能恢复）', { exact: true }).check();
+    await page.getByRole('button', { name: '删除「顺丰快线」', exact: true }).click();
+    const deleted = page.getByRole('status').filter({ hasText: '已删除「顺丰快线」' }); await deleted.waitFor();
+    assert.equal((await deleted.textContent()).trim(), '已删除「顺丰快线」，没有用量或单价引用它，本机已清除它的密钥。');
+    assert.equal(await savedCount(), before - 1); assert.equal(await upstreamButton(page, '顺丰快线').count(), 0);
+    const afterDelete = await page.evaluate(() => document.activeElement.className + '|' + document.activeElement.textContent.trim());
+    assert.ok(afterDelete.startsWith('upstream-button|') || afterDelete.startsWith('|上游列表'), '删除后焦点去下一家或列表标题：' + afterDelete);
     await readingOrder(page, '20-upstream-after-delete'); await screenshot(page, '20-upstream-after-delete');
-    steps.push('上游回 503（模拟地区屏蔽）时读出：' + blockedText + ' 恢复后按「重新获取模型」读出：' + againText + ` 已保存数量仍为 ${before}；勾选确认后删除「顺丰中转」，已保存数量变为 ${before - 1}；当前使用中的上游没有删除按钮。`);
+    steps.push('菜单「改名」：焦点进新名称输入框；交空名时错误挂到输入框（aria-invalid、aria-describedby）读出「' + renameError + '」；改成「顺丰快线」后焦点回到这一家的按钮，按钮同时读出结果，标题以结果开头。');
+    steps.push('菜单「删除」：焦点进确认勾选框；不勾就按时错误挂到勾选框；勾上删除后焦点落到：' + afterDelete.split('|')[1] + '。在用的那一家菜单里没有「删除」，Esc 关菜单后焦点回按钮。');
+    steps.push('上游回 503（模拟地区屏蔽）时读出：' + blockedText + ' 恢复后从菜单按「重新获取模型」读出：' + againText + ` 已保存数量仍为 ${before}；改名后勾选确认删除，已保存数量变为 ${before - 1}。`);
     // 登录官方账户（假 Claude Code）：先取消，读出原因、不新增上游、不留账户目录；再成功，名称留空用登录邮箱，测试、切换后转发用登录令牌。
     const accounts = path.join(temporary, '.state', 'official-accounts');
     const cancelled = await officialLogin(page, url, upstreamUrl, 'cancel', '取消的登录');
@@ -273,11 +328,22 @@ async function relay(url, token, stream = false) {
     const audit = await duplicateNames(page);
     await fs.writeFile(path.join(output, 'duplicate-names.json'), JSON.stringify(audit, null, 2), 'utf8');
     assert.deepEqual(audit.duplicates, [], '同一区域里不能有可访问名称相同的输入框或折叠标题');
-    const accountBlock = page.locator('section', { has: page.getByRole('heading', { name: '官方账户', exact: true }) });
+    const accountBlock = page.getByRole('region', { name: '官方账户', exact: true });
     await fs.writeFile(path.join(output, '17-official-account-block.aria.yml'), await accountBlock.ariaSnapshot(), 'utf8');
     await testAndSwitch(page, loginEmail, 'Bearer', '18-official-login-tested', loginToken);
     assert.equal((await relay(url, token)).status, 200);
     assert.ok(calls.some(call => call.mode === 'login' && call.path.includes('/messages')));
+    // 重新登录（负责人 2026-11-23 加）：菜单「重新登录」在原来那一家上换上新登录，上游数不变、账户目录还是一个，焦点回到这一家的按钮并读出结果。
+    {
+        const countBefore = await savedCount(), directoriesBefore = readdirSync(accounts).length;
+        await page.goto(url + '/Upstream'); await menuAction(page, loginEmail, '重新登录（主键和思域设置不变）');
+        const relogged = page.getByRole('status').filter({ hasText: `已重新登录「${loginEmail}」` }); await relogged.first().waitFor({ timeout: 60000 });
+        const reloggedText = (await relogged.first().textContent()).trim();
+        assert.equal(await savedCount(), countBefore); assert.equal(readdirSync(accounts).length, directoriesBefore);
+        assert.ok((await page.evaluate(() => document.activeElement.textContent.trim())).startsWith(loginEmail + '，'), '重新登录后焦点回到这一家的按钮');
+        assert.equal((await relay(url, token)).status, 200);
+        steps.push('菜单「重新登录」（假 Claude Code）读出：' + reloggedText + ` 上游仍是 ${countBefore} 家、账户目录仍是 ${directoriesBefore} 个，焦点回到这一家的按钮，转发照常。`);
+    }
     assert.equal(readdirSync(accounts).length, 1);
     const windows = (await fs.readFile(path.join(accounts, readdirSync(accounts)[0], 'fake-windows.log'), 'utf8')).trim().split('\n');
     await fs.writeFile(path.join(output, 'fake-claude-windows.log'), windows.join('\n') + '\n', 'utf8');
@@ -306,7 +372,7 @@ async function relay(url, token, stream = false) {
     // 再把文件导入回本实例：先输错密码，读出原因、不新增；再输对，按原顺序排到最后、尚未测试。官方账户没勾，照常转发。
     const exportPassword = 'fixture-browser-export-password';
     await page.goto(url + '/Upstream');
-    const transfer = page.locator('section', { has: page.getByRole('heading', { name: '搬到另一套中转：导出与导入', exact: true }) });
+    const transfer = page.getByRole('region', { name: '搬到另一套中转：导出与导入', exact: true });
     const exportWarning = (await transfer.locator('p.status').textContent()).trim();
     assert.ok(exportWarning.startsWith(`在用的「${loginEmail}」是登录得到的官方账户，勾选它导出后它就搬走了：自动切换开着`), exportWarning);
     for (const box of await transfer.getByRole('checkbox').all()) await box.uncheck();
@@ -338,11 +404,50 @@ async function relay(url, token, stream = false) {
     const importedUpstreams = await importUpstreams(exportPassword, '已导入');
     assert.equal(importedUpstreams, '已导入 1 家上游：「浏览器 API」，都排在已有上游后面，尚未测试。下一步：逐家按「选择模型并测试」，测试通过后再切换。');
     assert.equal(await savedCount(), beforeImport + 1);
-    const lastSaved = (await page.locator('article.saved-upstream h3').last().textContent()).trim(); assert.equal(lastSaved, '浏览器 API');
+    const lastSaved = (await page.locator('li.saved-upstream .upstream-button').last().textContent()).trim(); assert.ok(lastSaved.startsWith('浏览器 API，'), lastSaved);
     assert.equal((await page.content()).includes(apiSecret), false); assert.equal((await relay(url, token)).status, 200);
     await readingOrder(page, '25-upstream-imported'); await screenshot(page, '25-upstream-imported');
     steps.push('导出表单事先读出：' + exportWarning + ' 只勾「浏览器 API」导出时读出：' + exportedText + ' 浏览器自动下载了加密文件，文件头 HRUPSTREAM，里面找不到密钥。');
     steps.push('导入同一个文件：输错密码读出「' + wrongPassword + '」，已保存数量不变；输对读出「' + importedUpstreams + `」，已保存数量 ${beforeImport} → ${beforeImport + 1}，新的一家排在最后。`);
+    // 菜单键盘全路径（WAI-ARIA APG Menu Button）：每家只有一个 Tab 停靠点；空格、回车、下箭头、上箭头、应用键、Shift+F10、右键都能打开；
+    // 菜单里上下键循环移动、Home、End 到头尾；Esc 关闭并把焦点还给按钮；Tab 关闭菜单、焦点走到下一家的按钮；回车执行「查看用量」跳到只看这一家的用量页。
+    await page.goto(url + '/Upstream');
+    const tabStops = await page.locator('li.saved-upstream').evaluateAll(items => items.filter(item => !item.querySelector('.upstream-panel')).map(item =>
+        [...item.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].filter(node => node.tabIndex >= 0 && !node.closest('[hidden]') && node.type !== 'hidden').length));
+    assert.ok(tabStops.length >= 2 && tabStops.every(count => count === 1), '每家只有一个可 Tab 到的按钮：' + tabStops.join(','));
+    const firstButton = page.locator('li.saved-upstream .upstream-button').first(), firstName = (await firstButton.textContent()).trim().split('，')[0];
+    const itemsOf = async () => upstreamMenu(page, firstName).getByRole('menuitem').allTextContents();
+    const focusedText = () => page.evaluate(() => document.activeElement.textContent.trim());
+    const expanded = async () => firstButton.getAttribute('aria-expanded');
+    const keyboard = [];
+    for (const key of ['Space', 'Enter', 'ArrowDown', 'ContextMenu', 'Shift+F10']) {
+        await firstButton.focus(); await page.keyboard.press(key);
+        assert.equal(await expanded(), 'true', key + ' 打开菜单'); assert.equal(await focusedText(), (await itemsOf())[0], key + ' 打开后焦点在第一项');
+        await page.keyboard.press('Escape');
+        assert.equal(await expanded(), 'false', 'Esc 关闭'); assert.equal(await focusedText(), (await firstButton.textContent()).trim(), 'Esc 后焦点回到按钮');
+        assert.equal(await upstreamMenu(page, firstName).count(), 0, 'Esc 后菜单收起');
+        keyboard.push(key);
+    }
+    await firstButton.focus(); await page.keyboard.press('ArrowUp');
+    const items = await itemsOf(); assert.equal(await focusedText(), items[items.length - 1], '上箭头打开后焦点在最后一项');
+    await page.keyboard.press('ArrowDown'); assert.equal(await focusedText(), items[0], '最后一项按下箭头回到第一项');
+    await page.keyboard.press('ArrowDown'); assert.equal(await focusedText(), items[1], '下箭头移到下一项');
+    await page.keyboard.press('ArrowUp'); assert.equal(await focusedText(), items[0], '上箭头移回上一项');
+    await page.keyboard.press('ArrowUp'); assert.equal(await focusedText(), items[items.length - 1], '第一项按上箭头到最后一项');
+    await page.keyboard.press('Home'); assert.equal(await focusedText(), items[0], 'Home 到第一项');
+    await page.keyboard.press('End'); assert.equal(await focusedText(), items[items.length - 1], 'End 到最后一项');
+    await page.keyboard.press('Tab');
+    assert.equal(await expanded(), 'false', 'Tab 关闭菜单');
+    const afterTab = await page.evaluate(() => document.activeElement.className);
+    assert.equal(afterTab, 'upstream-button', 'Tab 后焦点到下一家的按钮');
+    await firstButton.click({ button: 'right' }); assert.equal(await expanded(), 'true', '右键打开'); await page.keyboard.press('Escape');
+    await readingOrder(page, '26-upstream-menu-closed');
+    await firstButton.focus(); await page.keyboard.press('Space'); await readingOrder(page, '27-upstream-menu-open'); await screenshot(page, '27-upstream-menu-open');
+    await page.keyboard.press('Escape');
+    await menuAction(page, firstName, '查看用量'); await page.waitForURL(/\/Usage\?upstreamCandidateId=\d+/i);
+    const only = (await page.locator('main p.status').first().textContent()).trim();
+    assert.ok(only.startsWith(`只看「${firstName}」这一家上游记账的请求。`), only);
+    steps.push(`上游列表每家可 Tab 到的元素数：${tabStops.join('、')}（每家 1 个按钮）。菜单键盘：${keyboard.join('、')} 打开后焦点都在第一项、Esc 都关闭并还焦点；上箭头打开到最后一项；上下键循环、Home、End 到头尾；Tab 关闭菜单、焦点到下一家；右键打开；回车执行「查看用量」后读出：${only}`);
     await page.goto(url + '/Connection'); assert.equal(await page.getByText('fixture-model', { exact: false }).count() > 0, true);
     assert.equal((await page.content()).includes(accountSecret), false); assert.equal((await page.content()).includes(token), false);
     await screenshot(page, '10-connection');

@@ -111,7 +111,7 @@ static class ClaudeCodeAlignmentTests
         Check(claude.Updates == 1, "No automatic retry within the hour");
         using var pressed = await web.Post("/Upstream?handler=UpgradeClaudeCode", new() { ["__RequestVerificationToken"] = await web.Csrf("/Upstream") });
         var html = WebUtility.HtmlDecode(await pressed.Content.ReadAsStringAsync());
-        Check(pressed.StatusCode == HttpStatusCode.OK && claude.Updates == 2 && html.Contains("<p class=\"notice\" role=\"status\">升级失败（退出码 1）", StringComparison.Ordinal), html);
+        Check(pressed.StatusCode == HttpStatusCode.OK && claude.Updates == 2 && html.Contains("<p class=\"notice\" role=\"status\" id=\"notice\" tabindex=\"-1\">升级失败（退出码 1）", StringComparison.Ordinal), html);
         using (var request = new HttpRequestMessage(HttpMethod.Post, web.Url + "/Upstream?handler=UpgradeClaudeCode") { Content = new FormUrlEncodedContent([]) })
         {
             request.Headers.TryAddWithoutValidation("Origin", web.Url);

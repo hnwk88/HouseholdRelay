@@ -28,6 +28,13 @@ public interface IUpstreamService : IActiveUpstreamSource
     Task<long> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation);
 
     /// <summary>
+    /// 对一家登录得到的官方账户重新登录（凭据失效、续期不了时用）：在临时目录里委托本机 Claude Code 登录，核对登的是不是原来那个账户（账户编号相同；从没测试过、还没有编号的按同一个接上），
+    /// 是就把新凭据换进这一家的账户目录，主键、设备编号、账户资料和思域绑定都不变，返回登录邮箱（取不到为 null）；登成了别的账户就拒绝，原凭据不动。
+    /// 不是登录得到的官方账户、已导出搬走、配置损坏、登录取消或失败时抛出 <see cref="InvalidOperationException"/>（消息是读给管理员的原因与下一步）。临时目录无论成败都删掉。
+    /// </summary>
+    Task<string?> Relogin(long id, CancellationToken cancellation);
+
+    /// <summary>
     /// 导入别处 Claude Code 登录成功后生成的 <c>.credentials.json</c>（<paramref name="content"/>）并保存为一个账户模式的未测试上游，返回主键；此后与 <see cref="LoginOfficial"/> 得到的上游完全一样。
     /// <paramref name="name"/> 为空时用登录邮箱；文件不合格、未安装 Claude Code、名称不合规则或活动版本已变化时抛出 <see cref="InvalidOperationException"/> 读出原因，不新增上游、不留账户目录。
     /// </summary>

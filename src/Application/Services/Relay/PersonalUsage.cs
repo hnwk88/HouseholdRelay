@@ -12,12 +12,12 @@ namespace Application.Services.Relay;
 /// <summary>个人入口只认有效中转令牌，不认管理 Cookie，也不允许外部指定归属 ID。</summary>
 internal static class PersonalUsage
 {
-    /// <summary>由 <see cref="RelayForwarder.Handle"/> 在鉴权前调用，处理个人用量入口：路径不属于本入口时返回 false 交回中转流程；页面与静态资源（/my-usage、/usage-personal.js、/site.css）无需令牌直接返回；/my-usage/data 必须带有效中转令牌，归属 ID 只取自令牌，查询参数只允许白名单键且每个键只能出现一次。只接受 GET；可预期的拒绝都抛 <see cref="RelayFailure"/>，由调用方统一写出错误响应。独立中转没有用量服务（<paramref name="store"/> 为空），数据接口返回 503。</summary>
+    /// <summary>由 <see cref="RelayForwarder.Handle"/> 在鉴权前调用，处理个人用量入口：路径不属于本入口时返回 false 交回中转流程；页面与静态资源（/my-usage、/usage-personal.js、/site.css）和取值标签表（/my-usage/labels）无需令牌直接返回；/my-usage/data 必须带有效中转令牌，归属 ID 只取自令牌，查询参数只允许白名单键且每个键只能出现一次。只接受 GET；可预期的拒绝都抛 <see cref="RelayFailure"/>，由调用方统一写出错误响应。独立中转没有用量服务（<paramref name="store"/> 为空），数据接口返回 503。</summary>
     internal static async Task<bool> TryHandle(IRelayExchange exchange, ClientRegistry clients, IUsageService? store)
     {
         var path = exchange.Path;
         var asset = path switch { "/my-usage" => "my-usage.html", "/usage-personal.js" => "usage-personal.js", "/site.css" => "site.css", _ => null };
-        if (asset is null && path != "/my-usage/data") return false;
+        if (asset is null && path is not ("/my-usage/data" or "/my-usage/labels")) return false;
         if (!string.Equals(exchange.Method, "GET", StringComparison.OrdinalIgnoreCase)) throw new RelayFailure(405, "Method not allowed.");
         var reply = exchange.Reply;
         reply.SetHeader("Cache-Control", ["no-store"]);
@@ -31,6 +31,8 @@ internal static class PersonalUsage
             await reply.SendFile(Path.Combine(AppContext.BaseDirectory, "wwwroot", asset), exchange.Aborted);
             return true;
         }
+        // 标签表只是取值的中文名（接口类别、结果、币种等），与任何人的用量无关，不要令牌；个人页打开时据此填筛选选项，不另抄一份。
+        if (path == "/my-usage/labels") { await reply.WriteJson(UsageLabelTable.Instance, exchange.Aborted); return true; }
         var client = await clients.Authenticate(RelayToken.From(exchange)) ?? throw new RelayFailure(401, "Invalid or disabled relay token.");
         // 只按库里的使用者主键圈定；没有主键的鉴权项（旧内存夹具）不能查，免得筛选条件为空读成全家的用量。
         if (store is null || client.UserId is not { } self) throw new RelayFailure(503, "Usage storage unavailable.");

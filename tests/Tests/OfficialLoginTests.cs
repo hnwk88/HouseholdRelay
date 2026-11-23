@@ -76,6 +76,55 @@ static class OfficialLoginTests
     }
 
     /// <summary>
+    /// 重新登录（菜单「重新登录」）：同一家上游、同一个账户目录，主键不变、上游数不变；凭据换成这次登录得到的令牌，私有配置（设备编号、账户资料）原样，临时登录目录不留。
+    /// 登成了另一个账户（官方账户资料回别的账户编号）时拒绝并读出下一步，原凭据不动。菜单里只有登录得到的官方账户有这一项。
+    /// </summary>
+    public static async Task ReloginKeepsUpstream()
+    {
+        using var claude = new FakeClaudeLauncher("success");
+        await using var mock = await UpstreamFixture.Create();
+        await using var web = await WebFixture.Create(overrides: claude.Register); await web.Login();
+        var values = new Dictionary<string, string>
+        {
+            ["Login.Name"] = "", ["Login.BaseUrl"] = mock.Url, ["Login.AllowPrivateNetwork"] = "true",
+            ["Version"] = (await web.Upstreams.ReadActive()).ActiveVersion.ToString(), ["__RequestVerificationToken"] = await web.Csrf("/Upstream")
+        };
+        using (var created = await web.Post("/Upstream?handler=LoginAccount", values)) Check(created.IsSuccessStatusCode);
+        var candidate = (await web.Upstreams.LatestCandidate())!;
+        await web.Upstreams.ChooseModel(candidate.Id, "fixture-model");
+        Check((await web.Upstreams.TestCandidate(candidate.Id, true, CancellationToken.None)).CanActivate, "The login must pass its test first");
+        var api = await web.Upstreams.SaveCandidate((await web.Upstreams.ReadActive()).ActiveVersion, mock.Options(), "fixture-relogin-api-secret", "接口家");
+        var accounts = Path.Combine(web.Home.Path, ".state", "official-accounts"); var directory = Path.Combine(accounts, candidate.Uid);
+        var config = Directory.GetFiles(directory, ".claude.json").Single(); var before = File.ReadAllBytes(config);
+        var count = (await web.Upstreams.ListCandidates()).Count;
+        string listing;
+        using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
+        Check(UpstreamDetectionTests.MenuActions(listing, candidate.Id).Contains("relogin") && !UpstreamDetectionTests.MenuActions(listing, api).Contains("relogin"), "Only official logins offer relogin");
+        var accessor = web.App.Services.GetRequiredService<Application.Interfaces.Upstream.IOfficialAccountLogin>();
+
+        FakeClaude.Write(directory, "fixture-login-token-stale", 60);
+        var form = new Dictionary<string, string> { ["candidateId"] = candidate.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
+        string html;
+        using (var again = await web.Post("/Upstream?handler=Relogin", form)) html = WebUtility.HtmlDecode(await again.Content.ReadAsStringAsync());
+        Check(html.Contains($"已重新登录「{FakeClaude.Email}」，还是原来那个官方账户"), html);
+        Check(accessor.ReadAccessToken(candidate.Uid) == FakeClaude.FirstToken, "The fresh login's token replaced the stale one");
+        Check((await web.Upstreams.ListCandidates()).Count == count && (await web.Upstreams.ReadCandidate(candidate.Id)).Uid == candidate.Uid, "Same upstream, same account directory");
+        Check(Directory.GetDirectories(accounts).Length == 1, "No staging directory is left behind");
+        Check(File.ReadAllBytes(config).SequenceEqual(before), "The private config (device id, account profile) is untouched");
+
+        FakeClaude.Write(directory, "fixture-login-token-stale", 60);
+        mock.Profile = context => UpstreamFixture.ProfileReply(context, "11111111-2222-4333-8444-555555555555");
+        form["__RequestVerificationToken"] = await web.Csrf("/Upstream");
+        using (var other = await web.Post("/Upstream?handler=Relogin", form)) html = WebUtility.HtmlDecode(await other.Content.ReadAsStringAsync());
+        Check(html.Contains($"这次登录的是另一个官方账户（{FakeClaude.Email}），不是「{FakeClaude.Email}」原来的那个账户，所以没有换掉它的登录"), html);
+        Check(accessor.ReadAccessToken(candidate.Uid) == "fixture-login-token-stale" && Directory.GetDirectories(accounts).Length == 1 && File.ReadAllBytes(config).SequenceEqual(before),
+            "Another account is refused: old credential and private config stay, no staging directory");
+        form["candidateId"] = api.ToString(System.Globalization.CultureInfo.InvariantCulture); form["__RequestVerificationToken"] = await web.Csrf("/Upstream");
+        using (var refused = await web.Post("/Upstream?handler=Relogin", form)) html = WebUtility.HtmlDecode(await refused.Content.ReadAsStringAsync());
+        Check(html.Contains("「接口家」不是登录得到的官方账户"), html);
+    }
+
+    /// <summary>
     /// 登录在浏览器里被取消（退出码非零）、结束后没有凭据、本机没装 Claude Code：网页各读出原因与下一步，不新增上游、不留账户目录；
     /// 名称不合规则时在登录前就拒绝；贴令牌的入口不接受官方登录标记；删除登录得到的上游时连同它的账户目录一起删掉。
     /// </summary>
@@ -131,7 +180,7 @@ static class OfficialLoginTests
             Check((await service.TestCandidate(id, true, CancellationToken.None)).CanActivate); await service.Activate(id);
             var directory = Path.Combine(web.Home.Path, ".state", "official-accounts", (await service.ReadCandidate(id)).Uid);
             FakeClaude.Write(directory, "fixture-login-token-expired", -1);
-            foreach (var (path, expected) in new[] { ("/", "刷新卡住"), ("/Connection", "刷新卡住"), ("/Pricing", "正在设置：刷新卡住"), ("/Upstream", "名称：刷新卡住") })
+            foreach (var (path, expected) in new[] { ("/", "刷新卡住"), ("/Connection", "刷新卡住"), ("/Pricing", "正在设置：刷新卡住"), ("/Upstream", "在用：刷新卡住") })
             {
                 var clock = Stopwatch.StartNew();
                 using var page = await web.Http.GetAsync(web.Url + path);

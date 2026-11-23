@@ -55,7 +55,8 @@ static class UsageMoneyTests
         Check(summary.Money.Count == 3 && summary.UnknownAmounts == 0);
         Check((await Personal(web, user.Token)).Summary[0].Money.Count == 3);
         await web.Login(); var html = WebUtility.HtmlDecode(await web.Http.GetStringAsync(web.Url + "/Usage"));
-        Check(html.Contains("0.243456789 USD") && html.Contains("1.25 CNY") && html.Contains("估算"));
+        // 金额读中文币种名（USD 美元、CNY 人民币），页面上不再出现裸的币种代码。
+        Check(html.Contains("0.243456789 美元") && html.Contains("1.25 人民币") && html.Contains("估算") && !html.Contains(" USD") && !html.Contains(" CNY"));
         Check((await web.RelayUsage.Query(new())).Periods.Sum(period => period.Summary.Requests) == 5);
     }
 

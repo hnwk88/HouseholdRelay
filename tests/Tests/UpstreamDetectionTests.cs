@@ -157,7 +157,7 @@ static class UpstreamDetectionTests
 
         string listing;
         using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
-        Check(listing.Contains("删除「顺丰中转」") && listing.Contains("重新获取「在用的」的模型（不花额度）") && !listing.Contains("删除「在用的」"), "Only idle upstreams offer deletion");
+        Check(MenuActions(listing, failed).Contains("delete") && MenuActions(listing, active).Contains("rediscover") && !MenuActions(listing, active).Contains("delete"), "Only idle upstreams offer deletion");
         foreach (var (id, confirmed, expected) in new[] { (active, "true", "正在使用中，不能删除"), (failed, "false", "请先勾选删除按钮前面的确认框") })
         {
             var form = new Dictionary<string, string> { ["candidateId"] = id.ToString(CultureInfo.InvariantCulture), ["deleteConfirmed"] = confirmed, ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
@@ -175,6 +175,36 @@ static class UpstreamDetectionTests
         Check((await web.App.Services.GetRequiredService<IUsageService>().Query(new())).Rows.Select(row => (row.RequestId, row.UpstreamVersion)).SequenceEqual(history), "Deleting must not touch usage history");
     }
 
+    /// <summary>上游页里某一家操作菜单列出的项（每项的 <c>data-action</c>），按菜单顺序；页面上没有这一家时为空。</summary>
+    internal static string[] MenuActions(string html, long id)
+    {
+        var menu = System.Text.RegularExpressions.Regex.Match(html, $"<ul role=\"menu\" id=\"upstream-menu-{id}\"[^>]*>(.*?)</ul>", System.Text.RegularExpressions.RegexOptions.Singleline);
+        return menu.Success ? System.Text.RegularExpressions.Regex.Matches(menu.Groups[1].Value, "data-action=\"([a-z]+)\"").Select(item => item.Groups[1].Value).ToArray() : [];
+    }
+
+    /// <summary>
+    /// 菜单项由领域对象给：在用的第一项是「查看用量」，别的测试通过的第一项是「切换到这一家」；登录得到的官方账户有「重新登录」；正在检测的不给切换、重新登录、测试、重新获取；
+    /// 已导出搬走的只剩查看用量、改名和（能删时）删除；配置损坏的只剩删除；删除只在 Deletable 为真时出现。把任一条判据改坏，这条用例就红。
+    /// </summary>
+    public static Task MenuActionsFollowDomain()
+    {
+        var api = new UpstreamOptions(); var official = api with { Mode = UpstreamMode.OAuth, OfficialLogin = true };
+        UpstreamCandidateView View(long id, UpstreamOptions options, CandidateState state, bool deletable, DateTimeOffset? exported = null, UpstreamCheckPhase phase = UpstreamCheckPhase.Idle, bool damaged = false) =>
+            new(id, "", "甲", 1, options, state, null, deletable, exported, phase, damaged);
+        UpstreamAction[] A(params UpstreamAction[] items) => items;
+        void Same(UpstreamCandidateView view, long? active, UpstreamAction[] expected, string what) =>
+            Check(view.Actions(active).SequenceEqual(expected), what + "：" + string.Join(",", view.Actions(active)));
+        Same(View(1, api, CandidateState.Passed, false), 1, A(UpstreamAction.ViewUsage, UpstreamAction.Test, UpstreamAction.Rediscover, UpstreamAction.Rename, UpstreamAction.Export), "在用的那一家");
+        Same(View(2, api, CandidateState.Passed, true), 1, A(UpstreamAction.Activate, UpstreamAction.ViewUsage, UpstreamAction.Test, UpstreamAction.Rediscover, UpstreamAction.Rename, UpstreamAction.Export, UpstreamAction.Delete), "别的测试通过的一家");
+        Same(View(3, api, CandidateState.Failed, true), 1, A(UpstreamAction.ViewUsage, UpstreamAction.Test, UpstreamAction.Rediscover, UpstreamAction.Rename, UpstreamAction.Export, UpstreamAction.Delete), "没通过的不给切换");
+        Same(View(4, official, CandidateState.Passed, false), 4, A(UpstreamAction.ViewUsage, UpstreamAction.Relogin, UpstreamAction.Test, UpstreamAction.Rediscover, UpstreamAction.Rename, UpstreamAction.Export), "在用的官方账户有重新登录");
+        Same(View(5, official, CandidateState.Testing, false, phase: UpstreamCheckPhase.Checking), 1, A(UpstreamAction.ViewUsage, UpstreamAction.Rename, UpstreamAction.Export), "正在检测");
+        Same(View(6, official, CandidateState.Passed, true, DateTimeOffset.UnixEpoch), 1, A(UpstreamAction.ViewUsage, UpstreamAction.Rename, UpstreamAction.Delete), "已导出搬走");
+        Same(View(7, api, CandidateState.Untested, true, damaged: true), 1, A(UpstreamAction.Delete), "配置损坏");
+        Same(View(8, api, CandidateState.Untested, false, damaged: true), 1, A(), "配置损坏又删不了");
+        return Task.CompletedTask;
+    }
+
     /// <summary>
     /// 删除按钮与删除事务同一判据：检测开始不到两分钟时不出删除按钮、服务也拒绝；检测开始超过两分钟视为已中断，页面出删除按钮、按下就删掉；当前使用中的始终不出。
     /// </summary>
@@ -188,12 +218,12 @@ static class UpstreamDetectionTests
         Check(!(await service.ReadCandidate(stuck)).Deletable && !(await service.ReadCandidate(active)).Deletable);
         string listing;
         using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
-        Check(!listing.Contains("删除「卡住的」") && !listing.Contains("删除「在用的」"), "A candidate under test offers no delete button");
+        Check(!MenuActions(listing, stuck).Contains("delete") && !MenuActions(listing, active).Contains("delete"), "A candidate under test offers no delete button");
         using (var connection = web.Database.Open())
             RelayDatabase.Execute(connection, null, "UPDATE upstream_candidates SET test_started_at=$at WHERE id=$id", ("$at", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 121), ("$id", stuck));
         Check(await service.ReadCandidate(stuck) is { State: Core.Upstream.CandidateState.Testing, Deletable: true } && !(await service.ReadCandidate(active)).Deletable);
         using (var page = await web.Http.GetAsync(web.Url + "/Upstream")) listing = WebUtility.HtmlDecode(await page.Content.ReadAsStringAsync());
-        Check(listing.Contains("删除「卡住的」") && !listing.Contains("删除「在用的」"), "An interrupted test must offer the delete button the service accepts");
+        Check(MenuActions(listing, stuck).Contains("delete") && !MenuActions(listing, active).Contains("delete"), "An interrupted test must offer the delete button the service accepts");
         var delete = new Dictionary<string, string> { ["candidateId"] = stuck.ToString(CultureInfo.InvariantCulture), ["deleteConfirmed"] = "true", ["__RequestVerificationToken"] = await web.Csrf("/Upstream") };
         using (var deleted = await web.Post("/Upstream?handler=Delete", delete))
             Check(WebUtility.HtmlDecode(await deleted.Content.ReadAsStringAsync()).Contains("已删除「卡住的」") && (await service.ListCandidates()).All(item => item.Id != stuck));

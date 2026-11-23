@@ -3,9 +3,9 @@
 @{ ViewData["Title"] = "项目设置"; }
 <p class="eyebrow">配置</p><h1>项目设置</h1>
 <p>设置保存在本机，重启后仍然保留。监听端口和转发限制需重启服务生效。</p>
-@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<partial name="_Notice" model="Model.Notice" />
 <form method="post" class="card settings">
-    <div asp-validation-summary="All" role="alert"></div><input type="hidden" asp-for="Version" />
+    <div asp-validation-summary="All" role="alert" tabindex="-1"></div><input type="hidden" asp-for="Version" />
     <label asp-for="Input.PublicUrl">对外地址（可稍后填写）</label>
     <input asp-for="Input.PublicUrl" type="url" maxlength="2048" placeholder="https://relay.example.com:5433" />
     <small>证书请在“HTTPS 入口”页导入；公网可达性需从实际客户端验证，保存地址不会建立公网映射。</small>

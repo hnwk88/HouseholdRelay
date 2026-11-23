@@ -156,6 +156,39 @@ public sealed class UpstreamService(IServiceScopeFactory scopes, ISecretProtecto
     public Task<long> LoginOfficial(long expectedVersion, UpstreamOptions options, string? name, CancellationToken cancellation) =>
         AddOfficial(expectedVersion, options, name, id => officialAccounts.Login(id, cancellation));
 
+    /// <summary>
+    /// 重新登录：先在临时目录里登录、用新令牌向官方取一次账户资料，与这一家记下的账户编号比对；相同（或这一家还没有编号）才经 <see cref="IOfficialAccountLogin.Adopt"/> 换上新凭据并记下资料，
+    /// 不同就读出登成了别的账户与下一步。临时目录无论成败都删掉。
+    /// </summary>
+    public async Task<string?> Relogin(long id, CancellationToken cancellation)
+    {
+        var candidate = await ReadUsable(id); var name = Named(candidate.Name);
+        if (!candidate.Options.OfficialLogin)
+            throw new InvalidOperationException($"「{name}」不是登录得到的官方账户，没有登录可以重做。它的密钥或令牌失效时，请删除它，再在「添加上游」里重新添加。");
+        if (candidate.ExportedAt is not null)
+            throw new InvalidOperationException($"「{name}」已经导出搬走，本机不再用它，不能重新登录。要在本机继续用官方账户，请在「添加上游」里按「登录官方账户」。");
+        using var operation = siteIdentity.Enter();
+        var staging = Guid.NewGuid().ToString("N");
+        var email = await officialAccounts.Login(staging, cancellation);
+        try
+        {
+            var token = officialAccounts.ReadAccessToken(staging) ?? throw new InvalidOperationException("登录命令结束了，但没有拿到官方账户凭据。请再按一次「重新登录」。");
+            var profile = await probe.Profile(new(candidate.ExpectedVersion, candidate.Options, token), cancellation);
+            string? previous;
+            try { previous = officialAccounts.ReadAccountUuid(candidate.Uid); }
+            // 从没测试过的账户（例如刚导入）私有配置里还没有账户编号：没有可比的，按同一个账户接上，换上后由账户资料补上编号。
+            catch (ClaudeConfigurationUnavailableException) { previous = null; }
+            if (previous is not null && !string.Equals(previous, profile.AccountUuid, StringComparison.Ordinal))
+                throw new InvalidOperationException($"这次登录的是另一个官方账户{(email is null ? "" : $"（{email}）")}，不是「{name}」原来的那个账户，所以没有换掉它的登录，原来的凭据照旧。"
+                    + "请再按「重新登录」，在浏览器里登录原来的那个账户；要改用这个新账户，请在「添加上游」里按「登录官方账户」另加一家。");
+            await officialAccounts.Adopt(candidate.Uid, staging);
+            officialAccounts.RecordAccount(candidate.Uid, profile);
+            return email;
+        }
+        // 临时目录只在这一次里用：无论成败都删掉，不留没有上游引用的账户。
+        finally { officialAccounts.Remove(staging); }
+    }
+
     /// <summary>委托 <see cref="IOfficialAccountLogin.Import"/> 把登录文件放进新上游自己的配置目录，再按 <see cref="AddOfficial"/> 取名、保存；得到的上游与登录得到的不可区分。</summary>
     public Task<long> ImportOfficial(long expectedVersion, UpstreamOptions options, byte[] content, string? name, CancellationToken cancellation) =>
         AddOfficial(expectedVersion, options, name, id => officialAccounts.Import(id, content, cancellation));

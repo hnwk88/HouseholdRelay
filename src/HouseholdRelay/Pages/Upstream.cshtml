@@ -1,10 +1,11 @@
 ﻿@page
 @model UpstreamModel
-@{ ViewData["Title"] = "上游接入"; }
+@{ ViewData["Title"] = "上游接入"; var activeId = Model.Active.UpstreamCandidateId; }
 <p class="eyebrow">共享上游</p><h1>上游接入</h1>
-<p>起个名字，填地址，贴密钥，按「获取模型」。认证方式和检测方式由程序自己判断；测通过后按名称切换，在途请求不受影响。</p>
-<div asp-validation-summary="All" role="alert"></div>
-@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
+<p>上游列表里每家一个按钮，在按钮上按空格或回车打开这一家的操作菜单（右键、应用键、Shift+F10 也行）。新上游在「添加上游」里起名字、填地址、贴密钥，按「获取模型」；认证方式和检测方式由程序自己判断，测通过后切换，在途请求不受影响。</p>
+<div asp-validation-summary="All" role="alert" tabindex="-1"></div>
+<partial name="_Notice" model="Model.Notice" />
+@if (Model.FocusId is not null) { <span hidden data-focus-id="@Model.FocusId"></span> }
 @if (Model.Check is { Ended: false } running)
 {
     <section class="card" aria-labelledby="check-heading" id="check"><h2 id="check-heading">后台检测</h2>
@@ -13,190 +14,204 @@
         <small>检测在后台进行，不用刷新页面；结论出来时这里读一次。</small>
     </section>
 }
-<section class="card" aria-labelledby="active-heading"><h2 id="active-heading">当前使用的上游</h2>
+<section class="card" aria-labelledby="saved-heading" id="saved"><h2 id="saved-heading" tabindex="-1">上游列表（@Model.Saved.Count 个）</h2>
     @if (Model.MovedText is not null)
     {
-        <p>名称：@Model.Active.Name</p>
+        <p>在用：@Model.Active.Name</p>
         <p class="status">@Model.RuntimeStatus</p>
         <p>@Model.MovedText</p>
     }
     else if (Model.Active.Configured)
     {
-        <p>名称：@(Model.Active.Name ?? "未命名")</p>
+        <p>在用：@(Model.Active.Name ?? "未命名")</p>
         <p class="status">@Model.RuntimeStatus</p>
         <p>@UpstreamModel.AccessText(Model.Active.Options) · 认证用 @UpstreamDetection.AuthenticationLabel(Model.Active.Options.Authentication) · 按 @UpstreamDetection.DiagnosticLabel(Model.Active.Options.Diagnostic) 方式检测 · 模型 @(Model.Active.Options.Model.Length == 0 ? "未填写" : Model.Active.Options.Model)</p>
         <p>Messages 地址：<code>@UpstreamAddress.Endpoint(Model.Active.Options, "/v1/messages")</code></p>
         <p>@(Model.Active.Options.OfficialLogin ? "凭据：由登录得到，Claude Code 到期前自动刷新，不用重新粘贴。" : "凭据：已配置；到期时间未知。")</p>
         @if (Model.Active.Options.OfficialAccount) { <p>@Model.IdentityText</p> }
+        <p class="status" id="routing">@Model.RoutingText</p>
     }
     else
     {
         <p class="status">@Model.RuntimeStatus</p>
-        <p>还没有上游。请在下面的「API 供应商」里起名字、填地址、贴密钥，然后按「获取模型」。</p>
     }
-</section>
-<section class="card" aria-labelledby="failover-heading"><h2 id="failover-heading">自动切换</h2>
-    @if (Model.Active.Configured) { <p class="status">@Model.RoutingText</p> }
-    <p>打开后，在用的上游连不上、回 5xx、429、401 或 403 时，按下面「已保存的上游」的顺序换到其他测试通过的上游接住这次请求。连不上或回 5xx 的那家暂避 5 分钟后自动回来；回 429 的等冷却结束；回 401、403 的要重新测试并切换才恢复。数据库里「在用」的那一家不变。关闭后只用在用的那一家。</p>
-    <form method="post" asp-page-handler="Failover">
-        <input type="checkbox" id="failover" name="failover" value="true" checked="@Model.Active.Failover" />
-        <label for="failover">在用的上游失败时自动换到其他上游</label>
-        <input type="hidden" name="failover" value="false" />
-        <button type="submit">保存自动切换设置</button>
+    <form method="post" asp-page-handler="Failover" class="failover">
+        <input type="hidden" name="failover" value="@((!Model.Active.Failover).ToString().ToLowerInvariant())" />
+        <button type="submit" id="failover-switch" role="switch" aria-checked="@(Model.Active.Failover ? "true" : "false")" aria-describedby="failover-note">在用的上游失败时自动换到其他上游</button>
     </form>
-</section>
-@if (Model.Working is { } working)
-{
-    <section class="card" aria-labelledby="test-heading" id="test"><h2 id="test-heading">选择模型并测试：@working.Name</h2>
-        <p>认证方式：@UpstreamModel.AuthenticationText(working)</p>
-        <p>@UpstreamModel.ResultText(working)</p>
-        <form method="post" asp-page-handler="Test"><input type="hidden" name="candidateId" value="@working.Id" />
-            @if (working.Report?.Models is { Length: > 0 } models)
+    <p id="failover-note"><small>自动切换现在@(Model.Active.Failover ? "开着" : "关着")。开着时，在用的上游连不上、回 5xx、429、401 或 403，就按下面列表的顺序换到其他测试通过的上游接住这次请求：连不上或回 5xx 的那家暂避 5 分钟后自动回来，回 429 的等冷却结束，回 401、403 的要重新测试并切换才恢复。「在用」的那一家不变。关着时只用在用的那一家。</small></p>
+    @if (Model.Saved.Count == 0)
+    {
+        <p>还没有上游。请在下面「添加上游」的「API 供应商」里起名字、填地址、贴密钥，然后按「获取模型」；或者登录官方账户。</p>
+    }
+    <ul class="upstream-list">
+    @foreach (var item in Model.Saved)
+    {
+        var buttonId = UpstreamModel.ButtonId(item.Id); var menuId = "upstream-menu-" + item.Id; var formId = "upstream-form-" + item.Id;
+        <li class="saved-upstream" data-upstream-id="@item.Id">
+            <button type="button" id="@buttonId" class="upstream-button" aria-haspopup="menu" aria-expanded="false" aria-controls="@menuId">@UpstreamModel.ButtonName(item, activeId)</button>
+            <ul role="menu" id="@menuId" aria-labelledby="@buttonId" hidden>
+                @foreach (var action in item.Actions(activeId))
+                {
+                    var label = UpstreamModel.ActionLabel(action);
+                    <li role="none">
+                        @switch (action)
+                        {
+                            case UpstreamAction.Activate: <button role="menuitem" tabindex="-1" type="submit" form="@formId" asp-page-handler="Activate" data-action="activate">@label</button> break;
+                            case UpstreamAction.Relogin: <button role="menuitem" tabindex="-1" type="submit" form="@formId" asp-page-handler="Relogin" data-action="relogin">@label</button> break;
+                            case UpstreamAction.Rediscover: <button role="menuitem" tabindex="-1" type="submit" form="@formId" asp-page-handler="Rediscover" data-action="rediscover">@label</button> break;
+                            case UpstreamAction.ViewUsage: <a role="menuitem" tabindex="-1" asp-page="/Usage" asp-route-upstreamCandidateId="@item.Id" data-action="usage">@label</a> break;
+                            case UpstreamAction.Test: <a role="menuitem" tabindex="-1" asp-page="/Upstream" asp-route-candidateId="@item.Id" data-action="test">@label</a> break;
+                            case UpstreamAction.Rename: <a role="menuitem" tabindex="-1" asp-page="/Upstream" asp-route-rename="@item.Id" data-action="rename">@label</a> break;
+                            case UpstreamAction.Export: <a role="menuitem" tabindex="-1" asp-page="/Upstream" asp-route-export="@item.Id" data-action="export">@label</a> break;
+                            case UpstreamAction.Delete: <a role="menuitem" tabindex="-1" asp-page="/Upstream" asp-route-delete="@item.Id" data-action="delete">@label</a> break;
+                        }
+                    </li>
+                }
+            </ul>
+            <form method="post" id="@formId" hidden><input type="hidden" asp-for="Version" id="version-@item.Id" /><input type="hidden" name="candidateId" value="@item.Id" /></form>
+            @if (item.Damaged)
             {
-                <label for="test-model">模型</label>
-                <select id="test-model" name="model">
-                    @foreach (var item in models) { <option value="@item" selected="@(item == working.Options.Model)">@item</option> }
-                </select>
+                <p>@UpstreamModel.ResultText(item)</p>
             }
             else
             {
-                <label for="test-model">模型名称（上游没有提供模型目录，请手填）</label>
-                <input id="test-model" name="model" value="@working.Options.Model" maxlength="@ModelName.MaxLength" required />
+                <p class="upstream-detail">地址 <code>@item.Options.BaseUrl</code> · @UpstreamModel.AccessText(item.Options) · 认证 @UpstreamModel.AuthenticationText(item) · 模型 @(item.Options.Model.Length == 0 ? "尚未选择" : item.Options.Model)@if (Model.Check?.UpstreamCandidateId != item.Id) { <span> · 最近一次检测：@UpstreamModel.ResultText(item)</span> }</p>
             }
-            <button type="submit" class="secondary">测试（会消耗少量上游额度）</button>
-            <small>这是管理员诊断，不计入个人用量；测试不会切换当前上游。</small>
-        </form>
-        @if (working.State == CandidateState.Passed && working.Id != Model.Active.UpstreamCandidateId)
-        { <form method="post" asp-page-handler="Activate"><input type="hidden" asp-for="Version" /><input type="hidden" name="candidateId" value="@working.Id" /><button type="submit">切换到「@working.Name」</button></form> }
-    </section>
-}
-@if (Model.Saved.Count > 0)
-{
-    <section class="card" aria-labelledby="saved-heading" id="saved"><h2 id="saved-heading">已保存的上游（@Model.Saved.Count 个）</h2>
-        @foreach (var item in Model.Saved)
-        {
-            if (item.Damaged)
+            @if (Model.Working is { } working && working.Id == item.Id)
             {
-                <article class="saved-upstream" aria-labelledby="saved-@item.Id"><h3 id="saved-@item.Id">@item.Name</h3>
-                    <p>@UpstreamModel.ResultText(item)</p>
-                    @if (item.Deletable)
-                    {
-                        <form method="post" asp-page-handler="Delete"><input type="hidden" name="candidateId" value="@item.Id" />
-                            <label class="checkbox"><input type="checkbox" name="deleteConfirmed" value="true" required />确认删除「@item.Name」（删除后不能恢复）</label>
-                            <button type="submit" class="secondary">删除「@item.Name」</button>
-                        </form>
-                    }
-                </article>
-                continue;
+                <section class="upstream-panel" aria-labelledby="test-heading" id="test"><h3 id="test-heading">选择模型并测试：@UpstreamModel.DisplayName(working)</h3>
+                    <p>认证方式：@UpstreamModel.AuthenticationText(working)</p>
+                    @if (Model.Check is null) { <p>@UpstreamModel.ResultText(working)</p> }
+                    @{ var modelError = ViewData.ModelState.FieldError(UpstreamModel.ModelKey); }
+                    <form method="post" asp-page-handler="Test"><input type="hidden" name="candidateId" value="@working.Id" />
+                        @if (working.Report?.Models is { Length: > 0 } models)
+                        {
+                            <label for="test-model">模型</label>
+                            <select id="test-model" name="model" aria-invalid="@(modelError is null ? null : "true")" aria-describedby="@(modelError is null ? null : "test-model-error")">
+                                @foreach (var name in models) { <option value="@name" selected="@(name == working.Options.Model)">@name</option> }
+                            </select>
+                        }
+                        else
+                        {
+                            <label for="test-model">模型名称（上游没有提供模型目录，请手填）</label>
+                            <input id="test-model" name="model" value="@working.Options.Model" maxlength="@ModelName.MaxLength" required aria-invalid="@(modelError is null ? null : "true")" aria-describedby="@(modelError is null ? null : "test-model-error")" />
+                        }
+                        @if (modelError is not null) { <p id="test-model-error" class="field-error">@modelError</p> }
+                        <button type="submit" class="secondary">测试（会消耗少量上游额度）</button>
+                        <small>这是管理员诊断，不计入个人用量；测试不会切换当前上游。</small>
+                    </form>
+                    @if (working.State == CandidateState.Passed && working.Id != activeId)
+                    { <form method="post" asp-page-handler="Activate"><input type="hidden" asp-for="Version" id="test-version" /><input type="hidden" name="candidateId" value="@working.Id" /><button type="submit">切换到「@UpstreamModel.DisplayName(working)」</button></form> }
+                </section>
             }
-            <article class="saved-upstream" aria-labelledby="saved-@item.Id"><h3 id="saved-@item.Id">@item.Name@(item.Id == Model.Active.UpstreamCandidateId ? "（当前使用中）" : "")</h3>
-                <dl><dt>地址</dt><dd><code>@item.Options.BaseUrl</code></dd>
-                    <dt>接入方式</dt><dd>@UpstreamModel.AccessText(item.Options)</dd>
-                    <dt>认证方式</dt><dd>@UpstreamModel.AuthenticationText(item)</dd>
-                    <dt>模型</dt><dd>@(item.Options.Model.Length == 0 ? "尚未选择" : item.Options.Model)</dd>
-                    <dt>最近一次检测</dt><dd>@UpstreamModel.ResultText(item)</dd></dl>
-                @if (item.ExportedAt is null)
-                {
-                    if (item.State == CandidateState.Passed && item.Id != Model.Active.UpstreamCandidateId && item.Id != Model.Working?.Id)
-                    { <form method="post" asp-page-handler="Activate"><input type="hidden" asp-for="Version" /><input type="hidden" name="candidateId" value="@item.Id" /><button type="submit">切换到「@item.Name」</button></form> }
-                    <a asp-page="/Upstream" asp-route-candidateId="@item.Id" asp-fragment="test">选择模型并测试「@item.Name」</a>
-                    <form method="post" asp-page-handler="Rediscover"><input type="hidden" name="candidateId" value="@item.Id" />
-                        <button type="submit" class="secondary">重新获取「@item.Name」的模型（不花额度）</button>
-                    </form>
-                }
-                <form method="post" asp-page-handler="Rename"><input type="hidden" name="candidateId" value="@item.Id" />
-                    <label for="rename-@item.Id">「@item.Name」的新名称</label><input id="rename-@item.Id" name="newName" maxlength="40" required />
-                    <button type="submit" class="secondary">改名</button>
+            @if (Model.RenameId == item.Id)
+            {
+                var renameError = ViewData.ModelState.FieldError(UpstreamModel.NewNameKey);
+                <form method="post" asp-page-handler="Rename" class="upstream-panel" id="rename" aria-labelledby="rename-heading"><h3 id="rename-heading">改名：@UpstreamModel.DisplayName(item)</h3>
+                    <input type="hidden" name="candidateId" value="@item.Id" />
+                    <label for="rename-name">「@UpstreamModel.DisplayName(item)」的新名称</label>
+                    <input id="rename-name" name="newName" value="@item.Name" maxlength="40" required aria-invalid="@(renameError is null ? null : "true")" aria-describedby="@(renameError is null ? null : "rename-name-error")" />
+                    @if (renameError is not null) { <p id="rename-name-error" class="field-error">@renameError</p> }
+                    <button type="submit">保存新名称</button> <a href="/Upstream#@buttonId">不改了，回到列表</a>
                 </form>
-                @if (item.Deletable)
-                {
-                    <form method="post" asp-page-handler="Delete"><input type="hidden" name="candidateId" value="@item.Id" />
-                        <label class="checkbox"><input type="checkbox" name="deleteConfirmed" value="true" required />确认删除「@item.Name」（删除后不能恢复）</label>
-                        <button type="submit" class="secondary">删除「@item.Name」</button>
-                    </form>
-                }
-            </article>
-        }
+            }
+            @if (Model.DeleteId == item.Id)
+            {
+                var deleteError = ViewData.ModelState.FieldError(UpstreamModel.DeleteConfirmedKey);
+                <form method="post" asp-page-handler="Delete" class="upstream-panel" id="delete" aria-labelledby="delete-heading"><h3 id="delete-heading">删除「@UpstreamModel.DisplayName(item)」</h3>
+                    <input type="hidden" name="candidateId" value="@item.Id" />
+                    <label class="checkbox"><input type="checkbox" id="delete-confirm" name="deleteConfirmed" value="true" required aria-invalid="@(deleteError is null ? null : "true")" aria-describedby="@(deleteError is null ? null : "delete-confirm-error")" />确认删除「@UpstreamModel.DisplayName(item)」（删除后不能恢复）</label>
+                    @if (deleteError is not null) { <p id="delete-confirm-error" class="field-error">@deleteError</p> }
+                    <button type="submit" class="secondary">删除「@UpstreamModel.DisplayName(item)」</button> <a href="/Upstream#@buttonId">不删了，回到列表</a>
+                </form>
+            }
+        </li>
+    }
+    </ul>
+</section>
+<section class="card" aria-labelledby="add-heading"><h2 id="add-heading">添加上游</h2>
+    <section aria-labelledby="api-heading"><h3 id="api-heading">API 供应商</h3>
+        <p>只填三样：名称、地址、密钥。按下面的按钮会先加密保存这个上游，再读取它的模型目录；密钥只需输入这一次。</p>
+        <form method="post" asp-page-handler="DiscoverApi" class="settings"><input type="hidden" asp-for="Version" id="api-version" />
+            <label asp-for="Api.Name">供应商名称</label><input asp-for="Api.Name" maxlength="40" required placeholder="例如 aitoll、公司 sftoken" />
+            <label asp-for="Api.BaseUrl">上游地址</label><input asp-for="Api.BaseUrl" type="url" maxlength="2048" required placeholder="https://api.example.com" />
+            <label asp-for="Api.Credential">API 密钥</label><input asp-for="Api.Credential" type="password" autocomplete="new-password" maxlength="8192" required />
+            <details><summary>高级设置（一般不用改）</summary>
+                <label asp-for="Api.Authentication">认证方式</label><select asp-for="Api.Authentication"><option value="auto">自动判断（推荐）</option><option value="x-api-key">x-api-key</option><option value="bearer">Bearer</option></select>
+                <label asp-for="Api.Diagnostic">检测方式</label><select asp-for="Api.Diagnostic"><option value="auto">自动判断（推荐）</option><option value="messages">标准 Messages</option><option value="claude-code">Claude Code 实际调用（需本机安装）</option></select>
+                <small>手动指定后，程序只用你选的那一种，结果里会注明「手动指定」。</small>
+                <label class="checkbox"><input asp-for="Api.AllowPrivateNetwork" />允许连接本机或私网地址（包括 HTTP）</label>
+            </details>
+            <button type="submit">获取模型（不花额度）</button>
+        </form>
     </section>
-}
-<section class="card" aria-labelledby="transfer-heading"><h2 id="transfer-heading">搬到另一套中转：导出与导入</h2>
+    <section aria-labelledby="account-heading"><h3 id="account-heading">官方账户</h3>
+        <p class="status" data-claude-identity>@Model.IdentityText</p>
+        <p data-claude-update>@Model.UpdateText</p>
+        <form method="post" asp-page-handler="UpgradeClaudeCode"><button type="submit" class="secondary">升级中转的 Claude Code</button></form>
+        <p>@UpstreamModel.EnvironmentNote</p>
+        <h4 id="account-login-heading">登录官方账户</h4>
+        <p>按「登录官方账户」后，程序会让本机的 Claude Code 打开浏览器登录页（任务栏里会多一个最小化的 Claude Code 窗口，不用管它）。在浏览器里登录完，这一页会自动显示结果并读取模型目录。登录凭据只存在中转自己的数据目录里，不碰本机 Claude Code 自己的登录；到期前自动刷新，不用重新粘贴。</p>
+        <form method="post" asp-page-handler="LoginAccount" class="settings" aria-labelledby="account-login-heading"><input type="hidden" asp-for="Version" id="login-version" />
+            <label asp-for="Login.Name">账户名称（可不填，不填就用登录邮箱）</label><input asp-for="Login.Name" maxlength="40" placeholder="例如 我的 Claude 账户" />
+            <details><summary>登录的高级设置（一般不用改）</summary>
+                <label asp-for="Login.BaseUrl">登录用的上游地址</label><input asp-for="Login.BaseUrl" type="url" maxlength="2048" required />
+                <label class="checkbox"><input asp-for="Login.AllowPrivateNetwork" />允许登录用的上游是本机或私网地址（包括 HTTP）</label>
+            </details>
+            <button type="submit">登录官方账户</button>
+        </form>
+        <h4 id="account-import-heading">或者导入登录文件</h4>
+        <p>在另一台 Windows 电脑上登录过 Claude Code 的，把那台电脑的 <code>%USERPROFILE%\.claude\.credentials.json</code>（.claude 是隐藏文件夹）拷过来，在这里选它导入。导入后这份登录只给中转用，那台电脑请不要再用它，否则两边会互相挤掉登录；到期前由本机的 Claude Code 自动刷新。</p>
+        <form method="post" asp-page-handler="ImportAccount" enctype="multipart/form-data" class="settings" aria-labelledby="account-import-heading"><input type="hidden" asp-for="Version" id="import-account-version" />
+            <label asp-for="ImportFile">登录文件（.credentials.json）</label><input asp-for="ImportFile" type="file" accept=".json" required />
+            <label asp-for="Import.Name">导入的账户名称（可不填，不填就用登录邮箱）</label><input asp-for="Import.Name" maxlength="40" placeholder="例如 我的 Claude 账户" />
+            <details><summary>导入的高级设置（一般不用改）</summary>
+                <label asp-for="Import.BaseUrl">导入用的上游地址</label><input asp-for="Import.BaseUrl" type="url" maxlength="2048" required />
+                <label class="checkbox"><input asp-for="Import.AllowPrivateNetwork" />允许导入用的上游是本机或私网地址（包括 HTTP）</label>
+            </details>
+            <button type="submit">导入登录文件</button>
+        </form>
+        <h4 id="account-token-heading">或者贴已有的账户访问令牌</h4>
+        <form method="post" asp-page-handler="DiscoverAccount" class="settings" aria-labelledby="account-token-heading"><input type="hidden" asp-for="Version" id="account-version" />
+            <label asp-for="Account.Name">账户名称</label><input asp-for="Account.Name" maxlength="40" required placeholder="例如 我的 Claude 账户" />
+            <label asp-for="Account.BaseUrl">贴令牌用的上游地址</label><input asp-for="Account.BaseUrl" type="url" maxlength="2048" required />
+            <label asp-for="Account.Credential">账户访问令牌</label><input asp-for="Account.Credential" type="password" autocomplete="new-password" maxlength="8192" required />
+            <details><summary>贴令牌的高级设置（一般不用改）</summary>
+                <label class="checkbox"><input asp-for="Account.OAuthBeta" />兼容中转的账户模式也需要 OAuth beta（官方地址总会附加）</label>
+                <label class="checkbox"><input asp-for="Account.AllowPrivateNetwork" />允许贴令牌用的上游是本机或私网地址（包括 HTTP）</label>
+            </details>
+            <button type="submit">用账户令牌获取模型（不花额度）</button>
+        </form>
+    </section>
+</section>
+<section class="card" aria-labelledby="transfer-heading" id="transfer"><h2 id="transfer-heading">搬到另一套中转：导出与导入</h2>
     @if (Model.ExportDownload is not null)
     { <p><a href="@Model.ExportDownload" download="@Model.ExportFileName" data-auto-download>下载导出文件「@Model.ExportFileName」</a></p> }
     @if (Model.Saved.Count > 0)
     {
-        <h3 id="export-heading">导出加密文件</h3>
+        var againError = ViewData.ModelState.FieldError(UpstreamModel.ExportAgainKey);
+        <h3 id="export-heading" tabindex="-1">导出加密文件</h3>
         <p>把勾选的上游连同密钥加密成一个文件，拷到另一台电脑的中转里导入。导出密码当场设、不保存，导入时输入同一个密码；忘了就解不开。登录得到的官方账户导出后就搬走了：本机不再用它转发、不再续期，账户留在列表里，不需要时自己删除。官方账户的导出文件只在搬家那一刻有用，本机续期一次以后旧文件就可能失效；API 密钥的导出可以长期留作备份。</p>
         @if (Model.ExportWarning is not null) { <p class="status">@Model.ExportWarning</p> }
         <form method="post" asp-page-handler="Export" class="settings" aria-labelledby="export-heading">
-            <fieldset><legend>要导出的上游（默认全部，配置已损坏的不在其中）</legend>
+            <fieldset><legend>要导出的上游（@(Model.ExportId is null ? "默认全部" : "从菜单进来，只预选了一家")，配置已损坏的不在其中）</legend>
                 @foreach (var item in Model.Saved.Where(saved => !saved.Damaged))
                 {
-                    <label class="checkbox"><input type="checkbox" name="exportIds" value="@item.Id" checked />「@item.Name」，@UpstreamModel.AccessText(item.Options)@(item.ExportedAt is not null ? "，已经导出搬走过" : item.Options.OfficialLogin ? "，导出后本机不再用它" : "")</label>
+                    <label class="checkbox"><input type="checkbox" name="exportIds" value="@item.Id" checked="@(Model.ExportId is null || Model.ExportId == item.Id)" />「@item.Name」，@UpstreamModel.AccessText(item.Options)@(item.ExportedAt is not null ? "，已经导出搬走过" : item.Options.OfficialLogin ? "，导出后本机不再用它" : "")</label>
                 }
             </fieldset>
             <label for="export-password">导出密码（12 到 128 个字符，导入时要用，不会保存）</label><input id="export-password" name="exportPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required />
-            <label for="export-password-again">再输入一次导出密码</label><input id="export-password-again" name="exportPasswordAgain" type="password" autocomplete="new-password" minlength="12" maxlength="128" required />
+            <label for="export-password-again">再输入一次导出密码</label><input id="export-password-again" name="exportPasswordAgain" type="password" autocomplete="new-password" minlength="12" maxlength="128" required aria-invalid="@(againError is null ? null : "true")" aria-describedby="@(againError is null ? null : "export-password-again-error")" />
+            @if (againError is not null) { <p id="export-password-again-error" class="field-error">@againError</p> }
             <button type="submit">导出加密文件</button>
         </form>
     }
     <h3 id="import-heading">导入上游</h3>
-    <p>选另一台电脑上导出的文件，输入导出时设的密码。文件里的上游按原顺序加到已保存上游的后面，都是尚未测试，逐家测试通过后才能切换。官方账户要靠本机的 Claude Code 续期，请先装好。</p>
-    <form method="post" asp-page-handler="ImportUpstreams" enctype="multipart/form-data" class="settings" aria-labelledby="import-heading"><input type="hidden" asp-for="Version" />
+    <p>选另一台电脑上导出的文件，输入导出时设的密码。文件里的上游按原顺序加到上游列表的后面，都是尚未测试，逐家测试通过后才能切换。官方账户要靠本机的 Claude Code 续期，请先装好。</p>
+    <form method="post" asp-page-handler="ImportUpstreams" enctype="multipart/form-data" class="settings" aria-labelledby="import-heading"><input type="hidden" asp-for="Version" id="import-version" />
         <label asp-for="UpstreamFile">导出文件</label><input asp-for="UpstreamFile" type="file" accept=".hrupstreams" required />
         <label for="import-password">导出时设的密码</label><input id="import-password" name="importPassword" type="password" autocomplete="off" maxlength="128" required />
         <button type="submit">导入上游</button>
-    </form>
-</section>
-<section class="card" aria-labelledby="api-heading"><h2 id="api-heading">API 供应商</h2>
-    <p>只填三样：名称、地址、密钥。按下面的按钮会先加密保存这个上游，再读取它的模型目录；密钥只需输入这一次。</p>
-    <form method="post" asp-page-handler="DiscoverApi" class="settings"><input type="hidden" asp-for="Version" />
-        <label asp-for="Api.Name">供应商名称</label><input asp-for="Api.Name" maxlength="40" required placeholder="例如 aitoll、公司 sftoken" />
-        <label asp-for="Api.BaseUrl">上游地址</label><input asp-for="Api.BaseUrl" type="url" maxlength="2048" required placeholder="https://api.example.com" />
-        <label asp-for="Api.Credential">API 密钥</label><input asp-for="Api.Credential" type="password" autocomplete="new-password" maxlength="8192" required />
-        <details><summary>高级设置（一般不用改）</summary>
-            <label asp-for="Api.Authentication">认证方式</label><select asp-for="Api.Authentication"><option value="auto">自动判断（推荐）</option><option value="x-api-key">x-api-key</option><option value="bearer">Bearer</option></select>
-            <label asp-for="Api.Diagnostic">检测方式</label><select asp-for="Api.Diagnostic"><option value="auto">自动判断（推荐）</option><option value="messages">标准 Messages</option><option value="claude-code">Claude Code 实际调用（需本机安装）</option></select>
-            <small>手动指定后，程序只用你选的那一种，结果里会注明「手动指定」。</small>
-            <label class="checkbox"><input asp-for="Api.AllowPrivateNetwork" />允许连接本机或私网地址（包括 HTTP）</label>
-        </details>
-        <button type="submit">获取模型（不花额度）</button>
-    </form>
-</section>
-<section class="card" aria-labelledby="account-heading"><h2 id="account-heading">官方账户</h2>
-    <p class="status" data-claude-identity>@Model.IdentityText</p>
-    <p data-claude-update>@Model.UpdateText</p>
-    <form method="post" asp-page-handler="UpgradeClaudeCode"><button type="submit" class="secondary">升级中转的 Claude Code</button></form>
-    <p>@UpstreamModel.EnvironmentNote</p>
-    <h3 id="account-login-heading">登录官方账户</h3>
-    <p>按「登录官方账户」后，程序会让本机的 Claude Code 打开浏览器登录页（任务栏里会多一个最小化的 Claude Code 窗口，不用管它）。在浏览器里登录完，这一页会自动显示结果并读取模型目录。登录凭据只存在中转自己的数据目录里，不碰本机 Claude Code 自己的登录；到期前自动刷新，不用重新粘贴。</p>
-    <form method="post" asp-page-handler="LoginAccount" class="settings" aria-labelledby="account-login-heading"><input type="hidden" asp-for="Version" />
-        <label asp-for="Login.Name">账户名称（可不填，不填就用登录邮箱）</label><input asp-for="Login.Name" maxlength="40" placeholder="例如 我的 Claude 账户" />
-        <details><summary>登录的高级设置（一般不用改）</summary>
-            <label asp-for="Login.BaseUrl">登录用的上游地址</label><input asp-for="Login.BaseUrl" type="url" maxlength="2048" required />
-            <label class="checkbox"><input asp-for="Login.AllowPrivateNetwork" />允许登录用的上游是本机或私网地址（包括 HTTP）</label>
-        </details>
-        <button type="submit">登录官方账户</button>
-    </form>
-    <h3 id="account-import-heading">或者导入登录文件</h3>
-    <p>在另一台 Windows 电脑上登录过 Claude Code 的，把那台电脑的 <code>%USERPROFILE%\.claude\.credentials.json</code>（.claude 是隐藏文件夹）拷过来，在这里选它导入。导入后这份登录只给中转用，那台电脑请不要再用它，否则两边会互相挤掉登录；到期前由本机的 Claude Code 自动刷新。</p>
-    <form method="post" asp-page-handler="ImportAccount" enctype="multipart/form-data" class="settings" aria-labelledby="account-import-heading"><input type="hidden" asp-for="Version" />
-        <label asp-for="ImportFile">登录文件（.credentials.json）</label><input asp-for="ImportFile" type="file" accept=".json" required />
-        <label asp-for="Import.Name">导入的账户名称（可不填，不填就用登录邮箱）</label><input asp-for="Import.Name" maxlength="40" placeholder="例如 我的 Claude 账户" />
-        <details><summary>导入的高级设置（一般不用改）</summary>
-            <label asp-for="Import.BaseUrl">导入用的上游地址</label><input asp-for="Import.BaseUrl" type="url" maxlength="2048" required />
-            <label class="checkbox"><input asp-for="Import.AllowPrivateNetwork" />允许导入用的上游是本机或私网地址（包括 HTTP）</label>
-        </details>
-        <button type="submit">导入登录文件</button>
-    </form>
-    <h3 id="account-token-heading">或者贴已有的账户访问令牌</h3>
-    <form method="post" asp-page-handler="DiscoverAccount" class="settings" aria-labelledby="account-token-heading"><input type="hidden" asp-for="Version" />
-        <label asp-for="Account.Name">账户名称</label><input asp-for="Account.Name" maxlength="40" required placeholder="例如 我的 Claude 账户" />
-        <label asp-for="Account.BaseUrl">贴令牌用的上游地址</label><input asp-for="Account.BaseUrl" type="url" maxlength="2048" required />
-        <label asp-for="Account.Credential">账户访问令牌</label><input asp-for="Account.Credential" type="password" autocomplete="new-password" maxlength="8192" required />
-        <details><summary>贴令牌的高级设置（一般不用改）</summary>
-            <label class="checkbox"><input asp-for="Account.OAuthBeta" />兼容中转的账户模式也需要 OAuth beta（官方地址总会附加）</label>
-            <label class="checkbox"><input asp-for="Account.AllowPrivateNetwork" />允许贴令牌用的上游是本机或私网地址（包括 HTTP）</label>
-        </details>
-        <button type="submit">用账户令牌获取模型（不花额度）</button>
     </form>
 </section>

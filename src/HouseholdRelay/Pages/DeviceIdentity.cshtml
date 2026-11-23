@@ -1,12 +1,12 @@
-@page
+﻿@page
 @model DeviceIdentityModel
 @{ ViewData["Title"] = "设备维护"; }
 <h1>设备维护</h1>
 <p>更换设备编号会暂时暂停本站全部官方账户的调用，等待已经开始的调用和登录程序结束。独立 API 上游仍可使用。</p>
 <p>这项维护不能解除账户限制，不会重新登录或测试账户。每台电脑的个人令牌、会话、用量归属和连接配置继续保留。</p>
 <p role="status" id="identity-progress">@Model.Progress</p>
-@if (Model.Notice is not null) { <p class="notice" role="status">@Model.Notice</p> }
-<div asp-validation-summary="All" role="alert"></div>
+<partial name="_Notice" model="Model.Notice" />
+<div asp-validation-summary="All" role="alert" tabindex="-1"></div>
 @if (Model.Pending || !Model.Available)
 {
     <form method="post" asp-page-handler="Resume" class="card">
