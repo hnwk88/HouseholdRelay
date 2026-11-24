@@ -161,8 +161,8 @@ static class LayeringTests
         return Task.CompletedTask;
     }
 
-    /// <summary>仓库根目录：从测试程序目录往上找解决方案文件。</summary>
-    private static string RepositoryRoot()
+    /// <summary>仓库根目录：从测试程序目录往上找解决方案文件。读源码或文档的用例共用这一处。</summary>
+    internal static string RepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
             if (File.Exists(Path.Combine(directory.FullName, "HouseholdRelay.sln"))) return directory.FullName;

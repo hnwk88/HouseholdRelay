@@ -298,6 +298,10 @@ var tests = new (string Name, Func<Task> Test)[]
     ("siyu: closing the old entry refuses official accounts locally", DeviceMetadataPathTests.LegacyOfficialClosedRefusesLocally),
     ("siyu: administrator lists and stops sessions", SiyuSessionTests.AdministratorListsAndStopsSessions),
     ("siyu: messages identity is verified read only before dispatch", SiyuSessionTests.MessagesIdentityIsVerifiedReadOnly),
+    ("siyu: protocol text values match the contract", SiyuProtocolTextTests.ValuesMatchContract),
+    ("siyu: protocol text hosts and routes match the code", SiyuProtocolTextTests.HostsAndRoutesMatchCode),
+    ("siyu: protocol text refusal codes match the code", SiyuProtocolTextTests.RefusalCodesMatchCode),
+    ("siyu: protocol text refusal sentences match the code", SiyuProtocolTextTests.RefusalSentencesMatchCode),
     ("private certificate TLS rejects untrusted roots and wrong names", PrivateCertificateTests.Transport)
 };
 var certificatesBefore = TestCertificateStore.Snapshot();
