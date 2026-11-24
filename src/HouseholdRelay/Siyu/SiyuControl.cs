@@ -58,6 +58,8 @@ public sealed class SiyuControl
                     // 先鉴权再读请求体：没带或带错令牌的请求不读体，直接 401。
                     await _sessions.AuthorizeAsync(token);
                     var request = await ReadJsonAsync<SiyuCreateRequest>(context);
+                    // 版本 1 的账户主键是必带字段：缺了或为 null 与今天一样按看不懂处理（版本 2 不带，后端选）。
+                    if (!SiyuContract.BackendChooses(request.ClientProtocolVersion) && request.OfficialAccountId is null) throw Malformed();
                     var created = await _sessions.CreateAsync(token, request, context.RequestAborted);
                     await WriteAsync(context, StatusCodes.Status201Created, writer => WriteCreated(writer, created)); return;
                 case ["sessions", var id] when HttpMethods.IsGet(method):
@@ -66,7 +68,7 @@ public sealed class SiyuControl
                 case ["sessions", var id, "lease"] when HttpMethods.IsPut(method):
                     await _sessions.AuthorizeAsync(token);
                     var lease = await ReadJsonAsync<SiyuLeaseRequest>(context);
-                    var renewed = await _sessions.RenewAsync(token, id, lease.LeaseSequence);
+                    var renewed = await _sessions.RenewAsync(token, id, lease.LeaseSequence, lease.ClientProtocolVersion);
                     await WriteAsync(context, StatusCodes.Status200OK, writer => WriteView(writer, renewed)); return;
                 case ["sessions", var id] when HttpMethods.IsDelete(method):
                     var closed = await _sessions.CloseAsync(token, id);
@@ -76,7 +78,7 @@ public sealed class SiyuControl
                     throw new SiyuRefusal(404, "not-found", "思域控制面没有这个地址。请升级 MyCoAI 后再试。");
             }
         }
-        // 业务拒绝：状态码、原因码与读句都来自会话服务；身份代次过时另带当前代次，供 MyCoAI 重新准备。
+        // 业务拒绝：状态码、原因码与读句都来自会话服务；版本 1 身份代次过时另带当前代次，版本 2 可自动处理的另带打回。
         catch (SiyuRefusal refusal) { await WriteRefusalAsync(context, refusal); }
         // 客户端断开：回应已经没人收，不再写。
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
@@ -135,7 +137,10 @@ public sealed class SiyuControl
         await context.Response.Body.WriteAsync(buffer.ToArray(), context.RequestAborted);
     }
 
-    /// <summary>拒绝的错误体，与代理入口本地拒绝同一形状；401 另带 <c>WWW-Authenticate: Bearer</c>。</summary>
+    /// <summary>
+    /// 拒绝的错误体，与代理入口本地拒绝同一形状；401 另带 <c>WWW-Authenticate: Bearer</c>。打回只在这里（控制面）写出：
+    /// <c>remedy</c> 只有 <c>action</c>、<c>expectedIdentityVersion</c>（有才写）、<c>retryAfterSeconds</c>（有才写）三个键。
+    /// </summary>
     private static Task WriteRefusalAsync(HttpContext context, SiyuRefusal refusal)
     {
         if (refusal.Status == StatusCodes.Status401Unauthorized) context.Response.Headers.WWWAuthenticate = "Bearer realm=\"siyu\"";
@@ -148,6 +153,14 @@ public sealed class SiyuControl
             writer.WriteString("code", refusal.Code);
             writer.WriteString("message", refusal.Sentence);
             if (refusal.CurrentIdentityVersion is { } current) writer.WriteNumber("currentIdentityVersion", current);
+            if (refusal.Remedy is { } remedy)
+            {
+                writer.WriteStartObject("remedy");
+                writer.WriteString("action", SiyuRemedies.Wire(remedy.Action));
+                if (remedy.ExpectedIdentityVersion is { } expected) writer.WriteNumber("expectedIdentityVersion", expected);
+                if (remedy.RetryAfterSeconds is { } seconds) writer.WriteNumber("retryAfterSeconds", seconds);
+                writer.WriteEndObject();
+            }
             writer.WriteEndObject();
             writer.WriteEndObject();
         });
@@ -169,11 +182,29 @@ public sealed class SiyuControl
         writer.WriteEndObject();
     }
 
-    /// <summary>建会话的结果：会话视图、启动身份（oauthAccount 与凭据资料按原字节嵌入）、代理接入。</summary>
+    /// <summary>建会话的结果：官方模式是会话视图、启动身份（oauthAccount 与凭据资料按原字节嵌入）、代理接入；标准模式是会话视图与标准 API 接入。</summary>
     private static void WriteCreated(Utf8JsonWriter writer, SiyuSessionCreated created)
     {
         writer.WriteStartObject();
         writer.WritePropertyName("session"); WriteView(writer, created.Session);
+        switch (created)
+        {
+            case SiyuOfficialSessionCreated official: WriteOfficial(writer, official); break;
+            case SiyuStandardSessionCreated standard:
+                writer.WriteStartObject("standard");
+                writer.WriteString("baseUrl", standard.Standard.BaseUrl);
+                writer.WriteString("protocol", standard.Standard.Protocol);
+                writer.WriteString("authentication", standard.Standard.Authentication);
+                writer.WriteEndObject();
+                break;
+            default: throw new ArgumentOutOfRangeException(nameof(created), created.GetType().Name, "不认识的建会话结果。");
+        }
+        writer.WriteEndObject();
+    }
+
+    /// <summary>官方模式的两节：启动身份与代理接入。</summary>
+    private static void WriteOfficial(Utf8JsonWriter writer, SiyuOfficialSessionCreated created)
+    {
         writer.WriteStartObject("launchIdentity");
         writer.WriteString("deviceId", created.LaunchIdentity.DeviceId);
         // 原字节嵌入，不经反序列化再写：客户端写进 .claude.json 的 oauthAccount 与中转机原生写的逐字相同。
@@ -187,10 +218,12 @@ public sealed class SiyuControl
         writer.WriteString("authorityPem", created.Proxy.AuthorityPem);
         writer.WriteString("authoritySha256", created.Proxy.AuthoritySha256);
         writer.WriteEndObject();
-        writer.WriteEndObject();
     }
 
-    /// <summary>会话视图：绑定（全部主键与代次）、策略与传输、状态、租约，结束了带原因码与读句。</summary>
+    /// <summary>
+    /// 会话视图：绑定（全部主键与代次）、策略与传输、状态、租约，结束了带原因码与读句。版本 1 与以前逐字相同；
+    /// 版本 2 在令牌代次后多一个 <c>mode</c>，标准模式不写只属于官方模式的官方账户主键、站点身份代次与资料代次。
+    /// </summary>
     private static void WriteView(Utf8JsonWriter writer, SiyuSessionView view)
     {
         var binding = view.Binding;
@@ -200,9 +233,13 @@ public sealed class SiyuControl
         writer.WriteNumber("userId", binding.UserId);
         writer.WriteNumber("tokenId", binding.TokenId);
         writer.WriteNumber("tokenVersion", binding.TokenVersion);
-        writer.WriteNumber("officialAccountId", binding.OfficialAccountId);
-        writer.WriteNumber("siteIdentityVersion", binding.SiteIdentityVersion);
-        writer.WriteString("profileVersion", binding.ProfileVersion);
+        if (SiyuContract.BackendChooses(binding.ClientProtocolVersion)) writer.WriteString("mode", binding.Mode == SiyuMode.Official ? "official" : "standard");
+        if (binding.OfficialAccountId is { } accountId)
+        {
+            writer.WriteNumber("officialAccountId", accountId);
+            writer.WriteNumber("siteIdentityVersion", binding.SiteIdentityVersion);
+            writer.WriteString("profileVersion", binding.ProfileVersion);
+        }
         writer.WriteNumber("clientProtocolVersion", binding.ClientProtocolVersion);
         writer.WriteString("claudeVersion", binding.ClaudeVersion);
         writer.WriteString("entrypoint", binding.Entrypoint);

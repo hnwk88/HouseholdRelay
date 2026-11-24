@@ -26,6 +26,22 @@ public static partial class RelayLog
     public static void DamagedUpstream(ILogger logger, Exception error, string stage, long upstreamCandidateId) =>
         DamagedUpstreamRecord(logger, ExceptionChain.Types(error), stage, upstreamCandidateId);
 
+    /// <summary>思域给版本 2 客户端打回了一次（留痕）：记使用者主键、令牌主键、会话编号（建会话时为空）、原因码、下一步与给出的身份代次；不记令牌、票据、邮箱或资料原文。</summary>
+    /// <param name="logger">日志。</param>
+    /// <param name="userId">使用者主键。</param>
+    /// <param name="tokenId">个人令牌主键。</param>
+    /// <param name="sessionId">思域会话编号；建会话时为空。</param>
+    /// <param name="code">原因码。</param>
+    /// <param name="remedy">下一步的线上名字（recreate、wait）。</param>
+    /// <param name="identityVersion">打回给出的期望身份代次；没有时为空。</param>
+    public static void Remedy(ILogger logger, long userId, long tokenId, string? sessionId, string code, string remedy, long? identityVersion) =>
+        RemedyRecord(logger, userId, tokenId, sessionId, code, remedy, identityVersion);
+
+    /// <summary>打回事件的模板；参数名就是文件日志认的白名单字段名。</summary>
+    [LoggerMessage(EventId = 9003, EventName = "SiyuRemedy", Level = LogLevel.Warning,
+        Message = "Siyu remedy {Remedy} for {Code}; user {UserId}; token {TokenId}; session {SessionId}; identity version {IdentityVersion}")]
+    private static partial void RemedyRecord(ILogger logger, long userId, long tokenId, string? sessionId, string code, string remedy, long? identityVersion);
+
     /// <summary>兜底事件的模板；参数名就是文件日志认的白名单字段名。</summary>
     [LoggerMessage(EventId = 9001, EventName = "Unexpected", Level = LogLevel.Error,
         Message = "Unexpected {ExceptionType} at {Stage}; request {RequestId}; upstream {UpstreamCandidateId}")]

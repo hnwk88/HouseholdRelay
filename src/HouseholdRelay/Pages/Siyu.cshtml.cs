@@ -54,7 +54,7 @@ public sealed class SiyuModel(RelayConfiguration config, Siyu.SiyuHostState host
         return Page();
     }
 
-    /// <summary>读一览并配上使用者显示名、账户名称。</summary>
+    /// <summary>读一览并配上使用者显示名、账户名称；标准模式的会话（版本 2）没有官方账户，读作「标准 API（在用的上游）」。</summary>
     private async Task LoadAsync()
     {
         if (!Active || Service() is not { } service) return;
@@ -62,7 +62,7 @@ public sealed class SiyuModel(RelayConfiguration config, Siyu.SiyuHostState host
         var accounts = (await upstreams.ListCandidatesAsync()).ToDictionary(account => account.Id, account => account.Name);
         Rows = [.. service.List().Select(session => new Row(session,
             users.GetValueOrDefault(session.Binding.UserId, $"使用者 {session.Binding.UserId}"),
-            accounts.GetValueOrDefault(session.Binding.OfficialAccountId, $"官方账户 {session.Binding.OfficialAccountId}")))];
+            session.Binding.OfficialAccountId is { } accountId ? accounts.GetValueOrDefault(accountId, $"官方账户 {accountId}") : "标准 API（在用的上游）"))];
     }
 
     /// <summary>取会话服务；建不起来时记下原因、返回 null。</summary>

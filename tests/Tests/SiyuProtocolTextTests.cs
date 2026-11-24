@@ -26,7 +26,10 @@ public static class SiyuProtocolTextTests
         var limits = SiyuProxyLimits.Default(1);
         var expected = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["ProtocolVersion"] = SiyuContract.ProtocolVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["ProtocolVersions"] = string.Join("、", SiyuContract.SupportedProtocolVersions),
+            ["StandardProtocol"] = SiyuContract.StandardProtocol,
+            ["StandardAuthentication"] = SiyuContract.StandardAuthentication,
+            ["RemedyWaitSeconds"] = SiyuContract.RemedyWaitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["RequestStrategy"] = SiyuContract.RequestStrategy,
             ["Transport"] = SiyuContract.Transport,
             ["SupportedClaudeVersions"] = string.Join("、", SiyuContract.SupportedClaudeVersions),
@@ -127,6 +130,50 @@ public static class SiyuProtocolTextTests
         }
         Check(compared >= 30, $"只比对了 {compared} 句读句，表格可能被改坏了");
         return Task.CompletedTask;
+    }
+
+    /// <summary>打回表与 <see cref="SiyuRemedies.Table"/> 逐项相同：每个码的下一步一致，一项不多一项不少；表里的码都在拒绝表里。</summary>
+    public static Task RemedyTableMatchesCode()
+    {
+        var rows = Table("打回");
+        var written = rows.ToDictionary(row => row[0], row => row[1], StringComparer.Ordinal);
+        Check(written.Count == rows.Count, "打回表里有重复的原因码");
+        foreach (var (code, action) in SiyuRemedies.Table)
+            Check(written.TryGetValue(code, out var text) && text == SiyuRemedies.Wire(action), $"打回表里 {code} 应为 {SiyuRemedies.Wire(action)}，实际是 {(text ?? "（没写）")}");
+        Check(written.Keys.All(SiyuRemedies.Table.ContainsKey), "打回表多了代码里没有的码：" + string.Join("、", written.Keys.Where(key => !SiyuRemedies.Table.ContainsKey(key))));
+        var refusals = Table("拒绝").Select(row => row[0]).ToHashSet(StringComparer.Ordinal);
+        Check(written.Keys.All(refusals.Contains), "打回表里的码都应在拒绝表里");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 打回白名单的硬边界：版本 2 控制面每一种回应实际写出的键全集，与「契约表:版本2键」那一行逐项相同，一个不多一个不少。
+    /// 键按点号连成路径；<c>oauthAccount</c>、<c>credentialMetadata</c> 是官方资料原字节，<c>session</c> 另按会话视图那一行查，都只算一个键、不往里数。
+    /// </summary>
+    public static async Task Version2KeysAreTheWhitelist()
+    {
+        var expected = Table("版本2键").ToDictionary(row => row[0], row => row[1].Split('、').ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
+        var responses = await SiyuWiringTests.Version2ResponsesAsync();
+        Check(expected.Keys.ToHashSet().SetEquals(responses.Keys), "版本2键表的行应正好是：" + string.Join("、", responses.Keys));
+        foreach (var (name, body) in responses)
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(body);
+            var actual = new HashSet<string>(StringComparer.Ordinal);
+            Collect(json.RootElement, "", actual);
+            Check(actual.SetEquals(expected[name]), $"{name} 的键应是 {string.Join("、", expected[name])}，实际是 {string.Join("、", actual)}");
+        }
+    }
+
+    /// <summary>收集对象的键路径；不展开官方资料原字节与嵌在建会话回应里的会话视图。</summary>
+    private static void Collect(System.Text.Json.JsonElement element, string prefix, HashSet<string> keys)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            var path = prefix + property.Name;
+            keys.Add(path);
+            if (property.Value.ValueKind == System.Text.Json.JsonValueKind.Object && property.Name is not ("oauthAccount" or "credentialMetadata") && path != "session")
+                Collect(property.Value, path + ".", keys);
+        }
     }
 
     /// <summary>秒数写法：整数秒。</summary>

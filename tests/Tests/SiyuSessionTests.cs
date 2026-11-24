@@ -29,7 +29,7 @@ public static class SiyuSessionTests
     {
         using var rig = new Rig();
         var request = Request("req-1");
-        var created = await rig.Service.CreateAsync(Alice, request, default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, request, default);
         var binding = created.Session.Binding;
         Check(created.Session.State == SiyuSessionState.Active && binding.UserId == 1 && binding.TokenId == 11 && binding.TokenVersion == 1 && binding.OfficialAccountId == AccountId
             && binding.SiteIdentityVersion == 1 && binding.ProfileVersion == rig.Profile.ProfileVersion && binding.ServerInstanceId == rig.Service.ServerInstanceId, "绑定取自同一次核对");
@@ -38,7 +38,7 @@ public static class SiyuSessionTests
             && created.Proxy.AuthorityPem.StartsWith("-----BEGIN CERTIFICATE-----", StringComparison.Ordinal), "代理接入齐全");
         Check(created.Session.LeaseExpiresAt == rig.Clock.GetUtcNow() + SiyuContract.LeaseDuration && created.Session.RenewAfterSeconds == 40, "租约 120 秒，40 秒后续租");
 
-        var replay = await rig.Service.CreateAsync(Alice, request, default);
+        var replay = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, request, default);
         Check(ReferenceEquals(replay, created), "同一 requestId 重试原样返回");
         await Refused(() => rig.Service.CreateAsync(Alice, request with { Entrypoint = "sdk-cli", BinarySha256 = new string('b', 64) }, default), 409, "request-conflict", "同键不同内容");
 
@@ -90,7 +90,7 @@ public static class SiyuSessionTests
         var alphabet = new System.Text.RegularExpressions.Regex("^[" + SiyuContract.ProxyCredentialAlphabet + "]+$");
         for (var i = 0; i < SiyuContract.MaxSessionsPerUser; i++)
         {
-            var created = await rig.Service.CreateAsync(Alice, Request("alphabet-" + i), default);
+            var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("alphabet-" + i), default);
             var (id, ticket) = (created.Session.Binding.SessionId, created.Proxy.Ticket);
             Check(id.Length == 32 && id.All(char.IsAsciiHexDigitLower) && ticket.Length == 43, $"第 {i} 次：会话编号 32 位小写十六进制、票据 43 位");
             Check(alphabet.IsMatch(id) && alphabet.IsMatch(ticket), $"第 {i} 次：两样只含 [A-Za-z0-9_-]");
@@ -106,7 +106,7 @@ public static class SiyuSessionTests
         await Refused(() => rig.Service.CreateAsync(Alice, Request("b") with { ClaudeVersion = "2.1.999" }, default), 426, "version-unsupported", "未验证版本");
         await Refused(() => rig.Service.CreateAsync(Alice, Request("c") with { Entrypoint = "cli" }, default), 426, "version-unsupported", "未验证入口");
         await Refused(() => rig.Service.CreateAsync(Alice, Request("d") with { Transport = "loopbackTunnel" }, default), 426, "protocol-unsupported", "版本 1 只有原生代理");
-        await Refused(() => rig.Service.CreateAsync(Alice, Request("e") with { ClientProtocolVersion = 2 }, default), 426, "protocol-unsupported", "协议版本");
+        await Refused(() => rig.Service.CreateAsync(Alice, Request("e") with { ClientProtocolVersion = 3, OfficialAccountId = null }, default), 426, "protocol-unsupported", "协议版本");
         await Refused(() => rig.Service.CreateAsync(Alice, Request("f") with { BinarySha256 = "XYZ" }, default), 400, "request-invalid", "哈希格式");
         try { await rig.Service.CreateAsync(Alice, Request("g") with { ExpectedIdentityVersion = 7 }, default); Check(false, "过时代次应拒绝"); }
         // 预期的 409：必须带上服务端当前代次。
@@ -136,7 +136,7 @@ public static class SiyuSessionTests
     public static async Task DiscoveryIsLearnedAndRediscovered()
     {
         using var rig = new Rig();
-        var created = await rig.Service.CreateAsync(Alice, Request("m"), default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("m"), default);
         var tunnel = rig.Service.OpenTunnel(created.Session.Binding.SessionId, created.Proxy.Ticket, OfficialHost.Api)!;
         var connector = new SiyuRoute(SiyuPurpose.McpConnector, "mcpsrv_1");
         await Refused(() => tunnel.AdmitAsync(connector, Alice, default), 403, "mcp-not-discovered", "没有模板时拒绝");
@@ -174,7 +174,7 @@ public static class SiyuSessionTests
         Check(rig.ProbeCalls.Count == 2, "失败后下一次缺集合可以再补");
 
         rig.Service.CloseAccount(AccountId, SiyuCloseReason.AccountUnavailable);
-        var again = await rig.Service.CreateAsync(Alice, Request("m2"), default);
+        var again = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("m2"), default);
         var fresh = rig.Service.OpenTunnel(again.Session.Binding.SessionId, again.Proxy.Ticket, OfficialHost.Api)!;
         rig.Clock.Advance(TimeSpan.FromSeconds(1));
         await Refused(() => fresh.AdmitAsync(connector, Alice, default), 403, "mcp-not-discovered", "收口后的新会话没有集合");
@@ -188,7 +188,7 @@ public static class SiyuSessionTests
     public static async Task UsageIsRecordedLikeTheOldPath()
     {
         using var rig = new Rig();
-        var created = await rig.Service.CreateAsync(Alice, Request("u"), default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("u"), default);
         var tunnel = rig.Service.OpenTunnel(created.Session.Binding.SessionId, created.Proxy.Ticket, OfficialHost.Api)!;
         var messages = new SiyuRoute(SiyuPurpose.Messages, null);
         await using (var permit = await tunnel.AdmitAsync(messages, Alice, default))
@@ -246,8 +246,8 @@ public static class SiyuSessionTests
     public static async Task AdministratorListsAndStopsSessions()
     {
         using var rig = new Rig();
-        var bob = await rig.Service.CreateAsync(Bob, Request("b"), default);
-        var alice = await rig.Service.CreateAsync(Alice, Request("a"), default);
+        var bob = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Bob, Request("b"), default);
+        var alice = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("a"), default);
         var tunnel = rig.Service.OpenTunnel(alice.Session.Binding.SessionId, alice.Proxy.Ticket, OfficialHost.Api)!;
         var listed = rig.Service.List();
         Check(listed.Select(s => s.Binding.UserId).SequenceEqual([1L, 2L]) && listed[0].Tunnels == 1 && listed[0].State == SiyuSessionState.Active && listed[0].CloseReason is null, "按使用者排列，带隧道计数");
@@ -270,7 +270,7 @@ public static class SiyuSessionTests
     public static async Task MessagesIdentityIsVerifiedReadOnly()
     {
         using var rig = new Rig();
-        var created = await rig.Service.CreateAsync(Alice, Request("v"), default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("v"), default);
         var tunnel = rig.Service.OpenTunnel(created.Session.Binding.SessionId, created.Proxy.Ticket, OfficialHost.Api)!;
         var messages = new SiyuRoute(SiyuPurpose.Messages, null);
         var device = new string('d', 64);
@@ -324,7 +324,7 @@ public static class SiyuSessionTests
     public static async Task TunnelsAndAdmission()
     {
         using var rig = new Rig();
-        var created = await rig.Service.CreateAsync(Alice, Request("t"), default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("t"), default);
         var id = created.Session.Binding.SessionId; var ticket = created.Proxy.Ticket;
         Check(rig.Service.OpenTunnel(id, ticket + "x", OfficialHost.Api) is null && rig.Service.OpenTunnel("0000", ticket, OfficialHost.Api) is null, "票据或会话不对一律 null");
         var tunnels = Enumerable.Range(0, SiyuContract.MaxTunnelsPerSession).Select(_ => rig.Service.OpenTunnel(id, ticket, OfficialHost.Api)).ToArray();
@@ -369,7 +369,7 @@ public static class SiyuSessionTests
     public static async Task RevocationAndMaintenanceDropSessions()
     {
         using var rig = new Rig();
-        var created = await rig.Service.CreateAsync(Alice, Request("r"), default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("r"), default);
         var id = created.Session.Binding.SessionId;
         var tunnel = rig.Service.OpenTunnel(id, created.Proxy.Ticket, OfficialHost.Api)!;
         rig.Clients.Replace([Access("alice", AliceRotated, 1, 12, 2), Access("bob", Bob, 2, 21, 1)]);
@@ -381,7 +381,7 @@ public static class SiyuSessionTests
         tunnel.Dispose();
         Check((await rig.Service.CloseAsync(AliceRotated, id)).State == SiyuSessionState.Closed, "新版令牌可结束旧会话");
 
-        var second = await rig.Service.CreateAsync(AliceRotated, Request("m"), default);
+        var second = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(AliceRotated, Request("m"), default);
         var secondTunnel = rig.Service.OpenTunnel(second.Session.Binding.SessionId, second.Proxy.Ticket, OfficialHost.McpProxy)!;
         rig.Site.Maintain();
         Check(secondTunnel.Closed.IsCancellationRequested, "维护开始即断隧道");
@@ -397,7 +397,7 @@ public static class SiyuSessionTests
     public static async Task LeaseExpiry()
     {
         using var rig = new Rig();
-        var created = await rig.Service.CreateAsync(Alice, Request("l"), default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("l"), default);
         var id = created.Session.Binding.SessionId; var ticket = created.Proxy.Ticket;
         rig.Clock.Set(rig.Clock.GetUtcNow() + SiyuContract.LeaseDuration - TimeSpan.FromTicks(1));
         var tunnel = rig.Service.OpenTunnel(id, ticket, OfficialHost.Api);
@@ -407,7 +407,7 @@ public static class SiyuSessionTests
         tunnel!.Dispose();
         Check((await rig.Service.ReadAsync(Alice, id)).CloseCode == "lease-expired", "原因是租约到期");
 
-        var other = await rig.Service.CreateAsync(Alice, Request("sweep"), default);
+        var other = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("sweep"), default);
         rig.Clock.Advance(SiyuContract.LeaseDuration + SiyuContract.SweepInterval);
         var swept = await rig.Service.ReadAsync(Alice, other.Session.Binding.SessionId);
         Check(swept.State == SiyuSessionState.Closed && swept.CloseCode == "lease-expired", "清扫关闭过期会话");
@@ -419,7 +419,7 @@ public static class SiyuSessionTests
     public static async Task ProfileChangeEndsSessionOnRenew()
     {
         using var rig = new Rig();
-        var created = await rig.Service.CreateAsync(Alice, Request("p"), default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("p"), default);
         var id = created.Session.Binding.SessionId;
         rig.Discovery.Replace(AccountId, rig.Profile.ProfileVersion, ["mcpsrv_1"], rig.Clock.GetUtcNow());
         rig.Profile = Rig.MakeProfile("\"billingType\":\"stripe_subscription\",\"profileFetchedAt\":2");
@@ -441,7 +441,7 @@ public static class SiyuSessionTests
     public static async Task AccountRetirementEndsItsSessions()
     {
         using var rig = new Rig();
-        var created = await rig.Service.CreateAsync(Alice, Request("x"), default);
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("x"), default);
         var tunnel = rig.Service.OpenTunnel(created.Session.Binding.SessionId, created.Proxy.Ticket, OfficialHost.Api)!;
         rig.Discovery.Replace(AccountId, rig.Profile.ProfileVersion, ["mcpsrv_1"], rig.Clock.GetUtcNow());
         rig.Retirements.Retire(AccountId + 1);
@@ -472,11 +472,168 @@ public static class SiyuSessionTests
 
     /// <summary>一个合法的创建请求。</summary>
     private static SiyuCreateRequest Request(string requestId) =>
-        new(requestId, AccountId, null, SiyuContract.ProtocolVersion, "2.1.325", new string('a', 64), "sdk-cli", SiyuContract.Transport);
+        new(requestId, null, SiyuContract.LegacyProtocolVersion, "2.1.325", new string('a', 64), "sdk-cli", SiyuContract.Transport, AccountId);
 
     /// <summary>名单项。</summary>
     private static ClientAccess Access(string name, string token, long userId, long tokenId, int version) =>
         new(name, ConfigurationFiles.Hash(token), true, userId, tokenId, version);
+
+    /// <summary>
+    /// 版本 2 后端选择：不带账户建会话，在用的是官方账户就绑它（官方模式、有票据）；管理员把在用换成独立 API 后，官方会话续租以 account-switched 结束并打回 recreate；
+    /// 重建得到标准模式（只有站点标准 API 地址，没有票据与身份，开不了隧道）；再换回官方，标准会话同样 account-switched。每次打回都留痕，不记令牌与票据。
+    /// </summary>
+    public static async Task Version2FollowsBackendChoice()
+    {
+        using var rig = new Rig();
+        var official = await rig.Service.CreateAsync(Alice, Request2("v2-a"), default);
+        Check(official is SiyuOfficialSessionCreated { Session.Binding.OfficialAccountId: AccountId, Session.Binding.ClientProtocolVersion: 2 } && official.Session.Binding.Mode == SiyuMode.Official,
+            "在用的是能用于思域的官方账户：官方模式绑它");
+        var first = (SiyuOfficialSessionCreated)official;
+        Check(rig.Service.OpenTunnel(first.Session.Binding.SessionId, first.Proxy.Ticket, OfficialHost.Api) is { } tunnel && Release(tunnel), "官方模式照常开隧道");
+        Check((await rig.Service.RenewAsync(Alice, first.Session.Binding.SessionId, 1)).State == SiyuSessionState.Active, "后端没换：续租照常");
+
+        rig.Active = new UpstreamOverview(2, new UpstreamOptions(), true, null, 77, "API 供应商");
+        var switched = await RefusedWith(() => rig.Service.RenewAsync(Alice, first.Session.Binding.SessionId, 2), 409, "account-switched", "换成标准上游后续租");
+        Check(switched.Remedy == new SiyuRemedy(SiyuRemedyAction.Recreate) && switched.CurrentIdentityVersion is null, "account-switched 打回 recreate，不带别的值");
+        Check((await rig.Service.ReadAsync(Alice, first.Session.Binding.SessionId)).CloseCode == "account-switched", "会话的结束原因记成 account-switched");
+
+        var standard = await rig.Service.CreateAsync(Alice, Request2("v2-b"), default);
+        Check(standard is SiyuStandardSessionCreated { Standard: { BaseUrl: "https://relay.example.test:8787/", Protocol: "anthropic-messages", Authentication: "personal-token" } }
+            && standard.Session.Binding.Mode == SiyuMode.Standard && standard.Session.Binding.OfficialAccountId is null, "重建得到标准模式：站点标准 API 地址与个人令牌认证");
+        var standardId = standard.Session.Binding.SessionId;
+        Check(rig.Service.OpenTunnel(standardId, "", OfficialHost.Api) is null, "标准模式没有票据，开不了隧道");
+        Check((await rig.Service.RenewAsync(Alice, standardId, 1)).State == SiyuSessionState.Active, "标准之间换家不算换：续租照常");
+        rig.Active = rig.Active with { UpstreamCandidateId = 78, Name = "另一家 API" };
+        Check((await rig.Service.RenewAsync(Alice, standardId, 2)).State == SiyuSessionState.Active, "在用的换成另一家独立 API：标准会话不受影响（旧接法自己跟着在用走）");
+
+        rig.Active = new UpstreamOverview(3, new UpstreamOptions { OfficialLogin = true }, true, null, AccountId, "家里的官方账户");
+        await RefusedWith(() => rig.Service.RenewAsync(Alice, standardId, 3), 409, "account-switched", "换回官方后标准会话续租");
+        Check(await rig.Service.CreateAsync(Alice, Request2("v2-c"), default) is SiyuOfficialSessionCreated, "再重建回到官方模式");
+
+        var spare = rig.Account with { Id = 43, Uid = "spare", Name = "备用官方账户" };
+        var bound = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request2("v2-d"), default);
+        rig.Active = rig.Active with { UpstreamCandidateId = 43 };
+        rig.Account = spare;
+        await RefusedWith(() => rig.Service.RenewAsync(Alice, bound.Session.Binding.SessionId, 1), 409, "account-switched", "换成另一个官方账户后续租");
+
+        var traces = rig.Logger.Entries.Where(entry => entry.Event == "SiyuRemedy").ToArray();
+        Check(traces.Length == 3 && traces.All(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning && (string?)entry.Fields["Code"] == "account-switched"
+            && (string?)entry.Fields["Remedy"] == "recreate" && (long?)entry.Fields["UserId"] == 1 && (long?)entry.Fields["TokenId"] == 11 && entry.Fields["SessionId"] is string), "每次打回留一条痕：使用者、令牌主键、会话、原因码、下一步");
+        Check(rig.Logger.Entries.SelectMany(entry => entry.Fields.Values).OfType<string>().All(value => !value.Contains(Alice, StringComparison.Ordinal) && value != first.Proxy.Ticket), "留痕不带令牌与票据");
+    }
+
+    /// <summary>
+    /// 版本 2 的打回与拒绝：带账户 400；身份代次过时打回 recreate 并只在打回里给代次；后端没有可用上游 503 不打回；维护中打回 wait 30 秒；
+    /// 中转重启后找不到会话按请求声明的版本打回；账户退役记 account-switched；资料换代打回；身份不符当次 403、续租时 identity-mismatch；隧道满读出真实原因。
+    /// </summary>
+    public static async Task Version2Remedies()
+    {
+        using var rig = new Rig();
+        await Refused(() => rig.Service.CreateAsync(Alice, Request2("x") with { OfficialAccountId = AccountId }, default), 400, "request-invalid", "版本 2 不许带账户");
+        var stale = await RefusedWith(() => rig.Service.CreateAsync(Alice, Request2("stale") with { ExpectedIdentityVersion = 7 }, default), 409, "identity-version-stale", "版本 2 过时代次");
+        Check(stale.Remedy == new SiyuRemedy(SiyuRemedyAction.Recreate, ExpectedIdentityVersion: 1) && stale.CurrentIdentityVersion is null, "代次只放在打回里");
+
+        rig.Account = rig.Account with { State = CandidateState.Untested };
+        var none = await RefusedWith(() => rig.Service.CreateAsync(Alice, Request2("none"), default), 503, "no-usable-upstream", "在用的官方账户不能用于思域");
+        Check(none.Remedy is null, "没有可用上游要人处理，不打回");
+        rig.Active = rig.Active with { Configured = false };
+        await Refused(() => rig.Service.CreateAsync(Alice, Request2("none2"), default), 503, "no-usable-upstream", "没配置在用上游");
+        rig.Account = rig.Account with { State = CandidateState.Passed };
+        rig.Active = rig.Active with { Configured = true };
+
+        rig.Site.Maintain();
+        var wait = await RefusedWith(() => rig.Service.CreateAsync(Alice, Request2("maint"), default), 503, "site-maintenance", "维护中");
+        Check(wait.Remedy == new SiyuRemedy(SiyuRemedyAction.Wait, RetryAfterSeconds: 30), "维护中打回 wait 30 秒");
+        rig.Site.Reopen(1);
+
+        var gone = await RefusedWith(() => rig.Service.RenewAsync(Alice, "0123456789abcdef0123456789abcdef", 1, 2), 404, "session-not-found", "重启后找不到会话（版本 2）");
+        Check(gone.Remedy == new SiyuRemedy(SiyuRemedyAction.Recreate), "找不到会话打回 recreate");
+        Check((await RefusedWith(() => rig.Service.RenewAsync(Alice, "0123456789abcdef0123456789abcdef", 1), 404, "session-not-found", "版本 1")).Remedy is null, "版本 1 找不到会话不打回");
+
+        var retired = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request2("retire"), default);
+        rig.Retirements.Retire(AccountId);
+        Check((await RefusedWith(() => rig.Service.RenewAsync(Alice, retired.Session.Binding.SessionId, 1), 409, "account-switched", "账户退役")).Remedy is not null, "版本 2 账户退役记 account-switched 并打回");
+
+        var profiled = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request2("profile"), default);
+        rig.Profile = Rig.MakeProfile("\"billingType\":\"other\",\"profileFetchedAt\":1");
+        Check((await RefusedWith(() => rig.Service.RenewAsync(Alice, profiled.Session.Binding.SessionId, 1), 409, "profile-changed", "资料换代")).Remedy == new SiyuRemedy(SiyuRemedyAction.Recreate), "资料换代打回 recreate");
+        rig.Profile = Rig.MakeProfile("\"billingType\":\"stripe_subscription\",\"profileFetchedAt\":1");
+
+        var mismatched = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request2("mismatch"), default);
+        var session = mismatched.Session.Binding.SessionId;
+        using (var tunnel = rig.Service.OpenTunnel(session, mismatched.Proxy.Ticket, OfficialHost.Api)!)
+        {
+            await using (var permit = await tunnel.AdmitAsync(new SiyuRoute(SiyuPurpose.Messages, null), Alice, default))
+            {
+                try { await permit.DispatchingAsync(MessagesBody(new string('e', 64), "0f6c2a1e-3b7d-4c55-9a10-2f4e8d9b1c01"), default); Check(false, "设备段不符应拒绝"); }
+                // 预期：当次照旧 403，会话还活着。
+                catch (SiyuRefusal refusal) { Check(refusal.Status == 403 && refusal.Code == "device-mismatch" && refusal.Remedy is null, "当次照旧 403 device-mismatch，代理通道不带打回"); }
+            }
+        }
+        Check((await rig.Service.ReadAsync(Alice, session)).State == SiyuSessionState.Active, "身份不符不在当次结束会话");
+        Check((await RefusedWith(() => rig.Service.RenewAsync(Alice, session, 1), 409, "identity-mismatch", "身份不符后续租")).Remedy == new SiyuRemedy(SiyuRemedyAction.Recreate), "续租时以 identity-mismatch 结束并打回");
+
+        var full = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Bob, Request2("full"), default);
+        var tunnels = Enumerable.Range(0, SiyuContract.MaxTunnelsPerSession).Select(_ => rig.Service.OpenTunnel(full.Session.Binding.SessionId, full.Proxy.Ticket, OfficialHost.Api)!).ToArray();
+        Assert(() => rig.Service.OpenTunnel(full.Session.Binding.SessionId, full.Proxy.Ticket, OfficialHost.Api), "too-many-tunnels");
+        foreach (var each in tunnels) each.Dispose();
+        Check(rig.Service.OpenTunnel(full.Session.Binding.SessionId, "wrong-ticket", OfficialHost.Api) is null, "票据不对仍是 null（传输层回 407）");
+    }
+
+    /// <summary>
+    /// 版本 1 在版本 2 上线后逐字照旧：过时代次带当前代次、不打回；后端换了在用上游不影响版本 1 会话；身份不符续租照常；隧道满仍是 null（407）；
+    /// 账户退役仍是 official-account-unavailable；任何拒绝都不带打回，不留打回痕。
+    /// </summary>
+    public static async Task Version1StaysAsBefore()
+    {
+        using var rig = new Rig();
+        var stale = await RefusedWith(() => rig.Service.CreateAsync(Alice, Request("g") with { ExpectedIdentityVersion = 7 }, default), 409, "identity-version-stale", "版本 1 过时代次");
+        Check(stale.CurrentIdentityVersion == 1 && stale.Remedy is null, "版本 1 带当前代次、不带打回");
+        await Refused(() => rig.Service.CreateAsync(Alice, Request("n") with { OfficialAccountId = null }, default), 400, "request-invalid", "版本 1 必带账户");
+
+        var created = (SiyuOfficialSessionCreated)await rig.Service.CreateAsync(Alice, Request("v1"), default);
+        var id = created.Session.Binding.SessionId;
+        rig.Active = new UpstreamOverview(2, new UpstreamOptions(), true, null, 77, "API 供应商");
+        Check((await rig.Service.RenewAsync(Alice, id, 1)).State == SiyuSessionState.Active, "后端换成标准上游：版本 1 会话照常续租（版本 1 由客户端选账户）");
+
+        using (var tunnel = rig.Service.OpenTunnel(id, created.Proxy.Ticket, OfficialHost.Api)!)
+        await using (var permit = await tunnel.AdmitAsync(new SiyuRoute(SiyuPurpose.Messages, null), Alice, default))
+        {
+            try { await permit.DispatchingAsync(MessagesBody(new string('e', 64), "0f6c2a1e-3b7d-4c55-9a10-2f4e8d9b1c01"), default); Check(false, "应拒绝"); }
+            // 预期的当次 403。
+            catch (SiyuRefusal refusal) { Check(refusal.Code == "device-mismatch", "当次 403"); }
+        }
+        Check((await rig.Service.RenewAsync(Alice, id, 2)).State == SiyuSessionState.Active, "版本 1 身份不符不结束会话");
+
+        var tunnels = Enumerable.Range(0, SiyuContract.MaxTunnelsPerSession).Select(_ => rig.Service.OpenTunnel(id, created.Proxy.Ticket, OfficialHost.Api)!).ToArray();
+        Check(rig.Service.OpenTunnel(id, created.Proxy.Ticket, OfficialHost.Api) is null, "版本 1 隧道满仍是 null（407）");
+        foreach (var each in tunnels) each.Dispose();
+
+        rig.Retirements.Retire(AccountId);
+        var ended = await RefusedWith(() => rig.Service.RenewAsync(Alice, id, 3), 409, "official-account-unavailable", "版本 1 账户退役");
+        Check(ended.Remedy is null, "版本 1 不打回");
+        Check(!rig.Logger.Entries.Any(entry => entry.Event == "SiyuRemedy"), "版本 1 不留打回痕");
+    }
+
+    /// <summary>一个合法的版本 2 创建请求（不带账户）。</summary>
+    private static SiyuCreateRequest Request2(string requestId) =>
+        new(requestId, null, SiyuContract.ProtocolVersion, "2.1.325", new string('a', 64), "sdk-cli", SiyuContract.Transport);
+
+    /// <summary>期待以指定状态码、原因码的本地拒绝结束，交回拒绝本身供核对打回。</summary>
+    private static async Task<SiyuRefusal> RefusedWith<T>(Func<Task<T>> action, int status, string code, string label)
+    {
+        try { await action(); }
+        // 预期的拒绝：核对状态码与原因码后交回。
+        catch (SiyuRefusal refusal)
+        {
+            Check(refusal.Status == status && refusal.Code == code, $"{label}：应是 {status} {code}，实际 {refusal.Status} {refusal.Code}");
+            return refusal;
+        }
+        throw new Exception(label + "：应拒绝");
+    }
+
+    /// <summary>释放一条隧道并返回真，供断言里一行写完。</summary>
+    private static bool Release(ISiyuTunnel tunnel) { tunnel.Dispose(); return true; }
 
     /// <summary>期待以指定状态码、原因码的本地拒绝结束。</summary>
     private static async Task Refused<T>(Func<Task<T>> action, int status, string code, string label)
@@ -516,6 +673,7 @@ public static class SiyuSessionTests
             {
                 nameof(IUpstreamService.ReadCandidateAsync) => Task.FromResult(Account),
                 nameof(IUpstreamService.ListCandidatesAsync) => Task.FromResult(Candidates ?? [Account]),
+                nameof(IUpstreamService.ReadOverviewAsync) => Task.FromResult(Active),
                 _ => throw new NotSupportedException(method.Name),
             });
             var accounts = FakeProxy<IOfficialAccountLogin>.Create((method, args) => method.Name switch
@@ -525,7 +683,7 @@ public static class SiyuSessionTests
                 _ => throw new NotSupportedException(method.Name),
             });
             Service = new SiyuSessionService(Clients, upstreams, accounts, Site, new FixedSiyuProxyCertificates(_authority, new Dictionary<OfficialHost, X509Certificate2>()),
-                new SiyuProxyEndpoint(new Uri("https://relay.example.test:8789")), Discovery,
+                new SiyuEndpoints(new Uri("https://relay.example.test:8789"), new Uri("https://relay.example.test:8787")), Discovery,
                 FakeProxy<IMcpDiscoveryProbe>.Create((method, args) =>
                 {
                     // 记下每次补发现用的模板与官方令牌；返回值由用例设定。
@@ -544,8 +702,14 @@ public static class SiyuSessionTests
                         nameof(Application.Interfaces.Usage.IUsageService.FinishAsync) => Task.FromResult(Core.Usage.UsageFinish.Saved),
                         _ => throw new NotSupportedException(method.Name),
                     };
-                }), Clock, Retirements);
+                }), Clock, Retirements, Logger);
         }
+
+        /// <summary>在用上游的概览（版本 2 后端选择用）；默认在用的就是 <see cref="Account"/>。</summary>
+        public UpstreamOverview Active { get; set; } = new(1, new UpstreamOptions { OfficialLogin = true }, true, null, AccountId, "家里的官方账户");
+
+        /// <summary>会话服务的日志：记下打回留痕事件。</summary>
+        public RecordingLogger<SiyuSessionService> Logger { get; } = new();
 
         /// <summary>上游名单（账户列表用）；null 时只有 <see cref="Account"/> 一家。</summary>
         public IReadOnlyList<UpstreamCandidateView>? Candidates { get; set; }

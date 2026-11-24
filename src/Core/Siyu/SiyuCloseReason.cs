@@ -29,4 +29,10 @@ public enum SiyuCloseReason
 
     /// <summary>管理员在中转机管理页结束了这个会话。</summary>
     AdministratorStopped,
+
+    /// <summary>（版本 2）后端此刻的选择不再是这个会话绑的那一家：换了在用的上游、官方与标准互换，或这一家不能再用于思域。</summary>
+    AccountSwitched,
+
+    /// <summary>（版本 2）这个会话收到过设备段或账户段不符、或没有可核对身份的 Messages 请求，续租时结束让客户端重新准备。</summary>
+    IdentityMismatch,
 }

@@ -15,6 +15,8 @@ public static class SiyuCloseReasons
         SiyuCloseReason.Reauthentication => "official-reauthentication-required",
         SiyuCloseReason.ServiceStopping => "service-stopping",
         SiyuCloseReason.AdministratorStopped => "stopped-by-administrator",
+        SiyuCloseReason.AccountSwitched => "account-switched",
+        SiyuCloseReason.IdentityMismatch => "identity-mismatch",
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 
@@ -30,6 +32,8 @@ public static class SiyuCloseReasons
         SiyuCloseReason.Reauthentication => "此官方账户需要重新登录。请在中转机管理页重新登录该账户，再启动思域。",
         SiyuCloseReason.ServiceStopping => "中转服务已重启，思域会话已结束，请重新启动；未确认完成的操作不会自动重发。",
         SiyuCloseReason.AdministratorStopped => "管理员在中转机上结束了这个思域会话。需要时请重新启动思域；未确认完成的操作不会自动重发。",
+        SiyuCloseReason.AccountSwitched => "中转机换了在用的上游，这个思域会话已结束。重新连接思域就会用上新的上游；未确认完成的操作不会自动重发。",
+        SiyuCloseReason.IdentityMismatch => "这台电脑发来的请求身份和中转机给的不一致，思域会话已结束。重新连接思域会重新准备这台电脑的配置；再次不一致请检查是否有别的程序改了 Claude Code 的配置。",
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 }

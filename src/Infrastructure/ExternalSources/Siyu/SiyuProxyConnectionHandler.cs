@@ -63,7 +63,11 @@ public sealed class SiyuProxyConnectionHandler : ConnectionHandler
         if (head.Method != "CONNECT") { await SiyuLocalReply.WriteAsync(outer, 405, "method", null, true, aborted); return; }
         if (!OfficialTargets.TryParseConnectTarget(head.Target, out var host)) { await SiyuLocalReply.WriteAsync(outer, 403, "target", "思域只连接官方的两个地址，这个目标不在合同内。", true, aborted); return; }
         if (head.Values("Host") is not [var hostValue] || hostValue != head.Target) { await SiyuLocalReply.WriteAsync(outer, 400, "host", null, true, aborted); return; }
-        using var tunnel = Credentials(head) is var (sessionId, ticket) ? _gate.OpenTunnel(sessionId, ticket, host) : null;
+        ISiyuTunnel? opened;
+        try { opened = Credentials(head) is var (sessionId, ticket) ? _gate.OpenTunnel(sessionId, ticket, host) : null; }
+        // 版本 2 会话名额满：读出真实原因（状态码、原因码、读句都来自会话服务），回完关闭。
+        catch (SiyuRefusal refusal) { await SiyuLocalReply.WriteAsync(outer, refusal.Status, refusal.Code, refusal.Sentence, true, aborted); return; }
+        using var tunnel = opened;
         if (tunnel is null) { await SiyuLocalReply.WriteAsync(outer, 407, "proxy-authentication", "思域会话无效或已结束，请重新启动思域。", true, aborted, proxyChallenge: true); return; }
         // 客户端必须等 200 之后才开始内层握手；提前到的字节说明对端不按 CONNECT 语义走，关闭。
         if (reader.HasBufferedBytes) { await SiyuLocalReply.WriteAsync(outer, 400, "early-data", null, true, aborted); return; }

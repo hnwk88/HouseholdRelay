@@ -19,16 +19,20 @@ public interface ISiyuSessionService
     Task<IReadOnlyList<SiyuAccountOption>> ListAccountsAsync(string? personalToken);
 
     /// <summary>
-    /// 凭个人令牌为一个官方账户（上游主键）建会话：核对协议、版本、入口、传输与身份代次，读启动资料、确认凭据可用，再发会话与票据。
-    /// 同一使用者同一令牌同一 requestId 的重试在保留期内返回原结果；字段不同 409；会话已结束 409。
+    /// 凭个人令牌建会话：版本 1 绑请求里的官方账户（上游主键），版本 2 由后端按在用上游选官方模式（结果是 <see cref="SiyuOfficialSessionCreated"/>）或标准模式（<see cref="SiyuStandardSessionCreated"/>）。
+    /// 官方模式核对协议、版本、入口、传输与身份代次，读启动资料、确认凭据可用，再发会话与票据。
+    /// 同一使用者同一令牌同一 requestId 的重试在保留期内返回原结果；字段不同 409；会话已结束 409。版本 2 可自动处理的拒绝带 <see cref="SiyuRefusal.Remedy"/>。
     /// </summary>
     Task<SiyuSessionCreated> CreateAsync(string? personalToken, SiyuCreateRequest request, CancellationToken cancellation);
 
     /// <summary>查询；同一使用者当前有效的令牌（包括轮换后的新版）都可查自己的旧会话终态。不续租、不读官方令牌。</summary>
     Task<SiyuSessionView> ReadAsync(string? personalToken, string sessionId);
 
-    /// <summary>续租：只认创建它的那一版令牌、只对存活会话；序号更大才延长，同序号或更小只回现值。顺带核对资料代次，变了就结束会话。</summary>
-    Task<SiyuSessionView> RenewAsync(string? personalToken, string sessionId, long leaseSequence);
+    /// <summary>
+    /// 续租：只认创建它的那一版令牌、只对存活会话；序号更大才延长，同序号或更小只回现值。顺带核对资料代次，变了就结束会话；
+    /// 版本 2 会话还核对后端此刻的选择与身份不符标记。<paramref name="clientProtocolVersion"/> 是请求声明的版本，只在会话找不到时用来决定拒绝带不带打回。
+    /// </summary>
+    Task<SiyuSessionView> RenewAsync(string? personalToken, string sessionId, long leaseSequence, int clientProtocolVersion = SiyuContract.LegacyProtocolVersion);
 
     /// <summary>停止：同一使用者当前有效的令牌都可结束自己的会话；先禁新准入、取消在途，返回 Closed（已归还）或 Closing（还在收尾）。重复停止幂等。</summary>
     Task<SiyuSessionView> CloseAsync(string? personalToken, string sessionId);

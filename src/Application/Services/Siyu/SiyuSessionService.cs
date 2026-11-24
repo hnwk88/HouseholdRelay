@@ -5,12 +5,14 @@ using Application.Interfaces.Configuration;
 using Application.Interfaces.Siyu;
 using Application.Interfaces.Upstream;
 using Application.Interfaces.Usage;
+using Application.Logging;
 using Core.Configuration;
 using Core.Identity;
 using Core.Relay;
 using Core.Siyu;
 using Core.Upstream;
 using Core.Usage;
+using Microsoft.Extensions.Logging;
 
 namespace Application.Services.Siyu;
 
@@ -30,7 +32,8 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     private readonly string _authorityPem;
     /// <summary>代理 CA 证书 DER 的 SHA256（小写十六进制），供 MyCoAI 核对。</summary>
     private readonly string _authoritySha256;
-    private readonly SiyuProxyEndpoint _endpoint;
+    private readonly SiyuEndpoints _endpoints;
+    private readonly ILogger<SiyuSessionService> _logger;
     private readonly McpDiscoveryRegistry _discovery;
     private readonly TimeProvider _clock;
     private readonly ITimer _sweep;
@@ -48,17 +51,18 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
 
     /// <summary>依赖全部必填，构造时当场判空；订阅令牌名单变化，挂上定时清扫。</summary>
     public SiyuSessionService(ClientRegistry clients, IUpstreamService upstreams, IOfficialAccountLogin officialAccounts, ISiteIdentityService siteIdentity,
-        ISiyuProxyCertificates certificates, SiyuProxyEndpoint endpoint, McpDiscoveryRegistry discovery, IMcpDiscoveryProbe discoveryProbe, IUsageService usage, TimeProvider clock, OfficialAccountRetirements retirements)
+        ISiyuProxyCertificates certificates, SiyuEndpoints endpoints, McpDiscoveryRegistry discovery, IMcpDiscoveryProbe discoveryProbe, IUsageService usage, TimeProvider clock, OfficialAccountRetirements retirements,
+        ILogger<SiyuSessionService> logger)
     {
-        ArgumentNullException.ThrowIfNull(retirements); ArgumentNullException.ThrowIfNull(discoveryProbe); ArgumentNullException.ThrowIfNull(usage);
+        ArgumentNullException.ThrowIfNull(retirements); ArgumentNullException.ThrowIfNull(logger); _logger = logger; ArgumentNullException.ThrowIfNull(discoveryProbe); ArgumentNullException.ThrowIfNull(usage);
         _discoveryProbe = discoveryProbe; _usage = usage;
         ArgumentNullException.ThrowIfNull(clients); ArgumentNullException.ThrowIfNull(upstreams); ArgumentNullException.ThrowIfNull(officialAccounts);
-        ArgumentNullException.ThrowIfNull(siteIdentity); ArgumentNullException.ThrowIfNull(certificates); ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(siteIdentity); ArgumentNullException.ThrowIfNull(certificates); ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(discovery); ArgumentNullException.ThrowIfNull(clock);
         _clients = clients; _upstreams = upstreams; _officialAccounts = officialAccounts; _siteIdentity = siteIdentity;
         _authorityPem = certificates.Authority.ExportCertificatePem();
         _authoritySha256 = Convert.ToHexStringLower(SHA256.HashData(certificates.Authority.RawData));
-        _endpoint = endpoint; _discovery = discovery; _clock = clock;
+        _endpoints = endpoints; _discovery = discovery; _clock = clock;
         _clients.Subscribe(OnClientsChanged);
         retirements.Subscribe(id => CloseAccount(id, SiyuCloseReason.AccountUnavailable));
         _sweep = clock.CreateTimer(_ => Sweep(), null, SiyuContract.SweepInterval, SiyuContract.SweepInterval);
@@ -74,14 +78,29 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     public async Task<IReadOnlyList<SiyuAccountOption>> ListAccountsAsync(string? personalToken)
     {
         _ = await AuthenticateAsync(personalToken);
-        return (await _upstreams.ListCandidatesAsync()).Where(Usable).Select(item => new SiyuAccountOption(item.Id, item.Name)).ToArray();
+        return (await _upstreams.ListCandidatesAsync()).Where(SiyuUpstreamChoice.Usable).Select(item => new SiyuAccountOption(item.Id, item.Name)).ToArray();
     }
 
-    /// <summary>凭个人令牌为一个官方账户建会话；幂等重放、上限、身份代次、资料与凭据都核对过才发票据。</summary>
+    /// <summary>
+    /// 凭个人令牌建会话：版本 1 绑客户端带来的官方账户，版本 2 由后端按在用上游选官方或标准模式；幂等重放、上限、身份代次、资料与凭据都核对过才发票据。
+    /// 版本 2 的拒绝按打回表带上下一步，并留痕。
+    /// </summary>
     public async Task<SiyuSessionCreated> CreateAsync(string? personalToken, SiyuCreateRequest request, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
         var access = await AuthenticateAsync(personalToken);
+        try { return await CreateCoreAsync(access, request, cancellation); }
+        // 版本 2 且可自动处理：换成带打回的一份、留痕后抛出；其余原样抛出。
+        catch (SiyuRefusal refusal) when (refusal.ForProtocol(request.ClientProtocolVersion) is var shaped && !ReferenceEquals(shaped, refusal))
+        {
+            Trace(shaped, access, null);
+            throw shaped;
+        }
+    }
+
+    /// <summary>建会话本身：先核对字段与重放，再选官方或标准，分别发会话。</summary>
+    private async Task<SiyuSessionCreated> CreateCoreAsync(ClientAccess access, SiyuCreateRequest request, CancellationToken cancellation)
+    {
         Validate(request);
         var key = (access.UserId!.Value, access.TokenId!.Value, request.RequestId);
         // 幂等重放与人数上限先在锁内判一次，免得为一个注定被拒的请求去读资料、取凭据。
@@ -90,7 +109,11 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
             if (Replay(key, request) is { } replayed) return replayed;
             if (ActiveCount(access.UserId.Value) >= SiyuContract.MaxSessionsPerUser) throw TooMany();
         }
-        var account = await ReadAccountAsync(request.OfficialAccountId);
+        var choice = SiyuContract.BackendChooses(request.ClientProtocolVersion)
+            ? await ChooseAsync() ?? throw NoUsableUpstream()
+            : new SiyuUpstreamChoice(SiyuMode.Official, await ReadAccountAsync(request.OfficialAccountId!.Value));
+        if (choice.Mode == SiyuMode.Standard) return CreateStandard(access, request, key);
+        var account = choice.Account!;
         SiteIdentitySnapshot identity; CancellationToken stopping; SiyuLaunchProfile profile;
         using (EnterOrRefuse())
         {
@@ -103,7 +126,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         // 确认此刻有可用凭据（可能等一次续期）；不占站点许可、不占锁。
         _ = await _officialAccounts.AcquireCredentialAsync(account.Uid, cancellation);
         var ticket = Base64Url(RandomNumberGenerator.GetBytes(32));
-        SiyuSession session; SiyuSessionCreated created;
+        SiyuSession session; SiyuOfficialSessionCreated created;
         // 提交前在同一把锁里再核对令牌、身份代次与重放、上限，核对与登记之间不会插进撤销或另一次同键创建。
         lock (_sync)
         {
@@ -113,19 +136,75 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
             if (stopping.IsCancellationRequested || now.Pending || now.Version != identity.Version) throw Refuse(SiyuCloseReason.Maintenance, 503);
             if (ActiveCount(access.UserId.Value) >= SiyuContract.MaxSessionsPerUser) throw TooMany();
             var sessionId = RandomNumberGenerator.GetHexString(32, lowercase: true);
-            var binding = new SiyuBinding(ServerInstanceId, sessionId, access.UserId.Value, access.TokenId.Value, access.TokenVersion ?? 0, request.OfficialAccountId,
+            var binding = new SiyuBinding(ServerInstanceId, sessionId, access.UserId.Value, access.TokenId.Value, access.TokenVersion ?? 0, account.Id,
                 identity.Version, profile.ProfileVersion, request.ClientProtocolVersion, request.ClaudeVersion, request.Entrypoint);
             var at = _clock.GetUtcNow();
             session = new SiyuSession(binding, account.Uid, profile.AccountUuid, identity.DeviceId, SHA256.HashData(Encoding.UTF8.GetBytes(ticket)), at + SiyuContract.LeaseDuration);
             _sessions[sessionId] = session;
-            created = new SiyuSessionCreated(View(session),
+            created = new SiyuOfficialSessionCreated(View(session),
                 new SiyuLaunchIdentity(identity.DeviceId, profile.OAuthAccountJson, profile.CredentialMetadataJson),
-                new SiyuProxyAccess(_endpoint.Address.ToString(), "basic-session-ticket", ticket, _authorityPem, _authoritySha256));
+                new SiyuProxyAccess(_endpoints.Proxy.ToString(), "basic-session-ticket", ticket, _authorityPem, _authoritySha256));
             _creates[key] = new SiyuCreateRecord(request, created, at + SiyuContract.CreateReplayRetention);
         }
         // 锁外挂维护回调：令牌若已取消，Register 会当场同步回调，进锁关闭会话。
         session.Maintenance = stopping.Register(() => CloseSession(session, SiyuCloseReason.Maintenance));
         return created;
+    }
+
+    /// <summary>
+    /// 标准模式的会话（版本 2）：不读资料、不取官方凭据、不占站点许可、不发票据，回站点标准 API 的根地址；会话只用来续租与得知后端换了。
+    /// 核对令牌、重放与上限和登记在同一把锁里。
+    /// </summary>
+    private SiyuSessionCreated CreateStandard(ClientAccess access, SiyuCreateRequest request, (long, long, string) key)
+    {
+        // 与官方模式同一套提交前核对：撤销、另一次同键创建、上限都不会插在核对与登记之间。
+        lock (_sync)
+        {
+            if (Replay(key, request) is { } replayed) return replayed;
+            if (!_clients.IsCurrent(access.UserId!.Value, access.TokenId!.Value)) throw Refuse(SiyuCloseReason.TokenInvalid, 401);
+            if (ActiveCount(access.UserId.Value) >= SiyuContract.MaxSessionsPerUser) throw TooMany();
+            var sessionId = RandomNumberGenerator.GetHexString(32, lowercase: true);
+            var binding = new SiyuBinding(ServerInstanceId, sessionId, access.UserId.Value, access.TokenId.Value, access.TokenVersion ?? 0, null,
+                _siteIdentity.Current.Version, "", request.ClientProtocolVersion, request.ClaudeVersion, request.Entrypoint);
+            var at = _clock.GetUtcNow();
+            var session = new SiyuSession(binding, "", "", "", [], at + SiyuContract.LeaseDuration);
+            _sessions[sessionId] = session;
+            var created = new SiyuStandardSessionCreated(View(session),
+                new SiyuStandardAccess(_endpoints.StandardApi.ToString(), SiyuContract.StandardProtocol, SiyuContract.StandardAuthentication));
+            _creates[key] = new SiyuCreateRecord(request, created, at + SiyuContract.CreateReplayRetention);
+            return created;
+        }
+    }
+
+    /// <summary>
+    /// 后端此刻给思域的选择：读在用上游的概览（不读凭据），在用的是官方账户再读它来自的那一家；规则见 <see cref="SiyuUpstreamChoice.Of"/>。
+    /// 在用行缺失、配置损坏、来源那一家已不在时为 null。
+    /// </summary>
+    private async Task<SiyuUpstreamChoice?> ChooseAsync()
+    {
+        UpstreamOverview active; UpstreamCandidateView? source = null;
+        try
+        {
+            active = await _upstreams.ReadOverviewAsync();
+            if (active.Configured && active.Options.OfficialAccount && active.UpstreamCandidateId is { } id) source = await _upstreams.ReadCandidateAsync(id);
+        }
+        // 上游服务的读句是给管理员的；这里只当作「此刻没有可给思域的选择」。
+        catch (InvalidOperationException) { return null; }
+        return SiyuUpstreamChoice.Of(active, source);
+    }
+
+    /// <summary>（版本 2）后端没有能给思域用的在用上游。</summary>
+    private static SiyuRefusal NoUsableUpstream() => new(503, "no-usable-upstream", "中转机此刻没有能给思域用的在用上游。请管理员在中转机上游页把一家测试通过的上游切换为在用，再重新连接思域。");
+
+    /// <summary>官方账户不可用时的结束原因：版本 2 记作后端换了（重建会话会拿到后端此刻的选择），版本 1 照旧记账户不可用。</summary>
+    private static SiyuCloseReason Unavailable(SiyuSession session)
+        => SiyuContract.BackendChooses(session.Binding.ClientProtocolVersion) ? SiyuCloseReason.AccountSwitched : SiyuCloseReason.AccountUnavailable;
+
+    /// <summary>打回留痕：时刻由日志写，记使用者主键、令牌主键、会话编号、原因码、下一步与给出的身份代次；不记令牌、票据、邮箱或资料原文。</summary>
+    private void Trace(SiyuRefusal refusal, ClientAccess access, string? sessionId)
+    {
+        if (refusal.Remedy is { } remedy)
+            RelayLog.Remedy(_logger, access.UserId ?? 0, access.TokenId ?? 0, sessionId, refusal.Code, SiyuRemedies.Wire(remedy.Action), remedy.ExpectedIdentityVersion);
     }
 
     /// <summary>查询自己的会话（同一使用者任一当前有效令牌）；不续租。</summary>
@@ -137,32 +216,61 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         lock (_sync) return View(Owned(access, sessionId));
     }
 
-    /// <summary>续租：只认创建它的那一版令牌；顺带核对资料代次，变了就结束会话。</summary>
-    public async Task<SiyuSessionView> RenewAsync(string? personalToken, string sessionId, long leaseSequence)
+    /// <summary>
+    /// 续租：只认创建它的那一版令牌。版本 2 会话先核对身份不符标记与后端此刻的选择，不符就以 identity-mismatch 或 account-switched 结束；
+    /// 官方模式再核对资料代次，变了就结束会话。版本 2 的拒绝（含找不到会话）按打回表带上下一步并留痕，会话找不到时按 <paramref name="clientProtocolVersion"/> 判断版本。
+    /// </summary>
+    public async Task<SiyuSessionView> RenewAsync(string? personalToken, string sessionId, long leaseSequence, int clientProtocolVersion = SiyuContract.LegacyProtocolVersion)
     {
         var access = await AuthenticateAsync(personalToken);
+        SiyuSession? session = null;
+        try { return await RenewCoreAsync(access, sessionId, leaseSequence, found => session = found); }
+        // 版本以会话绑定为准，找不到会话时才用请求声明的版本；可自动处理的换成带打回的一份、留痕后抛出。
+        catch (SiyuRefusal refusal) when (refusal.ForProtocol(session?.Binding.ClientProtocolVersion ?? clientProtocolVersion) is var shaped && !ReferenceEquals(shaped, refusal))
+        {
+            Trace(shaped, access, sessionId);
+            throw shaped;
+        }
+    }
+
+    /// <summary>续租本身；<paramref name="found"/> 在找到本人会话后立即回报，供外层按会话的协议版本决定拒绝形状。</summary>
+    private async Task<SiyuSessionView> RenewCoreAsync(ClientAccess access, string sessionId, long leaseSequence, Action<SiyuSession> found)
+    {
         if (leaseSequence < 1) throw new SiyuRefusal(400, "request-invalid", "续租序号必须从 1 开始。请升级 MyCoAI 后再试。");
         ExpireIfDue(sessionId);
-        SiyuSession session;
-        // 先在锁内确认是本人这一版令牌、会话还活着，再去锁外核对资料。
+        SiyuSession session; bool mismatched;
+        // 先在锁内确认是本人这一版令牌、会话还活着，再去锁外核对后端选择与资料。
         lock (_sync)
         {
             session = Owned(access, sessionId);
+            found(session);
             if (session.Binding.TokenId != access.TokenId) throw NotFound();
             if (session.State != SiyuSessionState.Active) throw Ended(session);
+            mismatched = session.IdentityMismatched;
         }
-        string current;
-        try { current = _officialAccounts.ReadLaunchProfile(session.AccountUid).ProfileVersion; }
-        // 资料读不了：维护按维护收口，其余（账户没了、资料坏了、要重新登录）按账户不可用收口，再把原拒绝交给调用方读出。
-        catch (SiyuRefusal refusal)
+        if (SiyuContract.BackendChooses(session.Binding.ClientProtocolVersion))
         {
-            CloseSession(session, refusal.Code == "site-maintenance" ? SiyuCloseReason.Maintenance : SiyuCloseReason.AccountUnavailable);
-            throw;
+            if (mismatched) CloseSession(session, SiyuCloseReason.IdentityMismatch);
+            else if (await ChooseAsync() is not { } choice || !choice.Same(session.Binding.Mode, session.Binding.OfficialAccountId)) CloseSession(session, SiyuCloseReason.AccountSwitched);
         }
-        if (!string.Equals(current, session.Binding.ProfileVersion, StringComparison.Ordinal))
+        bool active;
+        // 上面可能已经结束了它；只对还活着的官方会话读资料。
+        lock (_sync) active = session.State == SiyuSessionState.Active;
+        if (active && session.Binding.Mode == SiyuMode.Official)
         {
-            _discovery.Invalidate(session.Binding.OfficialAccountId);
-            CloseSession(session, SiyuCloseReason.ProfileChanged);
+            string current;
+            try { current = _officialAccounts.ReadLaunchProfile(session.AccountUid).ProfileVersion; }
+            // 资料读不了：维护按维护收口，其余（账户没了、资料坏了、要重新登录）按账户不可用收口，再把原拒绝交给调用方读出。
+            catch (SiyuRefusal refusal)
+            {
+                CloseSession(session, refusal.Code == "site-maintenance" ? SiyuCloseReason.Maintenance : Unavailable(session));
+                throw;
+            }
+            if (!string.Equals(current, session.Binding.ProfileVersion, StringComparison.Ordinal))
+            {
+                _discovery.Invalidate(session.AccountId);
+                CloseSession(session, SiyuCloseReason.ProfileChanged);
+            }
         }
         // 序号比较与延长同锁；同序号或更小只回现值，不重复延长。
         lock (_sync)
@@ -189,7 +297,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         lock (_sync) return View(session);
     }
 
-    /// <summary>结束一个官方账户上的全部会话并作废它的 MCP 发现集合。</summary>
+    /// <summary>结束一个官方账户上的全部会话并作废它的 MCP 发现集合；版本 2 会话的「账户不可用」记作后端换了。</summary>
     public void CloseAccount(long officialAccountId, SiyuCloseReason reason)
     {
         _discovery.Invalidate(officialAccountId);
@@ -198,7 +306,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         lock (_sync) _discoveryTemplates.Remove(officialAccountId);
         // 只在锁内挑出受影响的会话，关闭在锁外逐个做。
         lock (_sync) affected = _sessions.Values.Where(s => s.State == SiyuSessionState.Active && s.Binding.OfficialAccountId == officialAccountId).ToArray();
-        foreach (var session in affected) CloseSession(session, reason);
+        foreach (var session in affected) CloseSession(session, reason == SiyuCloseReason.AccountUnavailable ? Unavailable(session) : reason);
     }
 
     /// <summary>管理页的会话一览：锁内取快照，按使用者、会话编号排列。</summary>
@@ -220,7 +328,10 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         if (session is not null) CloseSession(session, SiyuCloseReason.AdministratorStopped);
     }
 
-    /// <summary>外层 CONNECT 的准入：票据对得上、会话存活、隧道名额未满才给隧道，否则 null（不说明是哪一项）。</summary>
+    /// <summary>
+    /// 外层 CONNECT 的准入：票据对得上、会话存活、是官方模式、隧道名额未满才给隧道，否则 null（不说明是哪一项）。
+    /// 例外：版本 2 会话名额满时抛出 too-many-tunnels，读出真实原因；版本 1 照旧 null。
+    /// </summary>
     public ISiyuTunnel? OpenTunnel(string sessionId, string ticket, OfficialHost host)
     {
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(ticket)) return null;
@@ -229,8 +340,10 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         // 票据比对、状态与名额判断和计数加一在同一把锁里，名额不会被并发打穿。
         lock (_sync)
         {
-            if (!_sessions.TryGetValue(sessionId, out var session) || !CryptographicOperations.FixedTimeEquals(hash, session.TicketHash)
-                || session.State != SiyuSessionState.Active || session.Tunnels >= SiyuContract.MaxTunnelsPerSession) return null;
+            if (!_sessions.TryGetValue(sessionId, out var session) || session.Binding.Mode != SiyuMode.Official || !CryptographicOperations.FixedTimeEquals(hash, session.TicketHash)
+                || session.State != SiyuSessionState.Active) return null;
+            if (session.Tunnels >= SiyuContract.MaxTunnelsPerSession)
+                return SiyuContract.BackendChooses(session.Binding.ClientProtocolVersion) ? throw TooManyTunnels() : null;
             session.Tunnels++;
             return new SiyuTunnel(this, session);
         }
@@ -248,12 +361,12 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         CheckActive(session);
         if (route.Purpose == SiyuPurpose.McpConnector)
         {
-            var check = _discovery.Check(session.Binding.OfficialAccountId, session.Binding.ProfileVersion, route.ConnectorId!);
+            var check = _discovery.Check(session.AccountId, session.Binding.ProfileVersion, route.ConnectorId!);
             // 没有有效集合（客户端用的是缓存、这次没主动发现，或集合已过期）：按账户单飞补一次，再查。
             if (check == McpDiscoveryCheck.NotDiscovered)
             {
                 await RediscoverAsync(session, cancellation);
-                check = _discovery.Check(session.Binding.OfficialAccountId, session.Binding.ProfileVersion, route.ConnectorId!);
+                check = _discovery.Check(session.AccountId, session.Binding.ProfileVersion, route.ConnectorId!);
             }
             if (check == McpDiscoveryCheck.NotDiscovered)
                 throw new SiyuRefusal(403, "mcp-not-discovered", "思域还没拿到这个账户的官方连接器清单，这次连接器请求没有转发。请重新启动思域会话，Claude Code 启动时会重新取清单。");
@@ -265,7 +378,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         // 凭据层的拒绝：要重新登录或账户没了，就把这个会话收口，再把原拒绝交给传输层回给客户端。
         catch (SiyuRefusal refusal) when (refusal.Code is "official-reauthentication-required" or "official-expiry-unknown" or "official-account-gone")
         {
-            CloseSession(session, refusal.Code == "official-account-gone" ? SiyuCloseReason.AccountUnavailable : SiyuCloseReason.Reauthentication);
+            CloseSession(session, refusal.Code == "official-account-gone" ? Unavailable(session) : SiyuCloseReason.Reauthentication);
             throw;
         }
         var operation = EnterOrRefuse();
@@ -307,10 +420,10 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     internal async Task DispatchUsageAsync(SiyuSession session, string requestId, ReadOnlyMemory<byte> body)
     {
         UpstreamCandidateView account;
-        try { account = await _upstreams.ReadCandidateAsync(session.Binding.OfficialAccountId); }
+        try { account = await _upstreams.ReadCandidateAsync(session.AccountId); }
         // 账户在会话期间被删：这次不发，会话随账户退役收口。
         catch (InvalidOperationException) { throw AccountUnavailable(); }
-        try { await _usage.DispatchAsync(requestId, account.ExpectedVersion, session.Binding.OfficialAccountId, ModelOf(body.Span)); }
+        try { await _usage.DispatchAsync(requestId, account.ExpectedVersion, session.AccountId, ModelOf(body.Span)); }
         // 记不下已发出就不发（与旧接法同一规则）。
         catch (RelayFailure) { throw UsageUnavailable(); }
     }
@@ -356,6 +469,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     /// <summary>
     /// Messages 正文的只读核对（不改任何字节）：设备段必须是这个会话创建时的站点设备编号、账户段必须是这个官方账户的编号；
     /// 不一致或格式不认识就本地拒绝 403，读句说清是哪位使用者、哪一段不对、去 MyCoAI 重新连接。其余用途不核对正文。
+    /// 版本 2 会话另记下身份不符，下一次续租以 identity-mismatch 结束并打回（不在这里结束，免得掐断正在回给客户端的 403）。
     /// </summary>
     internal void VerifyBody(SiyuSession session, SiyuRoute route, ReadOnlySpan<byte> body, string userName)
     {
@@ -368,6 +482,8 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
             _ => ("identity-unsupported", "里没有可核对的设备与账户信息"),
         };
         if (code is null) return;
+        // 标记与续租时的读取同锁。
+        if (SiyuContract.BackendChooses(session.Binding.ClientProtocolVersion)) lock (_sync) session.IdentityMismatched = true;
         throw new SiyuRefusal(403, code, $"使用者 {userName} 这台电脑发来的请求{part}，思域没有发给官方。请在 MyCoAI 里重新连接思域，让它重新准备这台电脑的配置。");
     }
     /// <summary>用量记不下时的本地拒绝。</summary>
@@ -415,15 +531,15 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         lock (_sync)
         {
             if (session.State != SiyuSessionState.Active) return;
-            _discoveryTemplates[session.Binding.OfficialAccountId] = requestTemplate;
+            _discoveryTemplates[session.AccountId] = requestTemplate;
         }
-        _discovery.Replace(session.Binding.OfficialAccountId, session.Binding.ProfileVersion, connectorIds, admittedAt);
+        _discovery.Replace(session.AccountId, session.Binding.ProfileVersion, connectorIds, admittedAt);
     }
 
     /// <summary>按账户单飞补一次发现：没有模板（从没见过客户端真实的发现请求）就什么都不做；调用方的取消只放弃自己的等待。</summary>
     private async Task RediscoverAsync(SiyuSession session, CancellationToken cancellation)
     {
-        var accountId = session.Binding.OfficialAccountId;
+        var accountId = session.AccountId;
         Task flight;
         // 查模板、查进行中的那一份与登记新的一份同锁，同一账户不会并发跑两份。
         lock (_sync)
@@ -443,7 +559,7 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
     {
         // 先让出一次，确保调用方已把这一份登记进进行表，结束时的移除不会早于登记。
         await Task.Yield();
-        var accountId = session.Binding.OfficialAccountId;
+        var accountId = session.AccountId;
         try
         {
             var startedAt = _clock.GetUtcNow();
@@ -606,13 +722,9 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         try { account = await _upstreams.ReadCandidateAsync(officialAccountId); }
         // 不存在或已停用：上游服务的读句是给管理员的，这里换成给使用者的。
         catch (InvalidOperationException) { throw AccountUnavailable(); }
-        if (!Usable(account)) throw AccountUnavailable();
+        if (!SiyuUpstreamChoice.Usable(account)) throw AccountUnavailable();
         return account;
     }
-
-    /// <summary>能用于思域的官方账户判据，唯一定义处（建会话与账户列表共用）：未损坏、官方登录、未导出、检测已通过。</summary>
-    private static bool Usable(UpstreamCandidateView account)
-        => !account.Damaged && account.Options.OfficialLogin && account.ExportedAt is null && account.State == CandidateState.Passed;
 
     /// <summary>取站点官方操作许可；维护中按维护读句拒绝。</summary>
     private IDisposable EnterOrRefuse()
@@ -622,14 +734,15 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
         catch (SiteIdentityUnavailableException) { throw Refuse(SiyuCloseReason.Maintenance, 503); }
     }
 
-    /// <summary>请求字段核对：协议、传输、版本、入口不在已验证能力档里 426；格式不对 400。</summary>
+    /// <summary>请求字段核对：协议、传输、版本、入口不在已验证能力档里 426；格式不对 400（版本 1 必带账户主键，版本 2 不许带）。</summary>
     private static void Validate(SiyuCreateRequest request)
     {
         static bool Token(string? value, int max, Func<char, bool> allowed) => value is { Length: > 0 } && value.Length <= max && value.All(allowed);
-        if (!Token(request.RequestId, 64, c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_') || request.OfficialAccountId <= 0
+        var accountValid = SiyuContract.BackendChooses(request.ClientProtocolVersion) ? request.OfficialAccountId is null : request.OfficialAccountId is > 0;
+        if (!Token(request.RequestId, 64, c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_') || !accountValid
             || !Token(request.BinarySha256, 64, char.IsAsciiHexDigitLower) || request.BinarySha256.Length != 64)
             throw new SiyuRefusal(400, "request-invalid", "思域启动请求的格式不对。请升级 MyCoAI 后再试。");
-        if (request.ClientProtocolVersion != SiyuContract.ProtocolVersion || !string.Equals(request.Transport, SiyuContract.Transport, StringComparison.Ordinal))
+        if (!SiyuContract.SupportedProtocolVersions.Contains(request.ClientProtocolVersion) || !string.Equals(request.Transport, SiyuContract.Transport, StringComparison.Ordinal))
             throw new SiyuRefusal(426, "protocol-unsupported", "这个 MyCoAI 的思域协议与中转机不一致。请把 MyCoAI 与中转更新到配套版本。");
         if (!SiyuContract.SupportedClaudeVersions.Contains(request.ClaudeVersion, StringComparer.Ordinal)
             || !SiyuContract.SupportedEntrypoints.Contains(request.Entrypoint, StringComparer.Ordinal))
@@ -647,6 +760,9 @@ public sealed class SiyuSessionService : ISiyuSessionService, ISiyuGate, IDispos
 
     /// <summary>人数上限。</summary>
     private static SiyuRefusal TooMany() => new(429, "too-many-sessions", $"你同时开着的思域已经有 {SiyuContract.MaxSessionsPerUser} 个。请先关掉不用的，再启动。");
+
+    /// <summary>（版本 2）这个会话同时打开的隧道已满。</summary>
+    private static SiyuRefusal TooManyTunnels() => new(429, "too-many-tunnels", $"这个思域会话同时打开的连接已经有 {SiyuContract.MaxTunnelsPerSession} 条，这次连接没有建立。请稍后再试；一直这样请重新连接思域。");
 
     /// <summary>官方账户不可用。</summary>
     private static SiyuRefusal AccountUnavailable() => Refuse(SiyuCloseReason.AccountUnavailable, 409);

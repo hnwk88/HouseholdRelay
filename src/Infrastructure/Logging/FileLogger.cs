@@ -6,16 +6,17 @@ using Microsoft.Extensions.Logging;
 namespace Infrastructure.Logging;
 
 /// <summary>
-/// 写进滚动文件的日志：每条一行 JSON，只写时刻、级别、类别、事件名，加上白名单里的四个字段（异常类型、阶段、请求编号、上游主键）与异常类型链。
+/// 写进滚动文件的日志：每条一行 JSON，只写时刻、级别、类别、事件名，加上白名单里的字段（异常类型、阶段、请求编号、上游主键；思域打回留痕的使用者、令牌主键、会话编号、原因码、下一步、身份代次）与异常类型链。
 /// 不写格式化后的消息、不写异常消息与堆栈、不写白名单外的任何参数：框架自己的日志消息里可能带地址、路径或请求内容，这里一概不落盘。
 /// 中文按原样写（宽松编码器），读屏打开文件听到的是字，不是一串反斜杠。只收 Warning 及以上。
 /// </summary>
 internal sealed class FileLogger(RotatingLogFile file, string category) : ILogger
 {
-    /// <summary>只认这四个参数名；本工程自己的日志事件（<c>Application.Logging.RelayLog</c>）的模板参数就叫这几个名字。</summary>
+    /// <summary>只认这几个参数名；本工程自己的日志事件（<c>Application.Logging.RelayLog</c>）的模板参数就叫这几个名字。全是主键、编号与固定码，没有秘密。</summary>
     private static readonly Dictionary<string, string> _fields = new(StringComparer.Ordinal)
     {
         ["ExceptionType"] = "exceptionType", ["Stage"] = "stage", ["RequestId"] = "requestId", ["UpstreamCandidateId"] = "upstreamCandidateId",
+        ["UserId"] = "userId", ["TokenId"] = "tokenId", ["SessionId"] = "sessionId", ["Code"] = "code", ["Remedy"] = "remedy", ["IdentityVersion"] = "identityVersion",
     };
 
     /// <summary>序列化选项：宽松编码，中文不转义。</summary>

@@ -11,7 +11,13 @@ internal sealed class SiyuSession(SiyuBinding binding, string accountUid, string
     /// <summary>固定绑定。</summary>
     public SiyuBinding Binding { get; } = binding;
 
-    /// <summary>官方账户目录键（上游 Uid），只在服务端用来取凭据，不对外。</summary>
+    /// <summary>绑定的官方账户（上游主键）；只在官方模式的路径上取，标准模式的会话没有隧道、走不到这里。</summary>
+    public long AccountId => Binding.OfficialAccountId ?? throw new InvalidOperationException("标准模式的思域会话没有官方账户。");
+
+    /// <summary>（版本 2）收到过身份不符的 Messages 请求，下一次续租以 identity-mismatch 结束；只在锁内改。</summary>
+    public bool IdentityMismatched { get; set; }
+
+    /// <summary>官方账户目录键（上游 Uid），只在服务端用来取凭据，不对外；标准模式为空串。</summary>
     public string AccountUid { get; } = accountUid;
 
     /// <summary>这个官方账户的编号（启动资料的 accountUuid）：Messages 正文的账户段必须等于它。</summary>

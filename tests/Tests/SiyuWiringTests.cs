@@ -84,7 +84,7 @@ public static class SiyuWiringTests
                 nameof(ISiyuSessionService.ListAccountsAsync) => Task.FromResult<IReadOnlyList<SiyuAccountOption>>(accounts),
                 nameof(ISiyuSessionService.CreateAsync) when ((SiyuCreateRequest)args[1]!).RequestId == "stale"
                     => throw new SiyuRefusal(409, "identity-version-stale", "需要重新准备。") { CurrentIdentityVersion = 9 },
-                nameof(ISiyuSessionService.CreateAsync) => Task.FromResult(new SiyuSessionCreated(View(SiyuSessionState.Active), new SiyuLaunchIdentity(new string('d', 64), oauth, credential),
+                nameof(ISiyuSessionService.CreateAsync) => Task.FromResult<SiyuSessionCreated>(new SiyuOfficialSessionCreated(View(SiyuSessionState.Active), new SiyuLaunchIdentity(new string('d', 64), oauth, credential),
                     new SiyuProxyAccess("https://relay.example.test:8789/", "basic-session-ticket", "ticket-value", "-----BEGIN CERTIFICATE-----", new string('a', 64)))),
                 nameof(ISiyuSessionService.ReadAsync) => Task.FromResult(View(SiyuSessionState.Active)),
                 nameof(ISiyuSessionService.RenewAsync) => (long)args[2]! == 3 ? Task.FromResult(View(SiyuSessionState.Active)) : throw new InvalidOperationException("序号没传对"),
@@ -179,6 +179,117 @@ public static class SiyuWiringTests
     }
 
     /// <summary>
+    /// 控制面的版本 2 形状：官方与标准两种建会话回应、会话视图带 mode（标准不写官方专属的三个键）、拒绝体带打回（只有 action 与有值的那一项）、续租把声明的版本交给会话服务；
+    /// 版本 1 的会话视图与拒绝体逐字节与以前相同，版本 1 不带账户仍按看不懂处理、不进建会话。
+    /// </summary>
+    public static async Task ControlWritesVersion2()
+    {
+        var calls = new List<string>();
+        var control = new SiyuControl(Version2Service(calls));
+        var v1 = """{"requestId":"v1","officialAccountId":42,"expectedIdentityVersion":null,"clientProtocolVersion":1,"claudeVersion":"2.1.325","binarySha256":"x","entrypoint":"sdk-cli","transport":"nativeHttpsProxy"}""";
+
+        var (status, _, body) = await Send(control.HandleAsync, "GET", "/sessions/v1", "Bearer tok", null);
+        Check(status == 200 && Encoding.UTF8.GetString(body) == """{"serverInstanceId":"inst","sessionId":"v1","userId":1,"tokenId":11,"tokenVersion":2,"officialAccountId":42,"siteIdentityVersion":7,"profileVersion":"0123456789abcdef","clientProtocolVersion":1,"claudeVersion":"2.1.325","entrypoint":"sdk-cli","requestStrategy":"nativePreserve","transport":"nativeHttpsProxy","state":"active","lease":{"expiresAt":"2026-11-22T08:02:00.000Z","renewAfterSeconds":40}}""",
+            "版本 1 的会话视图逐字节与以前相同（没有 mode）：" + Encoding.UTF8.GetString(body));
+        (status, _, body) = await Send(control.HandleAsync, "POST", "/sessions", "Bearer tok", v1.Replace("\"v1\"", "\"stale1\"", StringComparison.Ordinal));
+        Check(status == 409 && Encoding.UTF8.GetString(body) == """{"type":"error","error":{"type":"siyu_refused","code":"identity-version-stale","message":"stale","currentIdentityVersion":9}}""",
+            "版本 1 的过时代次拒绝逐字节与以前相同：" + Encoding.UTF8.GetString(body));
+        var before = calls.Count(call => call.StartsWith("CreateAsync", StringComparison.Ordinal));
+        foreach (var bad in new[] { v1.Replace("\"officialAccountId\":42,", "", StringComparison.Ordinal), v1.Replace("42", "null", StringComparison.Ordinal) })
+        {
+            (status, _, body) = await Send(control.HandleAsync, "POST", "/sessions", "Bearer tok", bad);
+            Check(status == 400 && Code(body) == "request-malformed", "版本 1 不带账户或带 null：与以前一样 400 request-malformed");
+        }
+        Check(calls.Count(call => call.StartsWith("CreateAsync", StringComparison.Ordinal)) == before, "版本 1 不带账户不进建会话");
+
+        var responses = await Version2ResponsesAsync(control);
+        using (var json = JsonDocument.Parse(responses["建会话·官方"]))
+            Check(json.RootElement.GetProperty("session").GetProperty("mode").GetString() == "official" && json.RootElement.GetProperty("proxy").GetProperty("ticket").GetString() == "ticket-value",
+                "版本 2 官方建会话：视图带 mode official，照旧带代理接入");
+        using (var json = JsonDocument.Parse(responses["建会话·标准"]))
+        {
+            var root = json.RootElement;
+            Check(root.GetProperty("session").GetProperty("mode").GetString() == "standard" && !root.GetProperty("session").TryGetProperty("officialAccountId", out _)
+                && root.GetProperty("standard").GetProperty("baseUrl").GetString() == "https://relay.example.test:8787/" && !root.TryGetProperty("proxy", out _) && !root.TryGetProperty("launchIdentity", out _),
+                "版本 2 标准建会话：只有标准 API 接入，没有票据、身份与官方账户");
+        }
+        Check(Encoding.UTF8.GetString(responses["拒绝·recreate"]).EndsWith(""","remedy":{"action":"recreate","expectedIdentityVersion":9}}}""", StringComparison.Ordinal),
+            "版本 2 过时代次：打回 recreate 带期望代次，不再另带 currentIdentityVersion");
+        Check(Encoding.UTF8.GetString(responses["拒绝·wait"]).EndsWith(""","remedy":{"action":"wait","retryAfterSeconds":30}}}""", StringComparison.Ordinal), "版本 2 维护中：打回 wait 30 秒");
+        Check(!Encoding.UTF8.GetString(responses["拒绝·不打回"]).Contains("remedy", StringComparison.Ordinal), "要人处理的拒绝不带打回");
+        Check(calls.Contains("RenewAsync:tok:2"), "续租把请求声明的版本交给会话服务");
+        (status, _, _) = await Send(control.HandleAsync, "PUT", "/sessions/v1/lease", "Bearer tok", """{"leaseSequence":3}""");
+        Check(status == 200 && calls[^1] == "RenewAsync:tok:1", "续租不带版本按版本 1");
+    }
+
+    /// <summary>
+    /// 版本 2 控制面会回的每一种形状各一份（协议文本「契约表:版本2键」逐项对照）：建会话官方、标准，会话视图官方、标准（已结束，键最全），拒绝 recreate、wait、不打回。
+    /// </summary>
+    internal static async Task<IReadOnlyDictionary<string, byte[]>> Version2ResponsesAsync(SiyuControl? control = null)
+    {
+        control ??= new SiyuControl(Version2Service([]));
+        string Create(string requestId) => """{"requestId":"ID","expectedIdentityVersion":null,"clientProtocolVersion":2,"claudeVersion":"2.1.325","binarySha256":"x","entrypoint":"sdk-cli","transport":"nativeHttpsProxy"}""".Replace("ID", requestId, StringComparison.Ordinal);
+        return new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["建会话·官方"] = (await Send(control.HandleAsync, "POST", "/sessions", "Bearer tok", Create("official"))).Body,
+            ["建会话·标准"] = (await Send(control.HandleAsync, "POST", "/sessions", "Bearer tok", Create("standard"))).Body,
+            ["会话视图·官方"] = (await Send(control.HandleAsync, "GET", "/sessions/official-closed", "Bearer tok", null)).Body,
+            ["会话视图·标准"] = (await Send(control.HandleAsync, "GET", "/sessions/standard-closed", "Bearer tok", null)).Body,
+            ["拒绝·recreate"] = (await Send(control.HandleAsync, "POST", "/sessions", "Bearer tok", Create("stale2"))).Body,
+            ["拒绝·wait"] = (await Send(control.HandleAsync, "PUT", "/sessions/maint/lease", "Bearer tok", """{"leaseSequence":1,"clientProtocolVersion":2}""")).Body,
+            ["拒绝·不打回"] = (await Send(control.HandleAsync, "POST", "/sessions", "Bearer tok", Create("none"))).Body,
+        };
+    }
+
+    /// <summary>按请求编号或会话编号回版本 1、版本 2 各种结果的假会话服务；拒绝先经 <see cref="SiyuRefusal.ForProtocol"/>，与真服务同一条路。</summary>
+    private static ISiyuSessionService Version2Service(List<string> calls)
+    {
+        var expires = new DateTimeOffset(2026, 11, 22, 8, 2, 0, TimeSpan.Zero);
+        SiyuBinding Binding(string id, long? account, int version) => new("inst", id, 1, 11, 2, account, 7, account is null ? "" : "0123456789abcdef", version, "2.1.325", "sdk-cli");
+        SiyuSessionView Active(string id, long? account, int version) => new(Binding(id, account, version), SiyuSessionState.Active, expires, 40);
+        SiyuSessionView Closed(string id, long? account) => new(Binding(id, account, 2), SiyuSessionState.Closed, expires, 40, "account-switched", "switched");
+        return FakeProxy<ISiyuSessionService>.Create((method, args) =>
+        {
+            var token = (string?)args![0];
+            return method.Name switch
+            {
+                nameof(ISiyuSessionService.AuthorizeAsync) => Task.CompletedTask,
+                nameof(ISiyuSessionService.CreateAsync) => Create((SiyuCreateRequest)args[1]!),
+                nameof(ISiyuSessionService.ReadAsync) => Task.FromResult((string)args[1]! switch
+                {
+                    "official-closed" => Closed("official-closed", 42),
+                    "standard-closed" => Closed("standard-closed", null),
+                    var id => Active(id, 42, 1),
+                }),
+                nameof(ISiyuSessionService.RenewAsync) => Renew((string)args[1]!, (int)args[3]!),
+                _ => throw new NotSupportedException(method.Name),
+            };
+
+            Task<SiyuSessionCreated> Create(SiyuCreateRequest request)
+            {
+                calls.Add("CreateAsync:" + token);
+                var refusal = request.RequestId switch
+                {
+                    "stale1" or "stale2" => new SiyuRefusal(409, "identity-version-stale", "stale") { CurrentIdentityVersion = 9 },
+                    "none" => new SiyuRefusal(503, "no-usable-upstream", "none"),
+                    _ => null,
+                };
+                if (refusal is not null) throw refusal.ForProtocol(request.ClientProtocolVersion);
+                return Task.FromResult<SiyuSessionCreated>(request.RequestId == "standard"
+                    ? new SiyuStandardSessionCreated(Active("s-standard", null, 2), new SiyuStandardAccess("https://relay.example.test:8787/", SiyuContract.StandardProtocol, SiyuContract.StandardAuthentication))
+                    : new SiyuOfficialSessionCreated(Active("s-official", 42, request.ClientProtocolVersion), new SiyuLaunchIdentity(new string('d', 64), """{"accountUuid":"u"}"""u8.ToArray(), """{"scopes":[]}"""u8.ToArray()),
+                        new SiyuProxyAccess("https://relay.example.test:8789/", "basic-session-ticket", "ticket-value", "-----BEGIN CERTIFICATE-----", new string('a', 64))));
+            }
+
+            Task<SiyuSessionView> Renew(string id, int version)
+            {
+                calls.Add($"RenewAsync:{token}:{version}");
+                return id == "maint" ? throw new SiyuRefusal(503, "site-maintenance", "maint").ForProtocol(version) : Task.FromResult(Active(id, 42, version));
+            }
+        });
+    }
+
+    /// <summary>
     /// 真实组合根：会话服务与准入门是同一份；控制面、代理宿主可以解析；代理宿主用真实代理 CA、真实准入起在回环随机端口，
     /// 外层 TLS 用站点证书、只说 HTTP/1.1，没有或错的票据回 407。没填对外地址时会话服务建不起来并读出下一步。
     /// </summary>
@@ -234,7 +345,7 @@ public static class SiyuWiringTests
     }
 
     /// <summary>在内存里走一次控制面：路径是去掉前缀后的部分。</summary>
-    private static async Task<(int Status, IHeaderDictionary Headers, byte[] Body)> Send(RequestDelegate handler, string method, string path, string? authorization, string? body,
+    internal static async Task<(int Status, IHeaderDictionary Headers, byte[] Body)> Send(RequestDelegate handler, string method, string path, string? authorization, string? body,
         string contentType = "application/json")
     {
         var context = new DefaultHttpContext();

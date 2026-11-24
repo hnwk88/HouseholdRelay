@@ -22,6 +22,20 @@ public sealed class SiyuRefusal : Exception
     /// <summary>中文读句。</summary>
     public string Sentence { get; }
 
-    /// <summary>身份代次过时（409）时服务端当前的站点身份代次，供 MyCoAI 重新准备；其余拒绝为 null。</summary>
+    /// <summary>（版本 1）身份代次过时（409）时服务端当前的站点身份代次，供 MyCoAI 重新准备；其余拒绝与版本 2 为 null。</summary>
     public long? CurrentIdentityVersion { get; init; }
+
+    /// <summary>（版本 2）可自动处理时的下一步；版本 1 与要人处理的拒绝为 null。</summary>
+    public SiyuRemedy? Remedy { get; init; }
+
+    /// <summary>
+    /// 按调用方的协议版本给出线上形状：版本 1 原样返回自己；版本 2 查 <see cref="SiyuRemedies"/>，可自动处理就换成带打回的一份，
+    /// 身份代次只放进打回（不再另带 <see cref="CurrentIdentityVersion"/>，一个值一个来源）；要人处理的也去掉 <see cref="CurrentIdentityVersion"/>。
+    /// </summary>
+    public SiyuRefusal ForProtocol(int clientProtocolVersion)
+    {
+        if (!SiyuContract.BackendChooses(clientProtocolVersion) || Remedy is not null) return this;
+        var remedy = SiyuRemedies.For(Code, CurrentIdentityVersion);
+        return remedy is null && CurrentIdentityVersion is null ? this : new SiyuRefusal(Status, Code, Sentence) { Remedy = remedy };
+    }
 }

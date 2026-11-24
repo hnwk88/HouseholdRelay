@@ -127,7 +127,7 @@ public static class SiyuContractTests
     /// <summary>版本 1 数值之间的关系：续租留两次余量，隧道上限盖住实测，保留期不短于租约，发现限时短于有效期。</summary>
     public static Task ContractValuesHang()
     {
-        Check(SiyuContract.ProtocolVersion == 1 && SiyuContract.RequestStrategy == "nativePreserve" && SiyuContract.Transport == "nativeHttpsProxy", "版本 1 只有一种策略一种传输");
+        Check(SiyuContract.LegacyProtocolVersion == 1 && SiyuContract.ProtocolVersion == 2 && SiyuContract.RequestStrategy == "nativePreserve" && SiyuContract.Transport == "nativeHttpsProxy", "版本 1 只有一种策略一种传输");
         Check(SiyuContract.LeaseRenewAfter * 3 <= SiyuContract.LeaseDuration && SiyuContract.LeaseRenewAfter > TimeSpan.Zero, "续租时刻应留出两次错过的余量");
         Check(SiyuContract.MaxTunnelsPerSession >= 9 && SiyuContract.MaxSessionsPerUser >= 1, "隧道上限应盖住实测的一整趟 9 条");
         Check(SiyuContract.CreateReplayRetention >= SiyuContract.LeaseDuration && SiyuContract.ClosedRetention >= SiyuContract.LeaseDuration, "保留期不短于租约");
